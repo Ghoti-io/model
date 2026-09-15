@@ -189,6 +189,71 @@ TEST(ObjParse, FaceWithVertexAndNormalOnly) {
   gmdl_obj_free(obj);
 }
 
+// A negative OBJ index is relative: -1 is the most recently declared element.
+// The specification measures that from the current position in the file, so
+// the same "-1" means different vertices at different points in the document.
+TEST(ObjParse, NegativeIndicesAreRelativeToWhatCameBefore) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+      "f -3 -2 -1\n"
+      "v 2 0 0\n"
+      "f -3 -2 -1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 2u);
+
+  // The first face sees three vertices, so -1 is vertex 2.
+  EXPECT_EQ(obj->faces[0].vertex[0], 0);
+  EXPECT_EQ(obj->faces[0].vertex[1], 1);
+  EXPECT_EQ(obj->faces[0].vertex[2], 2);
+
+  // The second sees four, so the same text means one vertex later.
+  EXPECT_EQ(obj->faces[1].vertex[0], 1);
+  EXPECT_EQ(obj->faces[1].vertex[1], 2);
+  EXPECT_EQ(obj->faces[1].vertex[2], 3);
+
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjParse, NegativeTexcoordAndNormalIndicesAreRelativeToo) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+      "vt 0 0\nvt 1 0\n"
+      "vn 0 0 1\nvn 0 1 0\n"
+      "f -3/-2/-2 -2/-1/-1 -1/-1/-1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 1u);
+  const GMDL_Obj_Face & f = obj->faces[0];
+  EXPECT_EQ(f.texcoord[0], 0) << "-2 of two texture coordinates is the first";
+  EXPECT_EQ(f.texcoord[1], 1);
+  EXPECT_EQ(f.normal[0], 0) << "-2 of two normals is the first";
+  EXPECT_EQ(f.normal[2], 1);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjParse, RelativeIndicesSurviveADumpAndReload) {
+  // The dumper writes absolute indices, because the parser resolved them.
+  GMDL_Obj * first = load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf -3 -2 -1\n");
+  ASSERT_NE(first, nullptr);
+
+  TempFile out("", ".obj");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(first, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * second = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &second), GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->face_count, 1u);
+  for (int i = 0; i < 3; i++) {
+    EXPECT_EQ(second->faces[i == 0 ? 0 : 0].vertex[i], first->faces[0].vertex[i])
+        << "index " << i;
+  }
+  gmdl_obj_free(first);
+  gmdl_obj_free(second);
+}
+
 TEST(ObjParse, QuadFaceKeepsFourVertices) {
   GMDL_Obj * obj = load_text(
       "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"

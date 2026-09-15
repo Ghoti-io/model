@@ -69,6 +69,20 @@ typedef struct {
 } GMDL_Obj_Face_Overflow;
 
 /**
+ * @brief How face indices are reported.
+ *
+ * Indices are 0-based here, whatever the file wrote. OBJ indices are 1-based,
+ * and a negative one is relative - -1 names the most recently declared element
+ * of that kind. The parser resolves both forms, measuring a relative index
+ * from the counts at that point in the file, which is what the specification
+ * asks for and cannot be reconstructed afterwards from the totals.
+ *
+ * A file may still name an element that does not exist. That is not treated as
+ * a reason to reject the file, since readers differ on how to handle it, so a
+ * consumer that indexes the arrays directly must range check first.
+ */
+
+/**
  * @brief A face.
  *
  * `count` is the total number of vertices in the face. The first four are in

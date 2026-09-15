@@ -126,9 +126,32 @@ static void obj_parse_face_token(const char * token, const char * token_end,
   }
 }
 
-/** Convert a 1-based OBJ index to a 0-based one, or -1 when absent. */
-static int32_t obj_index(long value) {
-  return value ? (int32_t)(value - 1) : -1;
+/**
+ * Convert an OBJ index to a 0-based one, or -1 when absent.
+ *
+ * OBJ indices are 1-based, and a negative index is relative: -1 names the most
+ * recently declared element of that kind, -2 the one before it, and so on.
+ * The specification measures that from the current position in the file, so
+ * the count has to be the one at the moment the face is read rather than the
+ * final total - which is why this is resolved here rather than left to the
+ * caller.
+ *
+ * @param value The index as written, 0 when the field was absent.
+ * @param declared How many elements of that kind have been read so far.
+ * @return The 0-based index, -1 when absent, or an out-of-range value when the
+ *   file names an element that does not exist. Callers are expected to range
+ *   check against the final counts; a bogus index is not by itself a reason to
+ *   reject the file, and readers differ on how to treat one.
+ */
+static int32_t obj_index(long value, size_t declared) {
+  if (value == 0) {
+    return -1;
+  }
+  if (value < 0) {
+    // Relative: -1 is the last one declared.
+    return (int32_t)((long)declared + value);
+  }
+  return (int32_t)(value - 1);
 }
 
 GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
@@ -235,6 +258,12 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         goto cleanup;
       }
 
+      // Counts at this point in the file, which is what a negative (relative)
+      // index is measured against.
+      size_t vertex_count = gcu_array_count(&builder.vertices);
+      size_t texcoord_count = gcu_array_count(&builder.texcoords);
+      size_t normal_count = gcu_array_count(&builder.normals);
+
       GMDL_Obj_Face face;
       memset(&face, 0, sizeof(face));
       face.count = 0;
@@ -275,9 +304,9 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         }
 
         if (face.count < 4) {
-          face.vertex[face.count] = (int32_t)(v - 1);
-          face.texcoord[face.count] = obj_index(vt);
-          face.normal[face.count] = obj_index(vn);
+          face.vertex[face.count] = obj_index(v, vertex_count);
+          face.texcoord[face.count] = obj_index(vt, texcoord_count);
+          face.normal[face.count] = obj_index(vn, normal_count);
           face.count++;
         }
         else {
@@ -288,9 +317,9 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
             result = GMDL_ERR_OOM;
             goto cleanup;
           }
-          extra->vertex = (int32_t)(v - 1);
-          extra->texcoord = obj_index(vt);
-          extra->normal = obj_index(vn);
+          extra->vertex = obj_index(v, vertex_count);
+          extra->texcoord = obj_index(vt, texcoord_count);
+          extra->normal = obj_index(vn, normal_count);
           face.count++;
         }
       }
