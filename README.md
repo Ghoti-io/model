@@ -63,6 +63,13 @@ sudo make install
 | `make fuzz` | Build and run both fuzzers (`FUZZ_TIME=3600` for a real campaign) |
 | `make docs` | Doxygen, into `./docs` |
 
+## The dialect
+
+What the parsers accept, what they record, and what a consumer has to check
+afterwards is specified in
+[documentation/obj-mtl.md](documentation/obj-mtl.md). Where the
+implementation departs from that document, the document says so.
+
 ## The API
 
 Everything is prefixed `gmdl_` / `GMDL_`, under `<ghoti.io/model/...>`.
