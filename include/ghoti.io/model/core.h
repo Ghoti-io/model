@@ -1,0 +1,77 @@
+/**
+ * @file
+ *
+ * Core types, result codes, and limits for the Ghoti.io Model library.
+ *
+ * Copyright 2026 by Corey Pennycuff
+ */
+
+#ifndef GHOTI_IO_GMDL_CORE_H
+#define GHOTI_IO_GMDL_CORE_H
+
+#include <ghoti.io/model/allocator.h>
+#include <ghoti.io/model/macros.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief Result code for model library operations.
+ */
+typedef enum {
+  GMDL_OK = 0,          ///< Operation succeeded.
+  GMDL_ERR_IO,          ///< I/O error (read/write/seek failed).
+  GMDL_ERR_FORMAT,      ///< Unrecognized or invalid format.
+  GMDL_ERR_UNSUPPORTED, ///< Feature or format not supported.
+  GMDL_ERR_LIMIT,       ///< Resource or size limit exceeded.
+  GMDL_ERR_CORRUPT,     ///< Corrupt or invalid data.
+  GMDL_ERR_OOM,         ///< Out of memory.
+  GMDL_ERR_INVALID,     ///< Invalid argument.
+  GMDL_ERR_INTERNAL,    ///< Internal library error.
+  GMDL_RESULT_COUNT
+} GMDL_Result;
+
+/**
+ * @brief Convert a result code to a human-readable string.
+ *
+ * The returned string is statically allocated and must not be freed.
+ *
+ * @param result The result code.
+ * @return A description of the result code, never NULL.
+ */
+GMDL_API const char * gmdl_result_string(GMDL_Result result);
+
+/**
+ * @brief Caps applied while parsing, so that a hostile or corrupt file cannot
+ * make the library allocate without bound.
+ *
+ * Zero means "no limit" for every field. Pass NULL to a load function to use
+ * gmdl_limits_default().
+ */
+typedef struct GMDL_Limits {
+  size_t max_line_length; ///< Longest accepted line, in bytes.
+  size_t max_vertices;    ///< Cap on `v` records.
+  size_t max_texcoords;   ///< Cap on `vt` records.
+  size_t max_normals;     ///< Cap on `vn` records.
+  size_t max_faces;       ///< Cap on `f` records.
+  size_t max_face_indices; ///< Cap on vertices in a single face.
+  size_t max_groups;      ///< Cap on `g`/`o` records.
+  size_t max_materials;   ///< Cap on `newmtl` records, and on OBJ material
+                          ///< mappings.
+} GMDL_Limits;
+
+/**
+ * @brief Fill in the default limits.
+ *
+ * @param limits Structure to populate. NULL is ignored.
+ */
+GMDL_API void gmdl_limits_default(GMDL_Limits * limits);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // GHOTI_IO_GMDL_CORE_H

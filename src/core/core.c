@@ -1,0 +1,57 @@
+/**
+ * @file
+ *
+ * Result strings and default limits.
+ *
+ * Copyright 2026 by Corey Pennycuff
+ */
+
+#include <ghoti.io/model/core.h>
+
+const char * gmdl_result_string(GMDL_Result result) {
+  switch (result) {
+    case GMDL_OK:
+      return "No error";
+    case GMDL_ERR_IO:
+      return "I/O error";
+    case GMDL_ERR_FORMAT:
+      return "Invalid file format";
+    case GMDL_ERR_UNSUPPORTED:
+      return "Unsupported feature";
+    case GMDL_ERR_LIMIT:
+      return "Limit exceeded";
+    case GMDL_ERR_CORRUPT:
+      return "Corrupt data";
+    case GMDL_ERR_OOM:
+      return "Out of memory";
+    case GMDL_ERR_INVALID:
+      return "Invalid argument";
+    case GMDL_ERR_INTERNAL:
+      return "Internal error";
+    case GMDL_RESULT_COUNT:
+    default:
+      return "Unknown error";
+  }
+}
+
+void gmdl_limits_default(GMDL_Limits * limits) {
+  if (!limits) {
+    return;
+  }
+
+  // A line cap is the one limit that has to have a value: the parser reads a
+  // line at a time, so without it a single unterminated line would be read
+  // into memory in its entirety. The record caps are left open because the
+  // size of the input already bounds them - every record costs at least a
+  // couple of bytes - and a legitimate model can be very large.
+  *limits = (GMDL_Limits) {
+    .max_line_length = 65536,
+    .max_vertices = 0,
+    .max_texcoords = 0,
+    .max_normals = 0,
+    .max_faces = 0,
+    .max_face_indices = 0,
+    .max_groups = 0,
+    .max_materials = 0,
+  };
+}

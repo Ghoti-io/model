@@ -1,0 +1,7 @@
+Name: Ghoti.io Model(BRANCH)
+Description: 3D model and material format parsing (Wavefront OBJ and MTL)
+Version: (VERSION)
+URL: https://github.com/Ghoti-io/model
+Libs: -L(PC_LIB_DIR) -l(SUITE)-(PROJECT)(BRANCH)
+CFlags: -I(PC_INCLUDE_DIR)
+Requires: (SUITE)-cutil(BRANCH)
