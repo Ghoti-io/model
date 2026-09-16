@@ -293,6 +293,7 @@ endif
 $(APP_DIR)/$(STATIC_TARGET): $(LIBOBJECTS)
 	@printf "\n### Archiving Static Model Library ###\n"
 	@mkdir -p $(@D)
+	@rm -f $@
 	ar rcs $@ $^
 
 ####################################################################
