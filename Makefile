@@ -93,6 +93,35 @@ else
 
 endif
 
+# ---------------------------------------------------------------------------
+# Installation prefix
+#
+# Defaults to the system location chosen above. Override it to install
+# somewhere else - the suite's bootstrap installs every library into a local
+# prefix so that each build resolves its dependencies through pkg-config,
+# exactly as a consumer would, rather than through a second code path that
+# only in-tree builds exercise. See CONVENTIONS.md section 1.
+#
+#     make install PREFIX=/path/to/prefix
+# ---------------------------------------------------------------------------
+ifdef PREFIX
+INCLUDE_INSTALL_PATH := $(PREFIX)/include
+LIB_INSTALL_PATH := $(PREFIX)/lib
+BIN_INSTALL_PATH := $(PREFIX)/bin
+PKG_CONFIG_PATH := $(PREFIX)/share/pkgconfig
+ifeq ($(OS_NAME), Windows)
+PC_INCLUDE_DIR = $(shell cygpath -m $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH))
+PC_LIB_DIR = $(shell cygpath -m $(LIB_INSTALL_PATH)/$(SUITE))
+else
+PC_INCLUDE_DIR := $(INCLUDE_INSTALL_PATH)/$(SUITE)/$(PROJECT)$(BRANCH)
+PC_LIB_DIR := $(LIB_INSTALL_PATH)/$(SUITE)
+endif
+# A non-system prefix has no /etc/ld.so.conf.d, and writing to it would need
+# root anyway. Everything built here carries an rpath to the prefix instead.
+LDCONF_INSTALL_PATH :=
+endif
+
+
 
 CXX := g++
 CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g $(EXTRA_CXXFLAGS)
@@ -103,6 +132,12 @@ CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfa
 # GMDL_TEST_BUILD enables export of internal functions for testing (checked by GMDL_INTERNAL_API macro)
 LIB_CFLAGS := $(CFLAGS) -DGMDL_BUILD -DGMDL_TEST_BUILD $(EXTRA_CFLAGS)
 LDFLAGS := -L /usr/lib -lstdc++ -lm $(EXTRA_LDFLAGS)
+ifdef PREFIX
+# So that a library, a test or an example finds its Ghoti.io dependencies in the
+# prefix at run time without LD_LIBRARY_PATH.
+LDFLAGS += -Wl,-rpath,$(LIB_INSTALL_PATH)/$(SUITE)
+endif
+
 BUILD_DIR := ./build/$(BUILD)
 OBJ_DIR := $(BUILD_DIR)/objects
 GEN_DIR := $(BUILD_DIR)/generated
@@ -132,21 +167,12 @@ INCLUDE := -I include/ -I $(GEN_DIR)/
 # checkout. The name must carry $(BRANCH): cutil installs its .pc as
 # ghoti.io-cutil-dev.pc, so asking for "ghoti.io-cutil" never matches.
 CUTIL_PC ?= ghoti.io-cutil$(BRANCH)
-CUTIL_CFLAGS := $(shell pkg-config --cflags $(CUTIL_PC) 2>/dev/null)
-CUTIL_LIBS := $(shell pkg-config --libs $(CUTIL_PC) 2>/dev/null)
+CUTIL_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags $(CUTIL_PC) 2>/dev/null)
+CUTIL_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs $(CUTIL_PC) 2>/dev/null)
 # Use the sibling path when pkg-config failed (empty) or returned an
 # unsubstituted placeholder from the .pc template.
-CUTIL_PLACEHOLDER := (
-CUTIL_NEED_FALLBACK := $(or $(findstring $(CUTIL_PLACEHOLDER),$(CUTIL_CFLAGS)),$(if $(CUTIL_CFLAGS),,y))
-ifneq ($(CUTIL_NEED_FALLBACK),)
-# cutil's build tree is one level shallower than this one: build/<os>/, with no
-# release/debug component, hence just the leading OS component of BUILD here.
-CUTIL_SIBLING := ../cutil
-CUTIL_OS := $(firstword $(subst /, ,$(BUILD)))
-CUTIL_CFLAGS := -I$(CUTIL_SIBLING)/include -I$(CUTIL_SIBLING)/build/$(CUTIL_OS)/include
-CUTIL_LIBS := -L$(CUTIL_SIBLING)/build/$(CUTIL_OS)/apps -lghoti.io-cutil$(BRANCH)
-# Let the linker resolve the model .so's dependency on cutil when linking tests.
-LDFLAGS += -Wl,-rpath-link,$(CUTIL_SIBLING)/build/$(CUTIL_OS)/apps
+ifeq ($(strip $(CUTIL_CFLAGS)),)
+$(error ghoti.io-cutil was not found by pkg-config. Run ./bootstrap.sh in the parent folder to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback: a second resolution path that only in-tree builds exercise is one that silently rots.)
 endif
 INCLUDE += $(CUTIL_CFLAGS)
 
@@ -340,7 +366,7 @@ endif
 # So the tests can load the model library and its dependency on cutil. cutil's
 # build tree has no release/debug component, so only the leading OS component
 # of BUILD applies to it.
-TEST_LD_PATH := $(APP_DIR):../cutil/build/$(firstword $(subst /, ,$(BUILD)))/apps
+TEST_LD_PATH := $(APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)
 
 test: ## Make and run the unit tests
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
@@ -513,7 +539,7 @@ test-asan: $(ASAN_TEST_EXECUTABLES)
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf "\033[0;30;43m\n### Running %s (ASan+UBSan) ###\033[0m\n\n" "$$test_name"; \
 		LD_PRELOAD="$(ASAN_RUNTIME)$${LD_PRELOAD:+:$$LD_PRELOAD}" \
-		LD_LIBRARY_PATH="$(ASAN_APP_DIR):../cutil/build/$(firstword $(subst /, ,$(BUILD)))/apps" \
+		LD_LIBRARY_PATH="$(ASAN_APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)" \
 			$$test_exe --gtest_brief=1 || exit 1; \
 	done
 	@printf "\033[0;32m\nASan+UBSan suite clean.\033[0m\n"
@@ -599,8 +625,8 @@ ifeq ($(OS_NAME), Linux)
 	@ln -f -s $(TARGET) $(LIB_INSTALL_PATH)/$(SUITE)/$(SO_NAME)
 	@ln -f -s $(SO_NAME) $(LIB_INSTALL_PATH)/$(SUITE)/$(BASE_NAME)
 	# Installing the ld configuration file.
-	@mkdir -p $(LDCONF_INSTALL_PATH)
-	@echo "$(LIB_INSTALL_PATH)/$(SUITE)" > $(LDCONF_INSTALL_PATH)/$(SUITE)-$(PROJECT)$(BRANCH).conf
+	@if [ -n "$(LDCONF_INSTALL_PATH)" ]; then mkdir -p $(LDCONF_INSTALL_PATH); fi
+	@if [ -n "$(LDCONF_INSTALL_PATH)" ]; then echo "$(LIB_INSTALL_PATH)/$(SUITE)" > $(LDCONF_INSTALL_PATH)/$(SUITE)-$(PROJECT)$(BRANCH).conf; fi
 endif
 ifeq ($(OS_NAME), Windows)
 	@mkdir -p $(BIN_INSTALL_PATH)/$(SUITE)
@@ -616,7 +642,7 @@ endif
 	@mkdir -p $(PKGCONFIG_INSTALL_PATH)
 	@cat pkgconfig/$(SUITE)-$(PROJECT).pc | sed 's/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g; s/(VERSION)/$(VERSION)/g; s|(PC_LIB_DIR)|$(PC_LIB_DIR)|g; s|(PC_INCLUDE_DIR)|$(PC_INCLUDE_DIR)|g' > $(PKGCONFIG_INSTALL_PATH)/$(SUITE)-$(PROJECT)$(BRANCH).pc
 ifeq ($(OS_NAME), Linux)
-	@ldconfig >> /dev/null 2>&1
+	@if [ -n "$(LDCONF_INSTALL_PATH)" ]; then ldconfig >> /dev/null 2>&1; fi
 endif
 	@echo "Ghoti.io $(PROJECT)$(BRANCH) installed"
 
@@ -634,7 +660,7 @@ endif
 	@rmdir --ignore-fail-on-non-empty $(INCLUDE_INSTALL_PATH)/$(SUITE)
 	@rmdir --ignore-fail-on-non-empty $(LIB_INSTALL_PATH)/$(SUITE)
 ifeq ($(OS_NAME), Linux)
-	@ldconfig >> /dev/null 2>&1
+	@if [ -n "$(LDCONF_INSTALL_PATH)" ]; then ldconfig >> /dev/null 2>&1; fi
 endif
 	@echo "Ghoti.io $(PROJECT)$(BRANCH) has been uninstalled"
 
