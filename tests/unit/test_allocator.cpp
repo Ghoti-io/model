@@ -12,7 +12,7 @@
 #include <cstdlib>
 #include <string>
 
-#include <cutil/allocator.h>
+#include <ghoti.io/cutil/allocator.h>
 
 using gmdltest::MemStream;
 

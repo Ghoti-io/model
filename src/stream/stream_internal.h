@@ -6,8 +6,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GMDL_STREAM_INTERNAL_H
-#define GHOTI_IO_GMDL_STREAM_INTERNAL_H
+#ifndef GHOTI_IO_GMDL_SRC_STREAM_STREAM_INTERNAL_H
+#define GHOTI_IO_GMDL_SRC_STREAM_STREAM_INTERNAL_H
 
 #include <ghoti.io/model/macros.h>
 
@@ -30,4 +30,4 @@ struct GMDL_Stream {
 }
 #endif
 
-#endif // GHOTI_IO_GMDL_STREAM_INTERNAL_H
+#endif // GHOTI_IO_GMDL_SRC_STREAM_STREAM_INTERNAL_H

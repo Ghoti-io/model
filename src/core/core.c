@@ -6,6 +6,7 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
+#include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/core.h>
 
 const char * gmdl_result_string(GMDL_Result result) {

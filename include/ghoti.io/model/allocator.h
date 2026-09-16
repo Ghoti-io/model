@@ -14,7 +14,7 @@
 #ifndef GHOTI_IO_GMDL_ALLOCATOR_H
 #define GHOTI_IO_GMDL_ALLOCATOR_H
 
-#include <cutil/allocator.h>
+#include <ghoti.io/cutil/allocator.h>
 #include <ghoti.io/model/macros.h>
 #include <stddef.h>
 

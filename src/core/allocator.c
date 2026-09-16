@@ -6,7 +6,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#include <cutil/allocator.h>
+#include <ghoti.io/cutil/allocator.h>
+#include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/allocator.h>
 
 const GMDL_Allocator * gmdl_allocator_default(void) {

@@ -9,11 +9,12 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#include <cutil/allocator.h>
-#include <cutil/array.h>
+#include <ghoti.io/cutil/allocator.h>
+#include <ghoti.io/cutil/array.h>
 #include <stdio.h>
 #include <string.h>
 
+#include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/mtl.h>
 
 #include "../obj/obj_internal.h"

@@ -6,8 +6,8 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#ifndef GHOTI_IO_GMDL_OBJ_INTERNAL_H
-#define GHOTI_IO_GMDL_OBJ_INTERNAL_H
+#ifndef GHOTI_IO_GMDL_SRC_OBJ_OBJ_INTERNAL_H
+#define GHOTI_IO_GMDL_SRC_OBJ_OBJ_INTERNAL_H
 
 #include <ghoti.io/model/macros.h>
 
@@ -48,4 +48,4 @@ bool gmdl_limit_reached(size_t count, size_t limit);
 }
 #endif
 
-#endif // GHOTI_IO_GMDL_OBJ_INTERNAL_H
+#endif // GHOTI_IO_GMDL_SRC_OBJ_OBJ_INTERNAL_H

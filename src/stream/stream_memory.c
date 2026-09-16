@@ -7,11 +7,12 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-#include <cutil/allocator.h>
-#include <cutil/safemath.h>
+#include <ghoti.io/cutil/allocator.h>
+#include <ghoti.io/cutil/safemath.h>
 #include <stdio.h>
 #include <string.h>
 
+#include <ghoti.io/model/macros.h>
 #include "stream_internal.h"
 
 GMDL_Result gmdl_stream_create_memory_with_allocator(const void * data,

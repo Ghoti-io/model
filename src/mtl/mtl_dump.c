@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 
+#include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/mtl.h>
 
 GMDL_Result gmdl_mtl_dump(const GMDL_Mtl * mtl, FILE * fd) {

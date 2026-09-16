@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 
+#include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/obj.h>
 
 /** Print one "v", "v/vt", "v//vn" or "v/vt/vn" reference. */

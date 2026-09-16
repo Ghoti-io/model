@@ -8,6 +8,7 @@
 
 #include <string.h>
 
+#include <ghoti.io/model/macros.h>
 #include "obj_internal.h"
 
 bool gmdl_line_is(
