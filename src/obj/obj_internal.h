@@ -9,6 +9,8 @@
 #ifndef GHOTI_IO_GMDL_OBJ_INTERNAL_H
 #define GHOTI_IO_GMDL_OBJ_INTERNAL_H
 
+#include <ghoti.io/model/macros.h>
+
 #include <ghoti.io/model/core.h>
 #include <stdbool.h>
 #include <stddef.h>

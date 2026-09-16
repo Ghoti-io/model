@@ -12,6 +12,10 @@
 #ifndef GHOTI_IO_GMDL_MACROS_H
 #define GHOTI_IO_GMDL_MACROS_H
 
+// Included here so that the symbol renames are in effect in every translation
+// unit before any declaration they apply to.
+#include <ghoti.io/model/namespace.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
