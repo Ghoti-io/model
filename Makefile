@@ -198,6 +198,16 @@ endif
 # The standard include directories for the project.
 INCLUDE := -I include/ -I $(GEN_DIR)/
 
+# Goals that compile and link nothing.  A missing sibling library must not stop
+# them: `make docs` needs doxygen and the tracked sources, not cutil, and it
+# was failing at parse time - before doxygen was ever reached - on any machine
+# where the suite is not installed.  Every other goal still gets the hard
+# error below, which is the point of having no fallback.
+DEPLESS_GOALS := docs docs-pdf clean cloc help
+ifeq ($(filter-out $(DEPLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
+SKIP_DEP_CHECK := 1
+endif
+
 # ghoti.io-cutil, for the allocator vtable, the growable array, and the
 # overflow-checked size math. Prefer pkg-config; fall back to a sibling
 # checkout. The name must carry $(BRANCH): cutil installs its .pc as
@@ -208,7 +218,9 @@ CUTIL_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs $(CUT
 # Use the sibling path when pkg-config failed (empty) or returned an
 # unsubstituted placeholder from the .pc template.
 ifeq ($(strip $(CUTIL_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
 $(error ghoti.io-cutil was not found by pkg-config. Run ./bootstrap.sh in the parent folder to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback: a second resolution path that only in-tree builds exercise is one that silently rots.)
+endif
 endif
 INCLUDE += $(CUTIL_CFLAGS)
 
