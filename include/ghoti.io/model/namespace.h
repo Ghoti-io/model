@@ -21,6 +21,28 @@
 #include <ghoti.io/model/libver.h>
 
 /// @cond HIDDEN_SYMBOLS
+
+// Public types. Renamed as well as the functions, so that two versions whose
+// structs differ in layout cannot be confused for one another - which is the
+// whole point of the scheme, and which renaming only the functions leaves
+// undone. GCU_* names are deliberately absent: they are cutil's, and cutil
+// has already renamed them.
+#define GMDL_Allocator GHOTIIO_MODEL(GMDL_Allocator)
+#define GMDL_Limits GHOTIIO_MODEL(GMDL_Limits)
+#define GMDL_Mtl GHOTIIO_MODEL(GMDL_Mtl)
+#define GMDL_Mtl_Material GHOTIIO_MODEL(GMDL_Mtl_Material)
+#define GMDL_Obj GHOTIIO_MODEL(GMDL_Obj)
+#define GMDL_Obj_Face GHOTIIO_MODEL(GMDL_Obj_Face)
+#define GMDL_Obj_Face_Overflow GHOTIIO_MODEL(GMDL_Obj_Face_Overflow)
+#define GMDL_Obj_Group GHOTIIO_MODEL(GMDL_Obj_Group)
+#define GMDL_Obj_Material_Mapping GHOTIIO_MODEL(GMDL_Obj_Material_Mapping)
+#define GMDL_Obj_Normal GHOTIIO_MODEL(GMDL_Obj_Normal)
+#define GMDL_Obj_TexCoord GHOTIIO_MODEL(GMDL_Obj_TexCoord)
+#define GMDL_Obj_Vertex GHOTIIO_MODEL(GMDL_Obj_Vertex)
+#define GMDL_Result GHOTIIO_MODEL(GMDL_Result)
+#define GMDL_Stream GHOTIIO_MODEL(GMDL_Stream)
+
+// Public functions.
 #define gmdl_allocator_default GHOTIIO_MODEL(gmdl_allocator_default)
 #define gmdl_limits_default GHOTIIO_MODEL(gmdl_limits_default)
 #define gmdl_mtl_dump GHOTIIO_MODEL(gmdl_mtl_dump)
