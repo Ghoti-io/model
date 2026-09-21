@@ -44,8 +44,10 @@ sanitizer build.
 
 ## Building
 
-Requires [cutil](https://github.com/Ghoti-io/cutil), found through pkg-config
-or as a sibling checkout.
+Requires [cutil](https://github.com/Ghoti-io/cutil), found through pkg-config.
+That is the only way it is looked for: a dependency pkg-config cannot find is
+a hard error naming the fix, rather than a fallback to a checkout next door
+that only an in-tree build would ever exercise.
 
 ```bash
 make            # shared and static libraries
