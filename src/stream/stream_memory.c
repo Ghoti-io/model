@@ -8,8 +8,7 @@
  */
 
 #include <ghoti.io/cutil/allocator.h>
-#include <ghoti.io/cutil/safemath.h>
-#include <stdio.h>
+#include <ghoti.io/cutil/file.h>
 #include <string.h>
 
 #include <ghoti.io/model/macros.h>
@@ -46,6 +45,31 @@ GMDL_Result gmdl_stream_create_memory(
       data, size, NULL, out_stream);
 }
 
+/**
+ * Map a cutil file result onto this library's.
+ *
+ * The two enumerations name the same failures, so this is a translation and
+ * not a judgement; GCU_FILE_RESULT_COUNT is never returned, and an
+ * unrecognised value is an internal error rather than a guess.
+ */
+static GMDL_Result gmdl_result_from_file(GCU_File_Result result) {
+  switch (result) {
+    case GCU_FILE_OK:
+      return GMDL_OK;
+    case GCU_FILE_ERR_INVALID:
+      return GMDL_ERR_INVALID;
+    case GCU_FILE_ERR_OOM:
+      return GMDL_ERR_OOM;
+    case GCU_FILE_ERR_LIMIT:
+      return GMDL_ERR_LIMIT;
+    case GCU_FILE_ERR_IO:
+      return GMDL_ERR_IO;
+    case GCU_FILE_RESULT_COUNT:
+    default:
+      return GMDL_ERR_INTERNAL;
+  }
+}
+
 GMDL_Result gmdl_stream_create_file(const char * path,
     const GMDL_Allocator * allocator, GMDL_Stream ** out_stream) {
   if (!out_stream) {
@@ -56,64 +80,28 @@ GMDL_Result gmdl_stream_create_file(const char * path,
     return GMDL_ERR_INVALID;
   }
 
-  FILE * fp = fopen(path, "rb");
-  if (!fp) {
-    return GMDL_ERR_IO;
-  }
-
-  // Read in chunks rather than trusting a seek-to-end size. A path can name
-  // something whose length is not known ahead of time, and a file can change
-  // between the measurement and the read.
-  size_t capacity = 64 * 1024;
+  // cutil reads in chunks rather than trusting a seek-to-end size, so a path
+  // that names a pipe or a device still works, and it opens through the wide
+  // entry point on Windows, where fopen() takes the path in the process code
+  // page and therefore cannot name every file the filesystem accepts.
+  void * buffer = NULL;
   size_t length = 0;
-  uint8_t * buffer = gcu_allocator_malloc(allocator, capacity);
-  if (!buffer) {
-    fclose(fp);
-    return GMDL_ERR_OOM;
+  GCU_File_Result read = gcu_file_read(
+      path, GCU_FILE_UNLIMITED, allocator, &buffer, &length);
+  if (read != GCU_FILE_OK) {
+    return gmdl_result_from_file(read);
   }
 
-  for (;;) {
-    size_t space = capacity - length;
-    if (space == 0) {
-      size_t grown;
-      if (!gcu_safe_mul_size(capacity, 2, &grown)) {
-        gcu_allocator_free(allocator, buffer);
-        fclose(fp);
-        return GMDL_ERR_LIMIT;
-      }
-      uint8_t * resized = gcu_allocator_realloc(allocator, buffer, grown);
-      if (!resized) {
-        gcu_allocator_free(allocator, buffer);
-        fclose(fp);
-        return GMDL_ERR_OOM;
-      }
-      buffer = resized;
-      capacity = grown;
-      space = capacity - length;
-    }
-
-    size_t got = fread(buffer + length, 1, space, fp);
-    length += got;
-    if (got < space) {
-      if (ferror(fp)) {
-        gcu_allocator_free(allocator, buffer);
-        fclose(fp);
-        return GMDL_ERR_IO;
-      }
-      break; // End of file.
-    }
-  }
-  fclose(fp);
-
-  GMDL_Result result =
-      gmdl_stream_create_memory_with_allocator(buffer, length, allocator,
-          out_stream);
+  GMDL_Result result = gmdl_stream_create_memory_with_allocator(
+      buffer, length, allocator, out_stream);
   if (result != GMDL_OK) {
-    gcu_allocator_free(allocator, buffer);
+    gcu_file_free(allocator, buffer);
     return result;
   }
 
-  // Hand the buffer to the stream, which frees it on destroy.
+  // Hand the buffer to the stream, which frees it on destroy. gcu_file_read
+  // allocated it through the same allocator gmdl_stream_destroy releases it
+  // with, which is what gcu_file_free() does.
   (*out_stream)->owned = buffer;
   return GMDL_OK;
 }

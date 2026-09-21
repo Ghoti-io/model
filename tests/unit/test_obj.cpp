@@ -68,7 +68,7 @@ TEST(ObjLoad, LoadFileRejectsNullArguments) {
 }
 
 TEST(ObjLoad, LoadFileParsesTheSameAsAStream) {
-  TempFile f("v 1 2 3\nv 4 5 6\n", ".obj");
+  TempFile f("v 1 2 3\nv 4 5 6\n");
   ASSERT_TRUE(f.valid());
   GMDL_Obj * obj = nullptr;
   ASSERT_EQ(gmdl_obj_load_file(f.path(), nullptr, nullptr, &obj), GMDL_OK);
@@ -235,7 +235,7 @@ TEST(ObjParse, RelativeIndicesSurviveADumpAndReload) {
   GMDL_Obj * first = load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf -3 -2 -1\n");
   ASSERT_NE(first, nullptr);
 
-  TempFile out("", ".obj");
+  TempFile out("");
   ASSERT_TRUE(out.valid());
   FILE * sink = fopen(out.path(), "wb");
   ASSERT_NE(sink, nullptr);
@@ -598,7 +598,7 @@ TEST(ObjDump, RoundTripsThroughTheParser) {
   GMDL_Obj * first = load_text(source);
   ASSERT_NE(first, nullptr);
 
-  TempFile out("", ".obj");
+  TempFile out("");
   ASSERT_TRUE(out.valid());
   FILE * sink = fopen(out.path(), "wb");
   ASSERT_NE(sink, nullptr);

@@ -265,7 +265,7 @@ TEST(MtlDump, RoundTripsThroughTheParser) {
       "newmtl blue\nKd 0 0 1\n");
   ASSERT_NE(first, nullptr);
 
-  TempFile out("", ".mtl");
+  TempFile out("");
   ASSERT_TRUE(out.valid());
   FILE * sink = fopen(out.path(), "wb");
   ASSERT_NE(sink, nullptr);

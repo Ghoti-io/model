@@ -313,6 +313,13 @@ creation - in chunks, so a path that names a pipe or a device works - and is
 a memory stream from then on. This means a read error can only happen at
 creation, where it is `GMDL_ERR_IO`.
 
+The reading itself is `gcu_file_read()` from cutil rather than a local loop.
+That is not only to delete a duplicate: cutil opens through the wide entry
+point on Windows, where `fopen()` takes the path in the process code page and
+therefore cannot name every file the filesystem accepts. A UTF-8 path that
+does not survive that conversion opens a different file, or none at all, and
+this library has no way to tell which happened.
+
 `gmdl_stream_read_line()` returns one line without its ending, NUL-terminated,
 in the caller's buffer. At end of stream it returns `GMDL_ERR_IO`, which is
 the only way that result arises from a stream once it exists;
