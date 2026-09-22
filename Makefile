@@ -226,11 +226,11 @@ endif
 CUTIL_PC ?= ghoti.io-cutil$(BRANCH)
 CUTIL_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(CUTIL_PC) 2>/dev/null)
 CUTIL_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(CUTIL_PC) 2>/dev/null)
-# Use the sibling path when pkg-config failed (empty) or returned an
-# unsubstituted placeholder from the .pc template.
+# An empty answer means pkg-config could not find it. There is no second
+# resolution path to fall back to, so this is a hard error naming the fix.
 ifeq ($(strip $(CUTIL_CFLAGS)),)
 ifndef SKIP_DEP_CHECK
-$(error ghoti.io-cutil was not found by pkg-config. Run ./bootstrap.sh in the parent folder to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback: a second resolution path that only in-tree builds exercise is one that silently rots.)
+$(error ghoti.io-cutil was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback: a second resolution path that only in-tree builds exercise is one that silently rots.)
 endif
 endif
 INCLUDE += $(CUTIL_CFLAGS)
