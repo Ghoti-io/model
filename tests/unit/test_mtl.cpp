@@ -378,6 +378,73 @@ TEST(MtlNames, ABareNewmtlIsStillAFormatError) {
   EXPECT_EQ(load_text_expecting_failure("newmtl\n"), GMDL_ERR_FORMAT);
 }
 
+//
+// Colour forms: three are documented, one is implemented, and the other two
+// are a different answer from "malformed" (4.2).
+//
+
+TEST(MtlColor, OneValueMeansGrey) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nKd 0.5\nKa 0.25\nKs 1\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  for (int i = 0; i < 3; i++) {
+    EXPECT_FLOAT_EQ(mtl->materials[0].Kd[i], 0.5f) << "channel " << i;
+    EXPECT_FLOAT_EQ(mtl->materials[0].Ka[i], 0.25f) << "channel " << i;
+    EXPECT_FLOAT_EQ(mtl->materials[0].Ks[i], 1.0f) << "channel " << i;
+  }
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlColor, ThreeValuesStillWork) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nKd 0.1 0.2 0.3\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[0], 0.1f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[1], 0.2f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[2], 0.3f);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlColor, TrailingTextAfterThreeValuesIsIgnored) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nKd 0.1 0.2 0.3 extra\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[2], 0.3f);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlColor, UnimplementedFormsAreUnsupportedNotMalformed) {
+  // The distinction is the point: the file is fine, the reader is not, and
+  // answering FORMAT rejected a good material library as corrupt.
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd xyz 1 1 1\n"),
+      GMDL_ERR_UNSUPPORTED);
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd spectral f.rfl\n"),
+      GMDL_ERR_UNSUPPORTED);
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nd -halo 0.5\n"),
+      GMDL_ERR_UNSUPPORTED);
+}
+
+TEST(MtlColor, AValueThatDoesNotParseIsStillMalformed) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd 0.5 x\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd 0.1 0.2\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd nope\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(MtlColor, ANameBeginningWithAKeywordIsNotTheKeyword) {
+  // "xyzzy" is not the "xyz" form, so it falls through to being malformed
+  // rather than unsupported.
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd xyzzy\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(MtlColor, PlainDissolveStillParses) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nd 0.25\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_FLOAT_EQ(mtl->materials[0].d, 0.25f);
+  gmdl_mtl_free(mtl);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

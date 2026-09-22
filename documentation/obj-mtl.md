@@ -239,10 +239,10 @@ values is ignored. Every property is optional; an absent one leaves zero.
 | `d n` | dissolve; 1 is opaque | `d` |
 | `illum n` | illumination model, integer | `illum` |
 
-The colour properties have three documented forms. `K? r g b` is the one
-implemented. `K? r` - one value, meaning `r r r` - is accepted and expanded
-(11.1). `K? xyz ...` (CIE XYZ) and `K? spectral file [factor]` are
-`GMDL_ERR_UNSUPPORTED` (11.1). `d -halo n` is `GMDL_ERR_UNSUPPORTED` (11.1).
+The colour properties have three documented forms. `K? r g b` is the
+ordinary one. `K? r` - one value, meaning `r r r` - is accepted and expanded.
+`K? xyz ...` (CIE XYZ) and `K? spectral file [factor]` are
+`GMDL_ERR_UNSUPPORTED`. `d -halo n` is `GMDL_ERR_UNSUPPORTED`.
 
 A property whose values do not parse - `Kd 0.5 x`, `illum x` - is
 `GMDL_ERR_FORMAT`.
@@ -353,7 +353,7 @@ it in `dropped_faces`; that is the pattern.
 debugging and for tests. The guarantee is **structural round-trip**: parsing
 the dump yields a model with the same counts, the same indices, the same
 names, the same group ranges and the same material assignments. Floats are
-written with `%f`, so a value survives to six decimal places only (11.2).
+written with `%f`, so a value survives to six decimal places only (11.1).
 
 The dump writes `usemtl` when the material changes between consecutive faces,
 `g` for each group before its faces, and relative indices as absolute ones.
@@ -384,19 +384,15 @@ crashes nor leaks, and a `GMDL_OK` model survives a dump and reload.
 
 Reproductions use `gmdl_obj_load()` on the given bytes.
 
-1. **The one-value colour form and the unsupported forms are all
-   `GMDL_ERR_FORMAT`.** `Kd 0.5` should expand to `0.5 0.5 0.5`; `Kd xyz 1 1 1`,
-   `Kd spectral f.rfl` and `d -halo 0.5` should be `GMDL_ERR_UNSUPPORTED`.
-
-2. **Dump loses float precision.** `%f` writes six decimals; `v 0.0000001 0 0`
+1. **Dump loses float precision.** `%f` writes six decimals; `v 0.0000001 0 0`
    round-trips to `0`. `%.9g` round-trips every float exactly.
 
-3. **Dump drops faces that precede the first group.** When a model has any
+2. **Dump drops faces that precede the first group.** When a model has any
    groups, `gmdl_obj_dump()` writes only the faces inside group ranges. For
    `v 1 2 3`, `f 1 1 1`, `g later`, face 0 belongs to no group and is not
    written, so the dump does not round-trip.
 
-4. **A fourth face field is ignored.** `f 1/2/3/4` yields `1/2/3`. Whether
+3. **A fourth face field is ignored.** `f 1/2/3/4` yields `1/2/3`. Whether
    that is right is an open question (12); today it is at least undocumented.
 
 ---

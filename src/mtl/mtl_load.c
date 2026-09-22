@@ -30,12 +30,96 @@
 #include <ghoti.io/cutil/allocator.h>
 #include <ghoti.io/cutil/array.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/mtl.h>
 
 #include "../obj/obj_internal.h"
+
+/**
+ * Read a colour property's value.
+ *
+ * Section 4.2 documents three forms. `K? r g b` is the ordinary one and
+ * `K? r` means grey - the same value in all three channels. `K? xyz ...`
+ * (CIE XYZ) and `K? spectral file [factor]` are real forms this library does
+ * not implement.
+ *
+ * The unimplemented forms are GMDL_ERR_UNSUPPORTED, not GMDL_ERR_FORMAT.
+ * Section 1 draws that line deliberately: the file is well-formed and the
+ * reader is the one falling short, and a caller that meets the two wants to
+ * do different things. Answering FORMAT to both meant a perfectly good
+ * material library was rejected as corrupt.
+ *
+ * @param rest The text after the directive.
+ * @param out Receives three channel values.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT or ::GMDL_ERR_UNSUPPORTED.
+ */
+static GMDL_Result mtl_parse_color(const char * rest, float * out) {
+  if (gmdl_line_is(rest, "xyz", NULL) || gmdl_line_is(rest, "spectral", NULL)) {
+    return GMDL_ERR_UNSUPPORTED;
+  }
+
+  float values[3];
+  size_t count = 0;
+  const char * cursor = rest;
+  while (count < 3) {
+    char * end = NULL;
+    float value = strtof(cursor, &end);
+    if (end == cursor) {
+      break;
+    }
+    values[count++] = value;
+    cursor = end;
+  }
+
+  if (count == 3) {
+    // Trailing text after the expected values is ignored (4.2).
+    out[0] = values[0];
+    out[1] = values[1];
+    out[2] = values[2];
+    return GMDL_OK;
+  }
+  if (count == 1) {
+    // One value is grey - but only when it is the whole of the value.
+    // "Kd 0.5 x" is a malformed three-value form, which 4.2 calls FORMAT.
+    while (*cursor == ' ' || *cursor == '\t') {
+      cursor++;
+    }
+    if (*cursor != '\0') {
+      return GMDL_ERR_FORMAT;
+    }
+    out[0] = values[0];
+    out[1] = values[0];
+    out[2] = values[0];
+    return GMDL_OK;
+  }
+  return GMDL_ERR_FORMAT;
+}
+
+/**
+ * Read a dissolve value.
+ *
+ * `d -halo n` is a documented form this library does not implement, so it is
+ * GMDL_ERR_UNSUPPORTED for the reason given on mtl_parse_color().
+ *
+ * @param rest The text after the directive.
+ * @param out Receives the value.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT or ::GMDL_ERR_UNSUPPORTED.
+ */
+static GMDL_Result mtl_parse_dissolve(const char * rest, float * out) {
+  if (gmdl_line_is(rest, "-halo", NULL)) {
+    return GMDL_ERR_UNSUPPORTED;
+  }
+  char * end = NULL;
+  float value = strtof(rest, &end);
+  if (end == rest) {
+    return GMDL_ERR_FORMAT;
+  }
+  *out = value;
+  return GMDL_OK;
+}
 
 GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
     const GMDL_Allocator * allocator, GMDL_Mtl ** out_mtl) {
@@ -128,23 +212,23 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         (GMDL_Mtl_Material *)gcu_array_at(&materials, current);
 
     if (gmdl_line_is(line_text, "Ka", &rest)) {
-      if (sscanf(rest, "%f %f %f", &material->Ka[0], &material->Ka[1],
-              &material->Ka[2]) != 3) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_parse_color(rest, material->Ka);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "Kd", &rest)) {
-      if (sscanf(rest, "%f %f %f", &material->Kd[0], &material->Kd[1],
-              &material->Kd[2]) != 3) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_parse_color(rest, material->Kd);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "Ks", &rest)) {
-      if (sscanf(rest, "%f %f %f", &material->Ks[0], &material->Ks[1],
-              &material->Ks[2]) != 3) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_parse_color(rest, material->Ks);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
     }
@@ -155,8 +239,9 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       }
     }
     else if (gmdl_line_is(line_text, "d", &rest)) {
-      if (sscanf(rest, "%f", &material->d) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_parse_dissolve(rest, &material->d);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
     }
