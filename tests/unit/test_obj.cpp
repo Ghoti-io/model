@@ -784,6 +784,60 @@ TEST(ObjFaceToken, AFourthFieldIsIgnoredRatherThanRefused) {
   gmdl_obj_free(obj);
 }
 
+//
+// Names and paths: refused when they do not fit, never truncated (3.9).
+//
+
+TEST(ObjNames, OverLongGroupNameIsRefused) {
+  std::string name(GMDL_OBJ_MAX_NAME_LENGTH, 'a');
+  EXPECT_EQ(load_text_expecting_failure("g " + name + "\n"), GMDL_ERR_LIMIT);
+}
+
+TEST(ObjNames, AGroupNameThatExactlyFitsIsAccepted) {
+  // The field holds the terminator too, so the longest legal name is one
+  // byte shorter than the field. Both sides of that boundary are checked,
+  // because an off-by-one here refuses valid files.
+  std::string name(GMDL_OBJ_MAX_NAME_LENGTH - 1, 'a');
+  GMDL_Obj * obj = load_text("g " + name + "\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->group_count, 1u);
+  EXPECT_EQ(std::string(obj->groups[0].name), name);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjNames, OverLongMaterialNameIsRefused) {
+  std::string name(GMDL_OBJ_MAX_NAME_LENGTH, 'm');
+  EXPECT_EQ(load_text_expecting_failure("usemtl " + name + "\n"),
+      GMDL_ERR_LIMIT);
+}
+
+TEST(ObjNames, ABareUsemtlIsStillAFormatError) {
+  // A missing name and an over-long one are different answers, because the
+  // caller's next step differs.
+  EXPECT_EQ(load_text_expecting_failure("usemtl\n"), GMDL_ERR_FORMAT);
+}
+
+TEST(ObjNames, OverLongMtllibPathIsRefused) {
+  std::string path(GMDL_OBJ_MAX_PATH_LENGTH, 'p');
+  EXPECT_EQ(load_text_expecting_failure("mtllib " + path + "\n"),
+      GMDL_ERR_LIMIT);
+}
+
+TEST(ObjNames, AMtllibPathThatExactlyFitsIsAccepted) {
+  std::string path(GMDL_OBJ_MAX_PATH_LENGTH - 1, 'p');
+  GMDL_Obj * obj = load_text("mtllib " + path + "\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(std::string(obj->mtllib), path);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjNames, ABareMtllibStillClearsThePath) {
+  GMDL_Obj * obj = load_text("mtllib a.mtl\nmtllib\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_STREQ(obj->mtllib, "");
+  gmdl_obj_free(obj);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

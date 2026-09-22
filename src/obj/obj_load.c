@@ -412,10 +412,17 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
     }
     else if (gmdl_line_is(line_text, "g", &rest)
         || gmdl_line_is(line_text, "o", &rest)) {
-      // "g" with no name means the default group, per the specification.
+      // "g" with no name means the default group, per the specification; a
+      // name too long for the field is refused rather than cut, because the
+      // first 127 bytes of a name name something else (3.9).
       char name[GMDL_OBJ_MAX_NAME_LENGTH];
-      if (sscanf(rest, "%127s", name) != 1) {
+      GMDL_Result named = gmdl_first_token(rest, name, sizeof(name));
+      if (named == GMDL_ERR_FORMAT) {
         memcpy(name, "default", sizeof("default"));
+      }
+      else if (named != GMDL_OK) {
+        result = named;
+        goto cleanup;
       }
       if (gmdl_limit_reached(
               gcu_array_count(&builder.groups), limits->max_groups)) {
@@ -435,9 +442,12 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       current_group = (long)gcu_array_count(&builder.groups) - 1;
     }
     else if (gmdl_line_is(line_text, "usemtl", &rest)) {
+      // A bare "usemtl" is GMDL_ERR_FORMAT (3.7); an over-long one is
+      // GMDL_ERR_LIMIT (3.9). gmdl_first_token() distinguishes them.
       char mtl_name[GMDL_OBJ_MAX_NAME_LENGTH];
-      if (sscanf(rest, "%127s", mtl_name) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result named = gmdl_first_token(rest, mtl_name, sizeof(mtl_name));
+      if (named != GMDL_OK) {
+        result = named;
         goto cleanup;
       }
 
@@ -473,8 +483,16 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       current_material = mapped;
     }
     else if (gmdl_line_is(line_text, "mtllib", &rest)) {
-      if (sscanf(rest, "%255s", mtllib) != 1) {
+      // A bare "mtllib" clears the path (3.8); one too long for the field is
+      // GMDL_ERR_LIMIT (3.9), since a path cut at 255 bytes names a
+      // different file, or none.
+      GMDL_Result named = gmdl_first_token(rest, mtllib, sizeof(mtllib));
+      if (named == GMDL_ERR_FORMAT) {
         mtllib[0] = '\0';
+      }
+      else if (named != GMDL_OK) {
+        result = named;
+        goto cleanup;
       }
     }
     // Anything else - comments, unsupported directives - is ignored, which is

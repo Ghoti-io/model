@@ -355,6 +355,29 @@ TEST(MtlLine, BackslashJoinsTheNextLine) {
   gmdl_mtl_free(mtl);
 }
 
+//
+// Names are refused when they do not fit, never truncated (3.9).
+//
+
+TEST(MtlNames, OverLongMaterialNameIsRefused) {
+  std::string name(GMDL_MTL_MAX_NAME_LENGTH, 'a');
+  EXPECT_EQ(load_text_expecting_failure("newmtl " + name + "\n"),
+      GMDL_ERR_LIMIT);
+}
+
+TEST(MtlNames, ANameThatExactlyFitsIsAccepted) {
+  std::string name(GMDL_MTL_MAX_NAME_LENGTH - 1, 'a');
+  GMDL_Mtl * mtl = load_text("newmtl " + name + "\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_EQ(std::string(mtl->materials[0].name), name);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlNames, ABareNewmtlIsStillAFormatError) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl\n"), GMDL_ERR_FORMAT);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

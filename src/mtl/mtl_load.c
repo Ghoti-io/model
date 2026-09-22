@@ -93,9 +93,12 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
 
     const char * rest = NULL;
     if (gmdl_line_is(line_text, "newmtl", &rest)) {
+      // A bare "newmtl" is GMDL_ERR_FORMAT; an over-long name is
+      // GMDL_ERR_LIMIT rather than its first 127 bytes (3.9).
       char name[GMDL_MTL_MAX_NAME_LENGTH];
-      if (sscanf(rest, "%127s", name) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result named = gmdl_first_token(rest, name, sizeof(name));
+      if (named != GMDL_OK) {
+        result = named;
         goto cleanup;
       }
       if (gmdl_limit_reached(
