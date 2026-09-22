@@ -1057,13 +1057,18 @@ forget the comparison as well, which is the same oversight, and the round
 trip agrees about a map that is gone. Neither list can check the other,
 because each is half of the instrument.
 
-`tools/check-map-lists.py` runs with `make test` and compares all four
-against the struct. All four agreed when it was written, which is what a gate
+The same shape is on the OBJ side with two lists rather than four: every
+owned array in `GMDL_Obj` is named in the steal that moves it out of the
+parser's builder and in the free. A missed steal hands the caller NULL for
+records that parsed; a missed free leaks the lot.
+
+`tools/check-lists.py` runs with `make test` and compares every list against
+its struct. All four agreed when it was written, which is what a gate
 is for: holding a state that is currently true rather than discovering one
-that is not. It was seen to fail seven ways - one per list, one for a field
-added to the struct and listed nowhere, and two for the gate's own patterns
-no longer matching, since a gate that cannot find what it is checking passes
-in silence.
+that is not. It was seen to fail eleven ways - one per list, one
+per struct for a field added and listed nowhere, and one per struct for the
+gate's own pattern no longer matching, since a gate that cannot find what it
+is checking passes in silence.
 
 **What the fuzzers structurally cannot find.** They drive the caps that
 exist, so a quantity with no field in `GMDL_Limits` is invisible to them -
