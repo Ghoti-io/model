@@ -1047,6 +1047,24 @@ All four exemptions were measured rather than assumed: over the accumulated
 corpus they account for every disagreement, and the invariant as stated
 holds on all of it.
 
+**A map missing from two lists at once is missing symmetrically.** Every
+texture map in `GMDL_Mtl_Material` is named in four places that must agree -
+the free list, the defaults list, the dump list, and the fuzzer's comparison -
+and nothing about the language makes them. Forget the free list and the path
+leaks; forget the defaults and the map holds zeroes where 4.5 documents a
+scale of 1; forget the dump list and the map is dropped on the way out - and
+forget the comparison as well, which is the same oversight, and the round
+trip agrees about a map that is gone. Neither list can check the other,
+because each is half of the instrument.
+
+`tools/check-map-lists.py` runs with `make test` and compares all four
+against the struct. All four agreed when it was written, which is what a gate
+is for: holding a state that is currently true rather than discovering one
+that is not. It was seen to fail seven ways - one per list, one for a field
+added to the struct and listed nowhere, and two for the gate's own patterns
+no longer matching, since a gate that cannot find what it is checking passes
+in silence.
+
 **What the fuzzers structurally cannot find.** They drive the caps that
 exist, so a quantity with no field in `GMDL_Limits` is invisible to them -
 `call` and `csh` allocated without bound for as long as `max_statements` was

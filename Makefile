@@ -258,7 +258,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # coverage target does, because --coverage links the gcov runtime, whose
 # mangle_path check-symbols is right to reject in a shipping library and
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
-TEST_GATES ?= check-symbols
+TEST_GATES ?= check-symbols check-map-lists
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -443,7 +443,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples coverage check-symbols
+.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-map-lists
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -506,6 +506,15 @@ TEST_LD_PATH := $(APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)
 ####################################################################
 # Symbol namespace check
 ####################################################################
+
+check-map-lists: ## Fail if a texture map is missing from one of its lists
+# Every map in GMDL_Mtl_Material is named in a free list, a defaults list, a
+# dump list and the fuzzer's comparison, and nothing but this makes the four
+# agree. The last two are why it is a gate rather than a comment: the fuzzer
+# compares a parse against a reparse, so a map missing from BOTH the dumper
+# and the comparison is missing symmetrically - the round trip agrees and the
+# map is gone. Neither list can check the other.
+	@python3 tools/check-map-lists.py
 
 check-symbols: ## Fail if any exported symbol lacks the version namespace
 check-symbols: $(APP_DIR)/$(TARGET)
