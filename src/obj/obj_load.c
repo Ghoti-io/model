@@ -105,44 +105,85 @@ static void obj_steal_into(
 }
 
 /**
- * Read one face vertex reference.
+ * Read one face vertex reference, refusing anything that is not one.
  *
- * A face token is one of "v", "v/vt", "v//vn" or "v/vt/vn". The fields are
- * read positionally so that an omitted one stays distinct from a present one.
+ * A token is "v", "v/vt", "v//vn" or "v/vt/vn", with an optional fourth
+ * '/'-separated field that is ignored (3.5). Every field that is present must
+ * be an integer and nothing but a '/' may follow one, so "1.5" is the integer
+ * 1 followed by junk rather than a reference to vertex 1 - which is what
+ * section 3.5 calls GMDL_ERR_FORMAT. Accepting it instead turned a typo into
+ * a face pointing at the wrong vertex, silently.
  *
- * Rewriting every '/' as a space and handing the result to sscanf cannot do
- * that: "1//2" and "1 2" become the same string, so the normal was read as the
- * texture coordinate and then discarded, and "1/2" was treated as a missing
- * texture coordinate for the same reason. Only the fully specified "v/vt/vn"
- * form survived.
+ * The fields are read positionally so that an omitted one stays distinct from
+ * a present one. Rewriting every '/' as a space and handing the result to
+ * sscanf cannot do that: "1//2" and "1 2" become the same string, so the
+ * normal was read as the texture coordinate and then discarded, and "1/2" was
+ * treated as a missing texture coordinate for the same reason.
+ *
+ * @param token First byte of the token.
+ * @param token_end One past its last byte - the whitespace or terminator
+ *   that ended it. The token is not NUL-terminated on its own.
+ * @param out_v Receives the vertex index as written, 0 when absent.
+ * @param out_vt Receives the texture coordinate index, 0 when absent.
+ * @param out_vn Receives the normal index, 0 when absent.
+ * @return true when the token is a well-formed reference.
  */
-static void obj_parse_face_token(const char * token, const char * token_end,
+static bool obj_parse_face_token(const char * token, const char * token_end,
     long * out_v, long * out_vt, long * out_vn) {
-  (void)token_end;
   *out_v = 0;
   *out_vt = 0;
   *out_vn = 0;
 
   const char * cursor = token;
   char * end = NULL;
+
+  // The vertex index is the one field that must be present.
   long value = strtol(cursor, &end, 10);
-  if (end != cursor) {
-    *out_v = value;
+  if (end == cursor) {
+    return false;
   }
-  if (end && *end == '/') {
-    cursor = end + 1;
+  *out_v = value;
+  cursor = end;
+  if (cursor == token_end) {
+    return true;
+  }
+  if (*cursor != '/') {
+    return false;
+  }
+
+  // "v//vn" leaves the texture coordinate empty. "1/" leaves it empty too,
+  // and means the same thing as "1"; nothing in section 3.5 makes that an
+  // error, and no writer emits it either way.
+  cursor++;
+  if (cursor < token_end && *cursor != '/') {
     value = strtol(cursor, &end, 10);
-    if (end != cursor) {
-      *out_vt = value; // Left empty in "v//vn"; stays 0.
+    if (end == cursor) {
+      return false;
     }
-    if (end && *end == '/') {
-      cursor = end + 1;
-      value = strtol(cursor, &end, 10);
-      if (end != cursor) {
-        *out_vn = value;
-      }
-    }
+    *out_vt = value;
+    cursor = end;
   }
+  if (cursor == token_end) {
+    return true;
+  }
+  if (*cursor != '/') {
+    return false;
+  }
+
+  cursor++;
+  if (cursor < token_end && *cursor != '/') {
+    value = strtol(cursor, &end, 10);
+    if (end == cursor) {
+      return false;
+    }
+    *out_vn = value;
+    cursor = end;
+  }
+  if (cursor == token_end) {
+    return true;
+  }
+  // A fourth '/'-separated field is ignored (3.5). Anything else is junk.
+  return *cursor == '/';
 }
 
 /**
@@ -317,7 +358,11 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         long v = 0;
         long vt = 0;
         long vn = 0;
-        obj_parse_face_token(token, cursor, &v, &vt, &vn);
+        if (!obj_parse_face_token(token, cursor, &v, &vt, &vn)) {
+          gcu_array_destroy_in_place(&overflow);
+          result = GMDL_ERR_FORMAT;
+          goto cleanup;
+        }
 
         if (gmdl_limit_reached(face.count, limits->max_face_indices)) {
           gcu_array_destroy_in_place(&overflow);

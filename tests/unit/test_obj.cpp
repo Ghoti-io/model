@@ -728,6 +728,62 @@ TEST(ObjLine, TheCapAppliesToTheJoinedLine) {
       GMDL_ERR_LIMIT);
 }
 
+//
+// Face tokens are references, not "whatever begins with a digit".
+//
+
+TEST(ObjFaceToken, NonNumericTokenIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 1 2 3\nf a b c\n"), GMDL_ERR_FORMAT);
+}
+
+TEST(ObjFaceToken, TrailingJunkAfterTheIndexIsRefused) {
+  // These used to parse as vertex 1 with the junk discarded, so a typo
+  // became a face pointing somewhere real.
+  EXPECT_EQ(load_text_expecting_failure("v 1 2 3\nf 1x 1y 1z\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 1 2 3\nf 1.5 1 1\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 1 2 3\nf 1/2/3x 1 1\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(ObjFaceToken, ATokenThatStartsWithASlashIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 1 2 3\nf /1 1 1\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(ObjFaceToken, EveryWellFormedShapeIsStillAccepted) {
+  GMDL_Obj * obj = load_text(
+      "v 1 2 3\nv 1 2 3\nv 1 2 3\nvt 0 0\nvn 0 1 0\n"
+      "f 1 2/1 3//1\n"
+      "f 1/1/1 2/1/1 3/1/1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 2u);
+  // "1" alone: no texture coordinate, no normal.
+  EXPECT_EQ(obj->faces[0].vertex[0], 0);
+  EXPECT_EQ(obj->faces[0].texcoord[0], -1);
+  EXPECT_EQ(obj->faces[0].normal[0], -1);
+  // "2/1": texture coordinate, still no normal.
+  EXPECT_EQ(obj->faces[0].texcoord[1], 0);
+  EXPECT_EQ(obj->faces[0].normal[1], -1);
+  // "3//1": normal, no texture coordinate.
+  EXPECT_EQ(obj->faces[0].texcoord[2], -1);
+  EXPECT_EQ(obj->faces[0].normal[2], 0);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFaceToken, AFourthFieldIsIgnoredRatherThanRefused) {
+  // Section 3.5 says the fourth '/'-separated field is ignored. It is a
+  // decision, not an oversight, so the strict token reader has to keep it.
+  GMDL_Obj * obj = load_text("v 1 2 3\nvt 0 0\nvn 0 1 0\nf 1/1/1/9 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 1u);
+  EXPECT_EQ(obj->faces[0].vertex[0], 0);
+  EXPECT_EQ(obj->faces[0].texcoord[0], 0);
+  EXPECT_EQ(obj->faces[0].normal[0], 0);
+  gmdl_obj_free(obj);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
