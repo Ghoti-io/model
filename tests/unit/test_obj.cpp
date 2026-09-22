@@ -629,6 +629,105 @@ TEST(ObjDump, RoundTripsThroughTheParser) {
   gmdl_obj_free(second);
 }
 
+//
+// Logical lines: the four rules in section 2 that separate a physical line
+// from one the parser may dispatch on.
+//
+
+TEST(ObjLine, ByteOrderMarkDoesNotSwallowTheFirstLine) {
+  // A file saved by a Windows editor begins with EF BB BF. Before the reader
+  // skipped it, the first directive did not match at byte 0 and the whole
+  // line vanished silently.
+  GMDL_Obj * obj = load_text("\xEF\xBB\xBFv 1 2 3\nv 4 5 6\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->vertex_count, 2u);
+  EXPECT_FLOAT_EQ(obj->vertices[0].x, 1.0f);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, ByteOrderMarkOnlyCountsAtTheStart) {
+  // Those three bytes in the middle of a file are ordinary content, and a
+  // line beginning with them is just an unrecognised directive.
+  GMDL_Obj * obj = load_text("v 1 2 3\n\xEF\xBB\xBFv 4 5 6\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->vertex_count, 1u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, TrailingCommentIsNotFaceData) {
+  // "f 1 2 3 # c" used to yield a five-vertex face, the last two of them -1,
+  // because the comment was never cut off.
+  GMDL_Obj * obj = load_text("v 1 2 3\nv 1 2 3\nv 1 2 3\nf 1 2 3 # three\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 1u);
+  EXPECT_EQ(obj->faces[0].count, 3u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, CommentNeedsNoLeadingSpace) {
+  GMDL_Obj * obj = load_text("v 1 2 3\nv 1 2 3\nv 1 2 3\nf 1 2 3# three\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 1u);
+  EXPECT_EQ(obj->faces[0].count, 3u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, LeadingWhitespaceDoesNotHideADirective) {
+  GMDL_Obj * obj = load_text("  v 1 2 3\n\tv 4 5 6\n \t f 1 2 1\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->vertex_count, 2u);
+  EXPECT_EQ(obj->face_count, 1u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, BackslashJoinsTheNextLine) {
+  // The fourth vertex has to come from the continued line. Checking only the
+  // count cannot tell the two behaviours apart: the unjoined parse also
+  // yields four, with -1 in the last slot because the backslash was a token.
+  GMDL_Obj * obj = load_text("v 1 2 3\nv 1 2 3\nv 1 2 3\nf 1 2 3 \\\n 2\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 1u);
+  ASSERT_EQ(obj->faces[0].count, 4u);
+  EXPECT_EQ(obj->faces[0].vertex[3], 1);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, ContinuationAllowsTrailingBlanksAfterTheBackslash) {
+  GMDL_Obj * obj = load_text("v 1 2 3\nv 1 2 3\nv 1 2 3\nf 1 2 3 \\  \n 2\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 1u);
+  ASSERT_EQ(obj->faces[0].count, 4u);
+  EXPECT_EQ(obj->faces[0].vertex[3], 1);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, BackslashInsideACommentDoesNotContinue) {
+  // The comment is removed first, so the backslash is never the last
+  // non-blank character of anything.
+  GMDL_Obj * obj = load_text("v 1 2 3 # keep \\\nv 4 5 6\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->vertex_count, 2u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, ContinuationAtEndOfStreamEndsTheLine) {
+  GMDL_Obj * obj = load_text("v 1 2 3\\\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->vertex_count, 1u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, TheCapAppliesToTheJoinedLine) {
+  // Section 2.6: max_line_length bounds the join, not each physical piece.
+  // Neither half alone exceeds the cap; together they do.
+  GMDL_Limits limits;
+  gmdl_limits_default(&limits);
+  limits.max_line_length = 16;
+  EXPECT_EQ(load_text_expecting_failure("v 1 2 3 4 5 6 \\\n7 8 9 10 11 12\n",
+                &limits),
+      GMDL_ERR_LIMIT);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

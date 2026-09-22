@@ -72,9 +72,12 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
   size_t current = 0;
   bool have_current = false;
 
+  GMDL_Line_Reader reader;
+  gmdl_line_reader_init(&reader, stream, line, line_size);
+
   for (;;) {
-    GMDL_Result line_result =
-        gmdl_stream_read_line(stream, line, line_size + 1, NULL);
+    const char * line_text = NULL;
+    GMDL_Result line_result = gmdl_line_next(&reader, &line_text);
     if (line_result == GMDL_ERR_IO) {
       break; // End of stream.
     }
@@ -83,13 +86,13 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       goto cleanup;
     }
 
-    // Skip blank lines and comments.
-    if (line[0] == '\0' || line[0] == '#') {
+    // A blank line, or one that was wholly a comment, has nothing to do.
+    if (line_text[0] == '\0') {
       continue;
     }
 
     const char * rest = NULL;
-    if (gmdl_line_is(line, "newmtl", &rest)) {
+    if (gmdl_line_is(line_text, "newmtl", &rest)) {
       char name[GMDL_MTL_MAX_NAME_LENGTH];
       if (sscanf(rest, "%127s", name) != 1) {
         result = GMDL_ERR_FORMAT;
@@ -121,40 +124,40 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
     GMDL_Mtl_Material * material =
         (GMDL_Mtl_Material *)gcu_array_at(&materials, current);
 
-    if (gmdl_line_is(line, "Ka", &rest)) {
+    if (gmdl_line_is(line_text, "Ka", &rest)) {
       if (sscanf(rest, "%f %f %f", &material->Ka[0], &material->Ka[1],
               &material->Ka[2]) != 3) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
     }
-    else if (gmdl_line_is(line, "Kd", &rest)) {
+    else if (gmdl_line_is(line_text, "Kd", &rest)) {
       if (sscanf(rest, "%f %f %f", &material->Kd[0], &material->Kd[1],
               &material->Kd[2]) != 3) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
     }
-    else if (gmdl_line_is(line, "Ks", &rest)) {
+    else if (gmdl_line_is(line_text, "Ks", &rest)) {
       if (sscanf(rest, "%f %f %f", &material->Ks[0], &material->Ks[1],
               &material->Ks[2]) != 3) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
     }
-    else if (gmdl_line_is(line, "Ns", &rest)) {
+    else if (gmdl_line_is(line_text, "Ns", &rest)) {
       if (sscanf(rest, "%f", &material->Ns) != 1) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
     }
-    else if (gmdl_line_is(line, "d", &rest)) {
+    else if (gmdl_line_is(line_text, "d", &rest)) {
       if (sscanf(rest, "%f", &material->d) != 1) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
     }
-    else if (gmdl_line_is(line, "illum", &rest)) {
+    else if (gmdl_line_is(line_text, "illum", &rest)) {
       int value = 0;
       if (sscanf(rest, "%d", &value) != 1) {
         result = GMDL_ERR_FORMAT;

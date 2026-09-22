@@ -317,6 +317,44 @@ TEST(ObjAndMtl, MtllibNamesAFileThatParses) {
   gmdl_obj_free(obj);
 }
 
+//
+// Logical lines: the MTL parser reads through the same reader as the OBJ
+// one, so the rules in section 2 hold for both.
+//
+
+TEST(MtlLine, ByteOrderMarkDoesNotSwallowTheFirstLine) {
+  GMDL_Mtl * mtl = load_text("\xEF\xBB\xBFnewmtl a\nKd 1 0 0\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_STREQ(mtl->materials[0].name, "a");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlLine, LeadingWhitespaceDoesNotHideADirective) {
+  GMDL_Mtl * mtl = load_text("  newmtl a\n\tKd 1 0 0\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[0], 1.0f);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlLine, TrailingCommentIsNotAValue) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nKd 1 0 0 # red\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[0], 1.0f);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlLine, BackslashJoinsTheNextLine) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nKd 1 \\\n0 0\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[0], 1.0f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[1], 0.0f);
+  gmdl_mtl_free(mtl);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

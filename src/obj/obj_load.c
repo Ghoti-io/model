@@ -210,9 +210,12 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
   long current_group = -1;          // Index of the active group.
   int32_t current_material = -1;    // Material set by the last "usemtl".
 
+  GMDL_Line_Reader reader;
+  gmdl_line_reader_init(&reader, stream, line, line_size);
+
   for (;;) {
-    GMDL_Result line_result =
-        gmdl_stream_read_line(stream, line, line_size + 1, NULL);
+    const char * line_text = NULL;
+    GMDL_Result line_result = gmdl_line_next(&reader, &line_text);
     if (line_result == GMDL_ERR_IO) {
       break; // End of stream.
     }
@@ -222,7 +225,7 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
     }
 
     const char * rest = NULL;
-    if (gmdl_line_is(line, "v", &rest)) {
+    if (gmdl_line_is(line_text, "v", &rest)) {
       GMDL_Obj_Vertex v;
       if (sscanf(rest, "%f %f %f", &v.x, &v.y, &v.z) != 3) {
         result = GMDL_ERR_FORMAT;
@@ -238,7 +241,7 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         goto cleanup;
       }
     }
-    else if (gmdl_line_is(line, "vt", &rest)) {
+    else if (gmdl_line_is(line_text, "vt", &rest)) {
       GMDL_Obj_TexCoord vt;
       if (sscanf(rest, "%f %f", &vt.u, &vt.v) != 2) {
         result = GMDL_ERR_FORMAT;
@@ -254,7 +257,7 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         goto cleanup;
       }
     }
-    else if (gmdl_line_is(line, "vn", &rest)) {
+    else if (gmdl_line_is(line_text, "vn", &rest)) {
       GMDL_Obj_Normal vn;
       if (sscanf(rest, "%f %f %f", &vn.x, &vn.y, &vn.z) != 3) {
         result = GMDL_ERR_FORMAT;
@@ -270,7 +273,7 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         goto cleanup;
       }
     }
-    else if (gmdl_line_is(line, "f", &rest)) {
+    else if (gmdl_line_is(line_text, "f", &rest)) {
       if (gmdl_limit_reached(
               gcu_array_count(&builder.faces), limits->max_faces)) {
         result = GMDL_ERR_LIMIT;
@@ -362,8 +365,8 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         group->face_count++;
       }
     }
-    else if (gmdl_line_is(line, "g", &rest)
-        || gmdl_line_is(line, "o", &rest)) {
+    else if (gmdl_line_is(line_text, "g", &rest)
+        || gmdl_line_is(line_text, "o", &rest)) {
       // "g" with no name means the default group, per the specification.
       char name[GMDL_OBJ_MAX_NAME_LENGTH];
       if (sscanf(rest, "%127s", name) != 1) {
@@ -386,7 +389,7 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       group->face_count = 0;
       current_group = (long)gcu_array_count(&builder.groups) - 1;
     }
-    else if (gmdl_line_is(line, "usemtl", &rest)) {
+    else if (gmdl_line_is(line_text, "usemtl", &rest)) {
       char mtl_name[GMDL_OBJ_MAX_NAME_LENGTH];
       if (sscanf(rest, "%127s", mtl_name) != 1) {
         result = GMDL_ERR_FORMAT;
@@ -424,7 +427,7 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       }
       current_material = mapped;
     }
-    else if (gmdl_line_is(line, "mtllib", &rest)) {
+    else if (gmdl_line_is(line_text, "mtllib", &rest)) {
       if (sscanf(rest, "%255s", mtllib) != 1) {
         mtllib[0] = '\0';
       }
