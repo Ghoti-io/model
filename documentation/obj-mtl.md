@@ -488,6 +488,15 @@ so it stays deliberate.
 The dump writes `usemtl` when the material changes between consecutive faces,
 `g` for each group before its faces, and relative indices as absolute ones.
 
+**Every write is checked, and every one of those checks is exercised.** Both
+dumpers are mostly error handling by line count, and none of it had ever run:
+a test that dumps to a file that works cannot reach a single one of those
+arms. The tests hand over a stream that accepts a set number of writes and
+refuses the rest, then sweep that number from zero upwards, so the failure
+walks through the whole of a dump one position at a time. A model with groups
+and one without are both swept, because they leave by different branches.
+`GMDL_ERR_IO` is the only answer any position may give.
+
 Three things a `GMDL_OK` model may hold cannot be written back, because the
 format has no spelling for them rather than because the dumper is wrong: a
 material no face uses, a face index below -1, and a name - or a texture map

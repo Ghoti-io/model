@@ -11,6 +11,7 @@
 #include <string>
 
 using gmdltest::data;
+using gmdltest::FailingSink;
 using gmdltest::MemStream;
 using gmdltest::TempFile;
 
@@ -935,6 +936,110 @@ TEST(ObjLine, ABackslashInsideANameIsJustACharacter) {
   EXPECT_STREQ(again->groups[0].name, "a\\b");
   gmdl_obj_free(obj);
   gmdl_obj_free(again);
+}
+
+//
+// Every write the dumper checks can fail, and until this swept them none of
+// those arms had ever executed (section 9).
+//
+
+namespace {
+
+/** A model reaching every kind of line and every reference shape the dumper
+ *  writes: an mtllib, all three coordinate kinds, a face before the first
+ *  group, two groups, a material change, all four reference spellings, and a
+ *  face long enough to spill into the overflow array. */
+const char * kRichModel = "mtllib m.mtl\n"
+                          "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
+                          "v 2 0 0\nv 2 1 0\n"
+                          "vt 0 0\nvt 1 0\n"
+                          "vn 0 0 1\n"
+                          "usemtl red\n"
+                          "f 1 2 3\n"
+                          "g first\n"
+                          "usemtl blue\n"
+                          "f 1/1 2/2 3/1\n"
+                          "f 1//1 2//1 3//1\n"
+                          "f 1/1/1 2/2/1 3/1/1\n"
+                          "g second\n"
+                          "f 1 2 3 4 5 6\n";
+
+/** The same lines with no group, so the dumper writes every face in one
+ *  range rather than walking groups. */
+const char * kGrouplessModel = "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+                               "vt 0 0\n"
+                               "usemtl red\n"
+                               "f 1/1 2/1 3/1\n"
+                               "usemtl blue\n"
+                               "f 1 2 3\n";
+
+} // namespace
+
+TEST(ObjDump, EveryWriteFailureIsReported) {
+  // Both shapes, because they are written by different code: a model with
+  // groups walks the group loop, and one without takes the branch that
+  // writes every face in a single range. Sweeping only the first left that
+  // second branch's failure arm the one line in the dumper no test reached.
+  for (const char * source : {kRichModel, kGrouplessModel}) {
+    GMDL_Obj * obj = load_text(source);
+    ASSERT_NE(obj, nullptr);
+
+    // Walk the failure through the dump one write at a time. Each position
+    // must be reported as I/O rather than swallowed; the sweep ends when the
+    // budget is large enough for the whole dump to succeed.
+    size_t failures = 0;
+    for (size_t allow = 0; allow < 4096; allow++) {
+      FailingSink sink(allow);
+      ASSERT_NE(sink.get(), nullptr);
+      GMDL_Result r = gmdl_obj_dump(obj, sink.get());
+      if (r == GMDL_OK) {
+        EXPECT_FALSE(sink.failed()) << "a dump that succeeded wrote past the "
+                                       "budget it was given";
+        break;
+      }
+      EXPECT_EQ(r, GMDL_ERR_IO)
+          << "write " << allow << " failed and the dumper answered "
+          << gmdl_result_string(r);
+      EXPECT_TRUE(sink.failed())
+          << "write " << allow << " reported I/O without the sink refusing";
+      failures++;
+    }
+    // Guards the sweep itself: a model that dumped in two writes would make
+    // this test pass while checking almost nothing.
+    EXPECT_GT(failures, 10u) << "the sweep stopped far too early";
+    gmdl_obj_free(obj);
+  }
+}
+
+TEST(ObjDump, AFaceNamingAMaterialWithNoMappingWritesWhite) {
+  // The dumper's fallback: a material index that matches no mapping is
+  // written as "white", because OBJ cannot turn a material off and an
+  // unnamed one renders white. No file produces that state - every index the
+  // parser assigns comes from a mapping it made - so it is reached here by
+  // moving the mapping out from under the face, which is the only way the
+  // arm can be executed at all.
+  GMDL_Obj * obj = load_text("v 0 0 0\nusemtl red\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->material_mapping_count, 1u);
+  ASSERT_EQ(obj->face_count, 1u);
+  ASSERT_EQ(obj->faces[0].material_index, obj->material_mappings[0].index);
+  obj->material_mappings[0].index += 100;
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  EXPECT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * reloaded = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &reloaded),
+      GMDL_OK);
+  ASSERT_NE(reloaded, nullptr);
+  ASSERT_EQ(reloaded->material_mapping_count, 1u);
+  EXPECT_STREQ(reloaded->material_mappings[0].name, "white");
+  gmdl_obj_free(reloaded);
+  gmdl_obj_free(obj);
 }
 
 int main(int argc, char ** argv) {

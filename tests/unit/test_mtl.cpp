@@ -11,6 +11,7 @@
 #include <string>
 
 using gmdltest::data;
+using gmdltest::FailingSink;
 using gmdltest::MemStream;
 using gmdltest::TempFile;
 
@@ -875,6 +876,44 @@ TEST(MtlMap, AFailedLoadReleasesThePathsItHadAlreadyRead) {
                                         "newmtl b\nmap_Ka two.png\n"
                                         "map_Kd -o 1 tex.png\n"),
       GMDL_ERR_UNSUPPORTED);
+}
+
+//
+// Every write the dumper checks can fail (section 9).
+//
+
+TEST(MtlDump, EveryWriteFailureIsReported) {
+  // Two materials between them reaching every line the dumper can write:
+  // all six scalar properties and all six maps, plus one material that
+  // states almost nothing, so the sweep crosses a material boundary.
+  GMDL_Mtl * mtl = load_text("newmtl full\n"
+                             "Ka 0.1 0.2 0.3\nKd 0.4 0.5 0.6\n"
+                             "Ks 0.7 0.8 0.9\nNs 96\nd 0.5\nillum 2\n"
+                             "map_Ka a.png\nmap_Kd d.png\nmap_Ks s.png\n"
+                             "map_Ns n.png\nmap_d alpha.png\nmap_bump b.png\n"
+                             "newmtl bare\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 2u);
+
+  size_t failures = 0;
+  for (size_t allow = 0; allow < 4096; allow++) {
+    FailingSink sink(allow);
+    ASSERT_NE(sink.get(), nullptr);
+    GMDL_Result r = gmdl_mtl_dump(mtl, sink.get());
+    if (r == GMDL_OK) {
+      EXPECT_FALSE(sink.failed()) << "a dump that succeeded wrote past the "
+                                     "budget it was given";
+      break;
+    }
+    EXPECT_EQ(r, GMDL_ERR_IO) << "write " << allow << " failed and the dumper "
+                              << "answered " << gmdl_result_string(r);
+    EXPECT_TRUE(sink.failed())
+        << "write " << allow << " reported I/O without the sink refusing";
+    failures++;
+  }
+  // One line per property and per map, two newmtl lines and two blanks.
+  EXPECT_GT(failures, 15u) << "the sweep stopped far too early";
+  gmdl_mtl_free(mtl);
 }
 
 int main(int argc, char ** argv) {

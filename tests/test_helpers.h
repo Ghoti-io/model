@@ -9,6 +9,7 @@
 #ifndef GHOTI_IO_GMDL_TEST_HELPERS_H
 #define GHOTI_IO_GMDL_TEST_HELPERS_H
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -111,6 +112,65 @@ private:
   GCU_File_Temp temp_{};
   std::string path_;
   bool valid_ = false;
+};
+
+/**
+ * A `FILE *` that accepts a set number of writes and fails every one after.
+ *
+ * The dumpers are almost all error handling by line count - every `fprintf`
+ * is checked - and until this existed not one of those arms had ever run.
+ * A test can only see them by handing over a stream that fails, and it has
+ * to fail on demand rather than always, because failing on the first write
+ * exercises exactly one of them.
+ *
+ * Buffering is off, so one `fprintf` is one write: constructed with `n`, the
+ * sink serves n writes and fails the one after. Sweeping n from zero upwards
+ * walks the failure through the whole of a dump.
+ *
+ * `fopencookie` is glibc's; the tests run there. Everything else in this
+ * header is portable, and this is the one thing that cannot be.
+ */
+class FailingSink {
+public:
+  explicit FailingSink(size_t allow) : remaining_(allow) {
+    cookie_io_functions_t fns = {};
+    fns.write = &FailingSink::write_cb;
+    file_ = fopencookie(this, "w", fns);
+    if (file_) {
+      setvbuf(file_, nullptr, _IONBF, 0);
+    }
+  }
+
+  FailingSink(const FailingSink &) = delete;
+  FailingSink & operator=(const FailingSink &) = delete;
+
+  ~FailingSink() {
+    if (file_) {
+      fclose(file_);
+    }
+  }
+
+  FILE * get() const { return file_; }
+
+  /** Whether the write budget ran out, i.e. a failure was actually served. */
+  bool failed() const { return failed_; }
+
+private:
+  static ssize_t write_cb(void * cookie, const char * buffer, size_t size) {
+    (void)buffer;
+    FailingSink * self = static_cast<FailingSink *>(cookie);
+    if (self->remaining_ == 0) {
+      self->failed_ = true;
+      errno = ENOSPC;
+      return -1;
+    }
+    self->remaining_--;
+    return static_cast<ssize_t>(size);
+  }
+
+  size_t remaining_;
+  bool failed_ = false;
+  FILE * file_ = nullptr;
 };
 
 /**
