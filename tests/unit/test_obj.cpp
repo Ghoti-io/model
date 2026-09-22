@@ -2039,6 +2039,68 @@ TEST(ObjLimits, EveryFieldRefusesSomething) {
   }
 }
 
+// `max_faces` is one budget shared by faces, polylines and points, which is
+// what section 5's table has always said. It used to be three separate
+// checks against the same field, so a caller bounding memory from untrusted
+// input got three times what they asked for - and the whole suite passed
+// either way, because every existing case exercised one element kind at a
+// time. A limit that spans several arrays needs a case that spans them.
+TEST(ObjLimits, FacesLinesAndPointsShareOneBudget) {
+  // Each element kind has its own check against the field, so each must be
+  // the one that *decides*, and only the kind written last is. A single
+  // ordering passes against two of the three checks still counting their own
+  // array alone - measured: reverting the `f` check survived a case whose
+  // third element was a `p`.
+  const char * const kOrders[] = {
+      "v 0 0 0\nv 1 0 0\nl 1 2\np 1\nf 1 1 1\n", // faces decide
+      "v 0 0 0\nv 1 0 0\nf 1 1 1\np 1\nl 1 2\n", // polylines decide
+      "v 0 0 0\nv 1 0 0\nf 1 1 1\nl 1 2\np 1\n", // points decide
+  };
+  for (const char * document : kOrders) {
+    GMDL_Limits limits;
+    memset(&limits, 0, sizeof(limits));
+    limits.max_faces = 2;
+
+    MemStream stream(document);
+    GMDL_Obj * obj = nullptr;
+    EXPECT_EQ(gmdl_obj_load(stream.get(), &limits, nullptr, &obj),
+        GMDL_ERR_LIMIT)
+        << "three elements of three kinds fitted under a cap of two:\n"
+        << document;
+    gmdl_obj_free(obj);
+  }
+}
+
+// The budget still admits what it should, or the test above would pass
+// against a cap that refuses everything.
+TEST(ObjLimits, TwoElementsOfDifferentKindsFitUnderACapOfTwo) {
+  GMDL_Limits limits;
+  memset(&limits, 0, sizeof(limits));
+  limits.max_faces = 2;
+
+  MemStream stream("v 0 0 0\nv 1 0 0\nf 1 1 1\nl 1 2\n");
+  GMDL_Obj * obj = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), &limits, nullptr, &obj), GMDL_OK);
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->face_count, 1u);
+  EXPECT_EQ(obj->line_count, 1u);
+  gmdl_obj_free(obj);
+}
+
+// A `p` statement costs one per index it names, not one per line, because
+// that is what the model stores (3.10). `p 1 2 3` is three elements.
+TEST(ObjLimits, APointStatementCostsOnePerIndex) {
+  GMDL_Limits limits;
+  memset(&limits, 0, sizeof(limits));
+  limits.max_faces = 2;
+
+  MemStream stream("v 0 0 0\np 1 1 1\n");
+  GMDL_Obj * obj = nullptr;
+  EXPECT_EQ(gmdl_obj_load(stream.get(), &limits, nullptr, &obj),
+      GMDL_ERR_LIMIT);
+  gmdl_obj_free(obj);
+}
+
 TEST(ObjLimits, StatementsUnderTheCapAreKept) {
   GMDL_Limits limits;
   memset(&limits, 0, sizeof(limits));

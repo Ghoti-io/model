@@ -127,6 +127,23 @@ static void obj_builder_destroy(obj_builder_t * b) {
   gcu_array_destroy_in_place(&b->statements);
 }
 
+/**
+ * How many elements count against `max_faces`.
+ *
+ * Faces, polylines and points share one budget. They used to have one each -
+ * three separate `gmdl_limit_reached()` calls against the same field - so a
+ * caller who set `max_faces` to bound memory from untrusted input got up to
+ * three times what they asked for, silently, on the one axis the field
+ * exists for. Section 5's table has always described it as a single budget.
+ *
+ * A `p` line declares one element per index it names, not one per statement,
+ * so `p 1 2 3` costs three. That is what the model stores.
+ */
+static size_t obj_element_count(const obj_builder_t * b) {
+  return gcu_array_count(&b->faces) + gcu_array_count(&b->lines)
+      + gcu_array_count(&b->points);
+}
+
 /** Move one array into a model's pointer and count. */
 static void obj_steal_into(
     GCU_Array * array, void ** out_data, size_t * out_count) {
@@ -501,7 +518,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     }
     else if (gmdl_line_is(line_text, "f", &rest)) {
       if (gmdl_limit_reached(
-              gcu_array_count(&builder.faces), limits->max_faces)) {
+              obj_element_count(&builder), limits->max_faces)) {
         result = GMDL_ERR_LIMIT;
         goto cleanup;
       }
@@ -643,7 +660,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     }
     else if (gmdl_line_is(line_text, "l", &rest)) {
       if (gmdl_limit_reached(
-              gcu_array_count(&builder.lines), limits->max_faces)) {
+              obj_element_count(&builder), limits->max_faces)) {
         result = GMDL_ERR_LIMIT;
         goto cleanup;
       }
@@ -736,7 +753,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         cursor = end;
 
         if (gmdl_limit_reached(
-                gcu_array_count(&builder.points), limits->max_faces)) {
+                obj_element_count(&builder), limits->max_faces)) {
           result = GMDL_ERR_LIMIT;
           goto cleanup;
         }

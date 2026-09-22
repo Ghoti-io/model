@@ -747,14 +747,24 @@ assuming a surface would record something the file never said.
 | `max_vertices` | 0 (unlimited) | `v` records |
 | `max_texcoords` | 0 | `vt` |
 | `max_normals` | 0 | `vn` |
-| `max_faces` | 0 | `f`, and `l` and `p` records |
+| `max_faces` | 0 | `f`, `l` and `p` elements **together**, one budget |
 | `max_face_indices` | 0 | vertices in one face, or in one `l` |
 | `max_groups` | 0 | `g` and `o` together |
 | `max_materials` | 0 | distinct `usemtl` names in OBJ; `newmtl` in MTL |
 | `max_statements` | 0 | `call` and `csh` records |
 
 `0` means no limit. When a record would take a count from `limit` to
-`limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops. `NULL` limits
+`limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
+
+`max_faces` is one budget across three arrays, not one each. It was three
+separate checks against the same field until it was measured, so a file with
+one `f`, one `l` and one `p` loaded under a cap of two - a caller bounding
+memory from untrusted input was getting three times the bound they set, on
+the one axis the field exists for. The whole suite passed either way, because
+every case exercised one element kind at a time: a limit spanning several
+arrays needs a case that spans them. A `p` statement costs one per index it
+names rather than one per line, because that is what the model stores
+(3.10). `NULL` limits
 mean the defaults. Only the line cap has a default because the input's size
 already bounds the record counts, and a legitimate model can be very large;
 set the others for untrusted input.
