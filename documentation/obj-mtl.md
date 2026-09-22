@@ -220,7 +220,7 @@ A longer one is `GMDL_ERR_LIMIT`.
 
 ### 3.10 The result
 
-`GMDL_Obj` holds nine arrays, each `NULL` when its count is zero:
+`GMDL_Obj` holds ten arrays, each `NULL` when its count is zero:
 
 | Array | Element | Notes |
 | --- | --- | --- |
@@ -233,6 +233,7 @@ A longer one is `GMDL_ERR_LIMIT`.
 | `points` | vertex and `material_index` | one entry per index any `p` named |
 | `groups` | name, `start_face`, `face_count` | in file order; ranges are contiguous and do not overlap |
 | `material_mappings` | name, `index` | `index` equals position |
+| `statements` | kind and text | `call` and `csh`, recorded and never run (3.13) |
 
 plus `mtllib` and the allocator that owns it all. Everything is freed by
 `gmdl_obj_free()`, including every face's `overflow`.
@@ -288,7 +289,40 @@ and emits `usemtl` wherever the material changes, carrying what the faces
 left rather than starting again - which is what keeps a material stated
 between the faces and the polylines from being written twice.
 
-### 3.13 Not read
+### 3.13 `call` and `csh` - recorded, never executed
+
+The two statements that ask the parser to *do* something rather than describe
+geometry. `call filename [args]` pulls in another `.obj`; `csh command` runs a
+shell command, and `csh -command` runs one whose exit status is ignored.
+
+**This library does neither.** Both are recorded in `statements` as a
+`GMDL_Obj_Statement` - a kind and the text after the directive, trailing
+blanks removed, exactly as written. Nothing is split, resolved, opened or
+run. The `-` on a `csh` is kept because the file wrote it; a `call`'s
+filename and arguments stay together for the same reason.
+
+Executing them is not a feature this library will grow, and the reason is not
+that the act is dangerous but that it is **the caller's to take**. A flag
+would be set by the consumer, while what actually runs is chosen by whoever
+wrote the `.obj`; someone who enables it for their own generated assets and
+later parses a downloaded model has handed that file a shell. Nothing about
+the flag's scope would tell them those two paths had met. And there is no
+capability in it: a pipeline that wants geometry from a command can run the
+command and parse the result, which puts the decision where the context is.
+
+So a consumer that *does* want to act on one gets the text and the
+responsibility together. Section 8 says how to treat a texture map path; a
+`call` is that with the stakes raised, because the file it names would then
+be parsed, and a `csh` is a command.
+
+A `call` or `csh` with nothing after it is `GMDL_ERR_FORMAT`.
+
+The dump writes the statements first, in file order. Their position relative
+to the geometry is not recorded - nothing else in this model is ordered
+against the geometry either - and since this library never acts on them,
+where they sit is not something a consumer of it can observe.
+
+### 3.14 Not read
 
 Two groups of directives, both deliberate.
 
@@ -313,17 +347,8 @@ exporters put the map in the `.mtl` instead (4.5). Reading them means a
 second name-to-index mapping beside the material one, for a feature with no
 observed users.
 
-**File inclusion**: `call`, `csh` and `scmp`, from the original specification's
-general statements. `call` pulls in another `.obj`, optionally with
-arguments, and `csh` runs a shell command. Neither is implemented, and `csh`
-is one this library would decline to implement: a geometry file that executes
-a command when parsed is not a thing a consumer of an untrusted model can
-want. `call` is the same question as a texture map path in section 8 with the
-stakes raised, since the included file is parsed rather than merely opened.
-
-A line whose directive is none of the above and none of 3.1-3.12 is skipped,
-which is how a file carrying an exporter's private extension still loads -
-and, for `csh`, is the behaviour rather than an omission.
+A line whose directive is none of the above and none of 3.1-3.13 is skipped,
+which is how a file carrying an exporter's private extension still loads.
 
 ---
 
@@ -596,10 +621,13 @@ Because of section 1, a `GMDL_OK` model may contain:
 - `nan` or `inf` coordinates;
 - a group with no faces;
 - a `material_index` whose name no MTL library defines;
-- a texture map path naming anything at all.
+- a texture map path naming anything at all;
+- a `call` or `csh` statement naming any file or command at all (3.13).
 
-That last one is the only entry here that is a security question rather than
-a correctness one. A map path is a string from the file, unresolved and
+The last two are the entries here that are security questions rather than
+correctness ones, and the statements are the sharper of them: this library
+records what they say and never acts on it, so a consumer that chooses to act
+is choosing to run a command, or to parse a file, that its input named. A map path is a string from the file, unresolved and
 unexamined - `../../etc/passwd` and an absolute path are both things a `.mtl`
 can say, and this library will hand either back without comment, because a
 parser that silently rewrote the path would be lying about what the file
@@ -720,8 +748,8 @@ crashes nor leaks; and a `GMDL_OK` model is dumped, parsed back, and compared
 against the original. For OBJ the comparison covers every count, every
 coordinate value, every group name and span, the `mtllib` path, each face's
 material by name and smoothing group, each polyline's span and material,
-each point's material, and - with the exception below - every face, polyline
-and point index. For MTL
+each point's material, every recorded `call` and `csh`, and - with the
+exception below - every face, polyline and point index. For MTL
 it covers every property value, the `present` mask and every texture map
 path - the `refl` slots included, and including whether one was stated at
 all, since a NULL that comes back as a path is exactly what a dumper keying
@@ -748,7 +776,8 @@ them rather than because the dumper is wrong.
   exists, so nothing is written and the reload reads the previous material.
   A parse never produces it (section 9), so the fuzzers cannot reach it; it
   is listed because a hand-built model can.
-- **A name, or a texture map path, ending in a backslash.** A name is
+- **A name, a texture map path, or a recorded statement's text, ending in a
+  backslash.** A name is
   written last on its line, so one ending in `\` lands exactly where 2.6
   reads a continuation: re-reading `newmtl a\` joins the `Ka` line after it
   and yields the material `aKa`, and `g \` at end of file loses the
@@ -791,11 +820,11 @@ section 12 is where they are written down.
 - **`o` versus `g`.** Currently identical. A flag on `GMDL_Obj_Group` would
   preserve the distinction at no cost.
 - **Free-form geometry.** `curv`, `surf` and the rest of the sub-language in
-  3.13. A second data model rather than more fields, so it is a decision
+  3.14. A second data model rather than more fields, so it is a decision
   about what this library is for.
 - **`shadow_obj` and `trace_obj`.** The two render attributes carrying real
   data - a path each. Recording them means deciding where per-state
-  attributes live, which 3.13 explains is the blocker for all nine.
+  attributes live, which 3.14 explains is the blocker for all nine.
 - **Texture map options.** `-o`, `-s`, `-clamp`, `-bm` and the rest are
   `GMDL_ERR_UNSUPPORTED` today (4.5). Implementing them means a place to put
   them and a decision about `-bm`, which Blender applies and VTK 9.3 does not

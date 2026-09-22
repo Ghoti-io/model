@@ -58,6 +58,7 @@ typedef struct {
   GCU_Array points;
   GCU_Array groups;
   GCU_Array material_mappings;
+  GCU_Array statements;
   const GMDL_Allocator * allocator;
 } obj_builder_t;
 
@@ -82,7 +83,9 @@ static bool obj_builder_init(
       && gcu_array_create_in_place(
           &b->groups, sizeof(GMDL_Obj_Group), 16, allocator)
       && gcu_array_create_in_place(&b->material_mappings,
-          sizeof(GMDL_Obj_Material_Mapping), 4, allocator);
+          sizeof(GMDL_Obj_Material_Mapping), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->statements, sizeof(GMDL_Obj_Statement), 4, allocator);
 }
 
 /**
@@ -95,6 +98,11 @@ static void obj_builder_destroy(obj_builder_t * b) {
     GMDL_Obj_Face * face = (GMDL_Obj_Face *)gcu_array_at(&b->faces, i);
     gcu_allocator_free(b->allocator, face->overflow);
   }
+  for (size_t i = 0; i < gcu_array_count(&b->statements); i++) {
+    GMDL_Obj_Statement * statement =
+        (GMDL_Obj_Statement *)gcu_array_at(&b->statements, i);
+    gcu_allocator_free(b->allocator, statement->text);
+  }
   gcu_array_destroy_in_place(&b->vertices);
   gcu_array_destroy_in_place(&b->texcoords);
   gcu_array_destroy_in_place(&b->normals);
@@ -104,6 +112,7 @@ static void obj_builder_destroy(obj_builder_t * b) {
   gcu_array_destroy_in_place(&b->points);
   gcu_array_destroy_in_place(&b->groups);
   gcu_array_destroy_in_place(&b->material_mappings);
+  gcu_array_destroy_in_place(&b->statements);
 }
 
 /** Move one array into a model's pointer and count. */
@@ -224,6 +233,48 @@ static int32_t obj_index(long value, size_t declared) {
     return (int32_t)((long)declared + value);
   }
   return (int32_t)(value - 1);
+}
+
+/**
+ * Record a `call` or `csh` statement without acting on it.
+ *
+ * The text is kept exactly as written, trailing blanks removed. Nothing is
+ * split, resolved or executed: see ::GMDL_Obj_Statement for why.
+ *
+ * @param rest The text after the directive, already past leading blanks.
+ * @param kind Which directive it was.
+ * @param allocator The allocator for the copy.
+ * @param statements The array to append to.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT when there is no text, or
+ *   ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_record_statement(const char * rest,
+    GMDL_Obj_Statement_Kind kind, const GMDL_Allocator * allocator,
+    GCU_Array * statements) {
+  size_t length = strlen(rest);
+  while (length > 0 && (rest[length - 1] == ' ' || rest[length - 1] == '\t')) {
+    length--;
+  }
+  if (length == 0) {
+    return GMDL_ERR_FORMAT; // "call" or "csh" naming nothing.
+  }
+
+  char * copy = gcu_allocator_malloc(allocator, length + 1);
+  if (!copy) {
+    return GMDL_ERR_OOM;
+  }
+  memcpy(copy, rest, length);
+  copy[length] = '\0';
+
+  GMDL_Obj_Statement * stored =
+      (GMDL_Obj_Statement *)gcu_array_emplace(statements);
+  if (!stored) {
+    gcu_allocator_free(allocator, copy);
+    return GMDL_ERR_OOM;
+  }
+  stored->kind = kind;
+  stored->text = copy;
+  return GMDL_OK;
 }
 
 GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
@@ -587,6 +638,25 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         current_smoothing = (int32_t)value;
       }
     }
+    // "call" and "csh" are recorded and never acted on. A parser that ran a
+    // command out of its own input would make every .obj a program; the
+    // caller knows where the file came from and this does not.
+    else if (gmdl_line_is(line_text, "call", &rest)) {
+      GMDL_Result recorded = obj_record_statement(
+          rest, GMDL_OBJ_STATEMENT_CALL, allocator, &builder.statements);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "csh", &rest)) {
+      GMDL_Result recorded = obj_record_statement(
+          rest, GMDL_OBJ_STATEMENT_CSH, allocator, &builder.statements);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
     else if (gmdl_line_is(line_text, "usemtl", &rest)) {
       // A bare "usemtl" is GMDL_ERR_FORMAT (3.7); an over-long one is
       // GMDL_ERR_LIMIT (3.9). gmdl_first_token() distinguishes them.
@@ -668,6 +738,8 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
     obj_steal_into(&builder.groups, (void **)&obj->groups, &obj->group_count);
     obj_steal_into(&builder.material_mappings,
         (void **)&obj->material_mappings, &obj->material_mapping_count);
+    obj_steal_into(&builder.statements, (void **)&obj->statements,
+        &obj->statement_count);
 
     memcpy(obj->mtllib, mtllib, sizeof(obj->mtllib));
     obj->allocator = allocator;
@@ -722,5 +794,11 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   gcu_allocator_free(allocator, obj->points);
   gcu_allocator_free(allocator, obj->groups);
   gcu_allocator_free(allocator, obj->material_mappings);
+  if (obj->statements) {
+    for (size_t i = 0; i < obj->statement_count; i++) {
+      gcu_allocator_free(allocator, obj->statements[i].text);
+    }
+    gcu_allocator_free(allocator, obj->statements);
+  }
   gcu_allocator_free(allocator, obj);
 }

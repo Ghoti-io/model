@@ -60,6 +60,8 @@
 #define GMDL_Obj_Material_Mapping GHOTIIO_MODEL(GMDL_Obj_Material_Mapping)
 #define GMDL_Obj_Normal GHOTIIO_MODEL(GMDL_Obj_Normal)
 #define GMDL_Obj_Point GHOTIIO_MODEL(GMDL_Obj_Point)
+#define GMDL_Obj_Statement GHOTIIO_MODEL(GMDL_Obj_Statement)
+#define GMDL_Obj_Statement_Kind GHOTIIO_MODEL(GMDL_Obj_Statement_Kind)
 #define GMDL_Obj_TexCoord GHOTIIO_MODEL(GMDL_Obj_TexCoord)
 #define GMDL_Obj_Vertex GHOTIIO_MODEL(GMDL_Obj_Vertex)
 #define GMDL_Result GHOTIIO_MODEL(GMDL_Result)

@@ -291,6 +291,18 @@ GMDL_Result gmdl_obj_dump(const GMDL_Obj * obj, FILE * fd) {
   // the dump does too; a model whose faces all say zero writes no "s" at all.
   obj_dump_state_t state = {-1, 0};
 
+  // The general statements lead, in file order. Their position relative to
+  // the geometry is not recorded - nothing else in this model is ordered
+  // against the geometry either - and they are text this library never acts
+  // on, so writing them first costs nothing a consumer can observe.
+  for (size_t i = 0; i < obj->statement_count; i++) {
+    const char * directive =
+        obj->statements[i].kind == GMDL_OBJ_STATEMENT_CALL ? "call" : "csh";
+    if (fprintf(fd, "%s %s\n", directive, obj->statements[i].text) < 0) {
+      return GMDL_ERR_IO;
+    }
+  }
+
   // Everything naming no material first, while none is in force. See
   // obj_dump_lines_and_points().
   if (obj_dump_lines_and_points(fd, obj, &state, true) < 0) {

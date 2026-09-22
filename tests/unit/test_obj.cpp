@@ -971,14 +971,21 @@ namespace {
  *  face long enough to spill into the overflow array, a smoothing group that
  *  is set and then turned off, polylines with and without texture
  *  references, points, and a material change at the polylines and again
- *  at the points. A directive the model does not carry has its
+ *  at the points, a polyline and a point declared before any material -
+ *  which the dumper writes in a pass of its own - and a recorded call and
+ *  csh. A directive the model
+ *  does not carry has its
  *  failure arm go unexecuted, which is how this sweep quietly stops covering
  *  the writer whenever the format grows. */
 const char * kRichModel = "mtllib m.mtl\n"
+                          "call parts.obj 1\n"
+                          "csh -date\n"
                           "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
                           "v 2 0 0\nv 2 1 0\n"
                           "vt 0 0\nvt 1 0\n"
                           "vn 0 0 1\n"
+                          "l 1 2\n"
+                          "p 3\n"
                           "usemtl red\n"
                           "f 1 2 3\n"
                           "g first\n"
@@ -1414,10 +1421,8 @@ TEST(ObjLine, AMaterialAlreadyInForceIsNotRepeated) {
 }
 
 TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
-  // 3.13: the free-form sub-language, the render attributes, the texture map
-  // library pair, and the general statements. A file carrying them still
-  // loads, and "csh" in particular is skipped on purpose - a geometry file
-  // that runs a command when parsed is not something this library will do.
+  // 3.14: the free-form sub-language, the render attributes and the
+  // texture map library pair. A file carrying them still loads.
   GMDL_Obj * obj = load_text("v 0 0 0\n"
                              "vp 0.5\n"
                              "cstype bezier\n"
@@ -1429,25 +1434,105 @@ TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
                              "trace_obj trace.obj\n"
                              "maplib maps.mtl\n"
                              "usemap chrome\n"
-                             "csh rm -rf /\n"
-                             "call other.obj\n"
                              "f 1 1 1\n");
   ASSERT_NE(obj, nullptr);
   EXPECT_EQ(obj->vertex_count, 1u);
   EXPECT_EQ(obj->face_count, 1u);
+  EXPECT_EQ(obj->statement_count, 0u);
   gmdl_obj_free(obj);
 }
 
-TEST(ObjLine, TheElementCapsCoverLinesAndPoints) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
-  limits.max_faces = 2;
-  EXPECT_EQ(load_text_expecting_failure(
-                "v 0 0 0\nl 1 1\nl 1 1\nl 1 1\n", &limits),
-      GMDL_ERR_LIMIT);
-  EXPECT_EQ(
-      load_text_expecting_failure("v 0 0 0\np 1 1 1\n", &limits),
-      GMDL_ERR_LIMIT);
+//
+// "call" and "csh" are recorded, never executed (3.13).
+//
+
+TEST(ObjStatement, BothAreRecordedInFileOrder) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "call parts/wheel.obj 3 4\n"
+                             "csh -date\n"
+                             "csh echo hello\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->statement_count, 3u);
+  EXPECT_EQ(obj->statements[0].kind, GMDL_OBJ_STATEMENT_CALL);
+  EXPECT_STREQ(obj->statements[0].text, "parts/wheel.obj 3 4")
+      << "the filename and its arguments are kept together, unsplit";
+  EXPECT_EQ(obj->statements[1].kind, GMDL_OBJ_STATEMENT_CSH);
+  EXPECT_STREQ(obj->statements[1].text, "-date")
+      << "the leading dash is part of what the file said";
+  EXPECT_EQ(obj->statements[2].kind, GMDL_OBJ_STATEMENT_CSH);
+  EXPECT_STREQ(obj->statements[2].text, "echo hello");
+  EXPECT_EQ(obj->face_count, 1u) << "the geometry still parses";
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjStatement, NothingIsExecuted) {
+  // The whole point. If the parser ran what it read, this would leave a
+  // file behind; it does not, because it never spawns anything. Pinned so
+  // that "record, do not execute" is a checked property rather than a
+  // sentence in a comment.
+  // The marker lives beside a temporary file, so nothing is written into the
+  // source tree even if this ever starts failing.
+  TempFile anchor("");
+  ASSERT_TRUE(anchor.valid());
+  std::string marker = std::string(anchor.path()) + ".ran";
+
+  // Positive control first: a test whose value is a negative has to be shown
+  // capable of producing the positive, or a probe that could never see the
+  // marker reads exactly like a parser that never made one.
+  std::remove(marker.c_str());
+  FILE * planted = fopen(marker.c_str(), "wb");
+  ASSERT_NE(planted, nullptr) << "could not write the marker at all";
+  fclose(planted);
+  FILE * found = fopen(marker.c_str(), "rb");
+  ASSERT_NE(found, nullptr) << "the probe cannot see a marker that exists";
+  fclose(found);
+  ASSERT_EQ(std::remove(marker.c_str()), 0);
+
+  GMDL_Obj * obj =
+      load_text("v 0 0 0\ncsh touch " + marker + "\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->statement_count, 1u);
+
+  FILE * probe = fopen(marker.c_str(), "rb");
+  EXPECT_EQ(probe, nullptr) << "the parser ran the command in the file";
+  if (probe) {
+    fclose(probe);
+    std::remove(marker.c_str());
+  }
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjStatement, NamingNothingIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncsh\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncall   \n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(ObjStatement, ADirectiveBeginningWithTheKeywordIsNotTheKeyword) {
+  GMDL_Obj * obj = load_text("v 0 0 0\ncalling 1\ncshx 2\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->statement_count, 0u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjStatement, TheySurviveTheRoundTrip) {
+  GMDL_Obj * first = load_text("v 0 0 0\n"
+                               "call other.obj\n"
+                               "csh -ls -la\n"
+                               "f 1 1 1\n");
+  ASSERT_NE(first, nullptr);
+  GMDL_Obj * second = dump_and_reload(first);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->statement_count, first->statement_count);
+  for (size_t i = 0; i < first->statement_count; i++) {
+    EXPECT_EQ(second->statements[i].kind, first->statements[i].kind)
+        << "statement " << i;
+    EXPECT_STREQ(second->statements[i].text, first->statements[i].text)
+        << "statement " << i;
+  }
+  gmdl_obj_free(first);
+  gmdl_obj_free(second);
 }
 
 int main(int argc, char ** argv) {

@@ -179,6 +179,36 @@ typedef struct {
 } GMDL_Obj_Material_Mapping;
 
 /**
+ * @brief Which general statement a ::GMDL_Obj_Statement holds.
+ */
+typedef enum GMDL_Obj_Statement_Kind {
+  GMDL_OBJ_STATEMENT_CALL = 0, ///< `call filename [args]`.
+  GMDL_OBJ_STATEMENT_CSH,      ///< `csh command` or `csh -command`.
+} GMDL_Obj_Statement_Kind;
+
+/**
+ * @brief A `call` or `csh` statement, recorded and never acted on.
+ *
+ * These two ask the parser to do something rather than describe geometry:
+ * `call` pulls in another `.obj`, and `csh` runs a shell command. **This
+ * library does neither.** It records what the file said and hands it over,
+ * because a parser that executed a command found in its input would make
+ * every `.obj` a program, and the decision to run one belongs to the caller
+ * that knows where the file came from.
+ *
+ * `text` is everything after the directive with trailing blanks removed,
+ * exactly as written - for `csh` including the leading `-` that means "ignore
+ * the exit status", and for `call` the filename and any arguments together,
+ * unsplit and unresolved. A caller acting on either must treat it the way
+ * section 8 says to treat a texture map path, and more carefully: a `call`
+ * names a file that would then be parsed, and a `csh` names a command.
+ */
+typedef struct {
+  GMDL_Obj_Statement_Kind kind; ///< Which directive this was.
+  char * text; ///< The text after it, owned by the ::GMDL_Obj.
+} GMDL_Obj_Statement;
+
+/**
  * @brief A parsed OBJ file.
  */
 typedef struct {
@@ -215,6 +245,16 @@ typedef struct {
 
   GMDL_Obj_Material_Mapping * material_mappings; ///< Mappings, or NULL.
   size_t material_mapping_count;                 ///< Number of mappings.
+
+  /**
+   * `call` and `csh` statements, in file order, or NULL.
+   *
+   * Recorded, never executed - see ::GMDL_Obj_Statement. Their position
+   * relative to the geometry is not kept, because nothing else in this model
+   * is ordered against the geometry either.
+   */
+  GMDL_Obj_Statement * statements;
+  size_t statement_count; ///< Number of statements.
 
   char mtllib[GMDL_OBJ_MAX_PATH_LENGTH]; ///< `mtllib` path, or "" if absent.
 

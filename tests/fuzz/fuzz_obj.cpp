@@ -130,6 +130,13 @@ bool names_are_representable(const GMDL_Obj * obj) {
       return false;
     }
   }
+  // A recorded "call" or "csh" is written last on its line like any other
+  // text, so a trailing backslash continues into whatever follows.
+  for (size_t i = 0; i < obj->statement_count; i++) {
+    if (ends_with_backslash(obj->statements[i].text)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -205,6 +212,7 @@ void check_round_trip(const GMDL_Obj * obj) {
   REQUIRE(obj->line_vertex_count == again->line_vertex_count,
       "line_vertex_count");
   REQUIRE(obj->point_count == again->point_count, "point_count");
+  REQUIRE(obj->statement_count == again->statement_count, "statement_count");
   REQUIRE(strcmp(obj->mtllib, again->mtllib) == 0, "mtllib");
 
   for (size_t i = 0; i < obj->vertex_count; i++) {
@@ -253,6 +261,12 @@ void check_round_trip(const GMDL_Obj * obj) {
                 material_name(again, again->points[i].material_index))
             == 0,
         "point material");
+  }
+  for (size_t i = 0; i < obj->statement_count; i++) {
+    REQUIRE(obj->statements[i].kind == again->statements[i].kind,
+        "statement kind");
+    REQUIRE(strcmp(obj->statements[i].text, again->statements[i].text) == 0,
+        "statement text");
   }
 
   if (indices_are_representable(obj)) {
