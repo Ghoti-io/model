@@ -47,6 +47,7 @@
 #define GHOTI_IO_GMDL_SRC_CORE_NUMBER_INTERNAL_H
 
 #include <ghoti.io/model/macros.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -84,6 +85,24 @@ GMDL_INTERNAL_API void gmdl_numeric_scope_begin(GMDL_Numeric_Scope * scope);
  * @param scope The pin. Must not be NULL.
  */
 GMDL_INTERNAL_API void gmdl_numeric_scope_end(GMDL_Numeric_Scope * scope);
+
+/**
+ * @brief Whether the pin is thread-local, as opposed to process-wide.
+ *
+ * True where `uselocale()` is available, which is the build this library
+ * refuses to do without unless GMDL_ALLOW_PROCESS_WIDE_LOCALE says otherwise.
+ *
+ * This exists because the difference is invisible to every test that looks at
+ * results: both arms read and write the same bytes, and they diverge only
+ * while a conversion is in flight in another thread. A behavioural test
+ * therefore cannot tell a correct build from a degraded one, so the check has
+ * to be structural. Ghoti.io Text reached the same conclusion about its own
+ * equivalent, from the other direction - its guard silently selected the
+ * process-wide arm for years and five behavioural tests passed throughout.
+ *
+ * @return true when LC_NUMERIC is pinned for this thread alone.
+ */
+GMDL_INTERNAL_API bool gmdl_numeric_pin_is_thread_local(void);
 
 #ifdef __cplusplus
 }

@@ -113,7 +113,7 @@ of its own - a face line cut in half becomes a second, shorter face.
 
 ## Status
 
-215 tests, clean under Valgrind and under ASan+UBSan, 95.3% line coverage.
+217 tests, clean under Valgrind and under ASan+UBSan, 95.3% line coverage.
 Both fuzzers run clean; the last campaign was three minutes each, 1.7M and
 0.6M executions, and each run dumps every model it parses and reads the dump
 back rather than only checking that parsing does not crash - which is how the

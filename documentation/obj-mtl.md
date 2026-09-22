@@ -127,9 +127,13 @@ A platform with no per-thread locale **fails to build** rather than producing
 a library that misparses. The pin needs `uselocale`/`newlocale`; where those
 are absent - MSVC has no `LC_NUMERIC_MASK`, and this library claims Windows -
 the alternative was stubs that silently did nothing, which is a correctness
-bug shipped quietly on a platform we cannot test. Defining
-`GMDL_ALLOW_LOCALE_DEPENDENT_NUMBERS` restores that behaviour for anyone who
-wants it, and puts the trade in their build system rather than in ours.
+bug shipped quietly on a platform we cannot test.
+
+Defining `GMDL_ALLOW_PROCESS_WIDE_LOCALE` pins `LC_NUMERIC` with `setlocale`
+instead. Numbers are then read and written correctly, and the cost is the
+promise `uselocale` buys: another thread formatting output during a load or
+dump sees the C separator. That is a real trade rather than a defeat, which
+is why it is offered - and why it is not the default.
 
 ---
 

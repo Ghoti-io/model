@@ -55,7 +55,10 @@
 #define GMDL_HAVE_USELOCALE 0
 #endif
 
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "number_internal.h"
 
@@ -93,18 +96,59 @@ GMDL_INTERNAL_API void gmdl_numeric_scope_end(GMDL_Numeric_Scope * scope) {
   scope->previous = NULL;
 }
 
-#elif defined(GMDL_ALLOW_LOCALE_DEPENDENT_NUMBERS)
+GMDL_INTERNAL_API bool gmdl_numeric_pin_is_thread_local(void) {
+  return true;
+}
 
-// The caller has asked for this build explicitly. Conversions run in whatever
-// locale the program is in, so under a comma locale this library misreads and
-// miswrites every float in a file. Correct only where the separator is "."
+#elif defined(GMDL_ALLOW_PROCESS_WIDE_LOCALE)
+
+// The caller has accepted a process-wide pin, so give them the best version
+// of that trade rather than the worst.
+//
+// An earlier version of this arm compiled stubs that did nothing, which
+// handed anyone who opted in silently wrong numbers - precisely the defect
+// the rest of this file exists to remove. setlocale() is C89 and available
+// everywhere, so "correct numbers, and the whole process's LC_NUMERIC moves
+// while we convert" is always available and is never worse than "wrong
+// numbers, and nothing moves". Nobody would knowingly choose the latter, so
+// it should not be what the escape hatch gives them.
+//
+// What it costs is the promise uselocale() buys: another thread formatting
+// output during a load or dump sees the C separator. That is why this is not
+// the default and why the build refuses without the opt-in.
 GMDL_INTERNAL_API void gmdl_numeric_scope_begin(GMDL_Numeric_Scope * scope) {
+  scope->applied = NULL;
+  scope->previous = NULL;
+
+  const char * current = setlocale(LC_NUMERIC, NULL);
+  if (current) {
+    size_t length = strlen(current);
+    char * saved = (char *)malloc(length + 1);
+    if (saved) {
+      memcpy(saved, current, length + 1);
+      scope->previous = saved;
+    }
+  }
+  setlocale(LC_NUMERIC, "C");
+  // Non-NULL marks a pin in force. It points at the scope itself rather than
+  // at a locale, because there is no locale_t here to point at.
+  scope->applied = scope;
+}
+
+GMDL_INTERNAL_API void gmdl_numeric_scope_end(GMDL_Numeric_Scope * scope) {
+  if (!scope->applied) {
+    return;
+  }
+  // A failed save leaves "C" in force rather than guessing. That is the same
+  // choice the C library starts a program with.
+  setlocale(LC_NUMERIC, scope->previous ? (const char *)scope->previous : "C");
+  free(scope->previous);
   scope->applied = NULL;
   scope->previous = NULL;
 }
 
-GMDL_INTERNAL_API void gmdl_numeric_scope_end(GMDL_Numeric_Scope * scope) {
-  (void)scope;
+GMDL_INTERNAL_API bool gmdl_numeric_pin_is_thread_local(void) {
+  return false;
 }
 
 #else
@@ -123,14 +167,15 @@ GMDL_INTERNAL_API void gmdl_numeric_scope_end(GMDL_Numeric_Scope * scope) {
 // porter meets it once, at build time, with the fix named, while the silent
 // version is met by their user as wrong geometry in another program. The
 // escape hatch keeps that from being a wall - define
-// GMDL_ALLOW_LOCALE_DEPENDENT_NUMBERS and the old behaviour is yours, with
-// the trade recorded in your build system where someone can find it.
+// GMDL_ALLOW_PROCESS_WIDE_LOCALE and numbers are pinned with setlocale
+// instead, with the trade recorded in your build system where someone can
+// find it.
 //
 // For MSVC the implementation is _configthreadlocale(_ENABLE_PER_THREAD_LOCALE)
 // followed by setlocale(LC_NUMERIC, "C") and a restore, which IS thread-local
 // there. It is deliberately not written blind: an arm nobody compiles is an
 // arm nobody has checked, and a wrong one here misparses silently rather than
 // failing to build.
-#error "No per-thread locale (uselocale/newlocale) on this platform, so gmdl cannot keep number parsing independent of LC_NUMERIC. Numbers in OBJ and MTL always use '.', and without a pin this library would misread and miswrite every float wherever the C locale's separator is a comma. Implement the platform's per-thread locale in src/core/number.c (for MSVC: _configthreadlocale plus setlocale(LC_NUMERIC, \"C\")), or define GMDL_ALLOW_LOCALE_DEPENDENT_NUMBERS to accept a library that is correct only where the separator is already '.'"
+#error "No per-thread locale (uselocale/newlocale) on this platform, so gmdl cannot keep number parsing independent of LC_NUMERIC. Numbers in OBJ and MTL always use '.', and without a pin this library would misread and miswrite every float wherever the C locale's separator is a comma. Implement the platform's per-thread locale in src/core/number.c (for MSVC: _configthreadlocale plus setlocale(LC_NUMERIC, \"C\")), or define GMDL_ALLOW_PROCESS_WIDE_LOCALE to pin LC_NUMERIC for the whole process instead - correct numbers, but another thread's separator moves while this library converts."
 
 #endif

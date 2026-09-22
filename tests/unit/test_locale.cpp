@@ -24,6 +24,8 @@
 
 #include "test_helpers.h"
 
+#include "../../src/core/number_internal.h"
+
 #include <clocale>
 #include <cstdio>
 #include <cstdlib>
@@ -60,6 +62,7 @@ public:
     for (const char * name : {"de_DE.UTF-8", "fr_FR.UTF-8", "de_DE.utf8"}) {
       handle_ = newlocale(LC_NUMERIC_MASK, name, (locale_t)0);
       if (handle_ && separator_is_comma()) {
+        name_ = name;
         return;
       }
       if (handle_) {
@@ -90,6 +93,7 @@ public:
       return;
     }
     setenv("LOCPATH", dir_.c_str(), 1);
+    name_ = "de_DE.UTF-8";
     handle_ = newlocale(LC_NUMERIC_MASK, "de_DE.UTF-8", (locale_t)0);
     if (handle_ && !separator_is_comma()) {
       freelocale(handle_);
@@ -104,6 +108,7 @@ public:
   }
 
   bool usable() const { return handle_ != (locale_t)0; }
+  const char * name() const { return name_.c_str(); }
   locale_t get() const { return handle_; }
 
 private:
@@ -118,6 +123,7 @@ private:
 
   locale_t handle_ = (locale_t)0;
   std::string dir_;
+  std::string name_;
 };
 
 /** Held for the body of a test, so an assertion cannot leave it applied. */
@@ -149,7 +155,53 @@ TEST(Locale, TheHostileConditionCanBeProduced) {
          "harness failure, not a library failure.";
 }
 
+// The pin must be the thread-local one on this platform. Nothing
+// behavioural can check that - both arms read and write identical bytes, and
+// they differ only while a conversion is in flight in another thread - so the
+// check is structural or it does not exist. Ghoti.io Text shipped the
+// process-wide arm for years with five behavioural tests passing over it.
+TEST(Locale, ThePinIsThreadLocalOnThisPlatform) {
+#ifdef GMDL_ALLOW_PROCESS_WIDE_LOCALE
+  GTEST_SKIP() << "this build asked for the process-wide pin, so the "
+                  "degraded arm is the intended one";
+#else
+  EXPECT_TRUE(gmdl_numeric_pin_is_thread_local())
+      << "built against the process-wide fallback. That is correct only for a "
+         "platform without uselocale(), and this is not one - check whether "
+         "the feature test in src/core/number.c still selects the arm it "
+         "means to.";
+#endif
+}
+
+// A comma locale set the way a program without per-thread locales would set
+// one. This holds under BOTH arms, which is what makes it the test worth
+// having: the thread-local pin overrides the global for this thread, and the
+// process-wide pin moves the global itself.
+TEST(Locale, AGloballySetCommaLocaleIsAlsoPinned) {
+  ASSERT_TRUE(comma().usable());
+  const char * previous = setlocale(LC_NUMERIC, NULL);
+  std::string saved = previous ? previous : "C";
+  if (!setlocale(LC_NUMERIC, comma().name())) {
+    GTEST_SKIP() << "the generated locale is not reachable through setlocale";
+  }
+  char control[16];
+  snprintf(control, sizeof control, "%.1f", 0.5);
+  ASSERT_STREQ(control, "0,5") << "the global locale did not take effect";
+
+  MemStream stream("v 0.5 0.25 0.125\n");
+  GMDL_Obj * obj = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &obj), GMDL_OK);
+  ASSERT_NE(obj, nullptr);
+  EXPECT_FLOAT_EQ(obj->vertices[0].x, 0.5f);
+  gmdl_obj_free(obj);
+  setlocale(LC_NUMERIC, saved.c_str());
+}
+
 TEST(Locale, ReadingIsUnaffectedByTheCallersLocale) {
+  if (!gmdl_numeric_pin_is_thread_local()) {
+    GTEST_SKIP() << "the process-wide arm cannot override a thread that has "
+                    "its own locale, and is not claiming to";
+  }
   ASSERT_TRUE(comma().usable());
   InComma held(comma());
 
@@ -171,6 +223,10 @@ TEST(Locale, ReadingIsUnaffectedByTheCallersLocale) {
 }
 
 TEST(Locale, WritingUsesTheFormatsSeparatorNotTheLocales) {
+  if (!gmdl_numeric_pin_is_thread_local()) {
+    GTEST_SKIP() << "the process-wide arm cannot override a thread that has "
+                    "its own locale, and is not claiming to";
+  }
   ASSERT_TRUE(comma().usable());
   InComma held(comma());
 
