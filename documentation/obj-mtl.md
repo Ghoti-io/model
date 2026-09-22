@@ -576,12 +576,22 @@ assuming a surface would record something the file never said.
 | `max_face_indices` | 0 | vertices in one face, or in one `l` |
 | `max_groups` | 0 | `g` and `o` together |
 | `max_materials` | 0 | distinct `usemtl` names in OBJ; `newmtl` in MTL |
+| `max_statements` | 0 | `call` and `csh` records |
 
 `0` means no limit. When a record would take a count from `limit` to
 `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops. `NULL` limits
 mean the defaults. Only the line cap has a default because the input's size
 already bounds the record counts, and a legitimate model can be very large;
 set the others for untrusted input.
+
+Section 1 promises a cap on every unbounded quantity, and `max_statements`
+was missing from this table until it was measured for: with every other field
+set, a file of nothing but `call` lines was still accepted without bound. The
+fuzzers cannot find that class of gap, because what they drive is the set of
+caps that *exist* - a quantity with no field is invisible to them. What
+catches the next one is a test that walks `GMDL_Limits` field by field and
+requires each to refuse something, which fails if a field is added without
+enforcement.
 
 ---
 

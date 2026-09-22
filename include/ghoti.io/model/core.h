@@ -79,6 +79,7 @@ typedef struct GMDL_Limits {
   size_t max_groups;      ///< Cap on `g`/`o` records.
   size_t max_materials;   ///< Cap on `newmtl` records, and on OBJ material
                           ///< mappings.
+  size_t max_statements;  ///< Cap on `call` and `csh` records.
 } GMDL_Limits;
 
 /**

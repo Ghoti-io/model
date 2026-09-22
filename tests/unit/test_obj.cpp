@@ -8,6 +8,9 @@
 
 #include "test_helpers.h"
 
+#include <cstddef>
+#include <cstring>
+
 #include <string>
 
 using gmdltest::data;
@@ -1533,6 +1536,80 @@ TEST(ObjStatement, TheySurviveTheRoundTrip) {
   }
   gmdl_obj_free(first);
   gmdl_obj_free(second);
+}
+
+// --- Limits -----------------------------------------------------------
+
+namespace {
+
+/** One field of GMDL_Limits, and a document that should exceed it at 2. */
+struct LimitCase {
+  size_t offset;         ///< offsetof() of the field.
+  const char * field;    ///< Its name, for the failure message.
+  const char * document; ///< Contains three of whatever it counts.
+};
+
+const LimitCase kLimitCases[] = {
+    {offsetof(GMDL_Limits, max_line_length), "max_line_length", "v 0 0 0\n"},
+    {offsetof(GMDL_Limits, max_vertices), "max_vertices",
+        "v 0 0 0\nv 1 0 0\nv 2 0 0\n"},
+    {offsetof(GMDL_Limits, max_texcoords), "max_texcoords",
+        "vt 0 0\nvt 1 0\nvt 2 0\n"},
+    {offsetof(GMDL_Limits, max_normals), "max_normals",
+        "vn 0 0 1\nvn 0 1 0\nvn 1 0 0\n"},
+    {offsetof(GMDL_Limits, max_faces), "max_faces",
+        "v 0 0 0\nf 1 1 1\nf 1 1 1\nf 1 1 1\n"},
+    {offsetof(GMDL_Limits, max_face_indices), "max_face_indices",
+        "v 0 0 0\nf 1 1 1\n"},
+    {offsetof(GMDL_Limits, max_groups), "max_groups", "g a\ng b\ng c\n"},
+    {offsetof(GMDL_Limits, max_materials), "max_materials",
+        "usemtl a\nusemtl b\nusemtl c\n"},
+    {offsetof(GMDL_Limits, max_statements), "max_statements",
+        "call a\ncall b\ncall c\n"},
+};
+
+} // namespace
+
+// Every field GMDL_Limits offers must actually refuse something.
+//
+// max_statements was missing for exactly as long as nothing asserted the set
+// was complete: `call` and `csh` allocated without bound while every other
+// record honoured a cap, and a caller who set every field still could not
+// stop it. The fuzzers cannot find that class of gap either - what they drive
+// is the set of caps that EXIST, so a quantity with no field is invisible to
+// them. This is the gate that catches the next one.
+TEST(ObjLimits, EveryFieldRefusesSomething) {
+  // If this fails, a size_t was added to GMDL_Limits without a row here.
+  ASSERT_EQ(sizeof(kLimitCases) / sizeof(kLimitCases[0]),
+      sizeof(GMDL_Limits) / sizeof(size_t))
+      << "GMDL_Limits has a field this table does not cover";
+
+  for (const LimitCase & c : kLimitCases) {
+    GMDL_Limits limits;
+    memset(&limits, 0, sizeof(limits)); // 0 == unlimited, for every field.
+    *reinterpret_cast<size_t *>(reinterpret_cast<char *>(&limits) + c.offset) =
+        2;
+
+    MemStream stream(c.document);
+    GMDL_Obj * obj = nullptr;
+    EXPECT_EQ(gmdl_obj_load(stream.get(), &limits, nullptr, &obj),
+        GMDL_ERR_LIMIT)
+        << c.field << " did not refuse";
+    gmdl_obj_free(obj);
+  }
+}
+
+TEST(ObjLimits, StatementsUnderTheCapAreKept) {
+  GMDL_Limits limits;
+  memset(&limits, 0, sizeof(limits));
+  limits.max_statements = 2;
+
+  MemStream stream("call a\ncsh b\n");
+  GMDL_Obj * obj = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), &limits, nullptr, &obj), GMDL_OK);
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->statement_count, 2u);
+  gmdl_obj_free(obj);
 }
 
 int main(int argc, char ** argv) {

@@ -644,6 +644,11 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     // command out of its own input would make every .obj a program; the
     // caller knows where the file came from and this does not.
     else if (gmdl_line_is(line_text, "call", &rest)) {
+      if (gmdl_limit_reached(
+              gcu_array_count(&builder.statements), limits->max_statements)) {
+        result = GMDL_ERR_LIMIT;
+        goto cleanup;
+      }
       GMDL_Result recorded = obj_record_statement(
           rest, GMDL_OBJ_STATEMENT_CALL, allocator, &builder.statements);
       if (recorded != GMDL_OK) {
@@ -652,6 +657,11 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       }
     }
     else if (gmdl_line_is(line_text, "csh", &rest)) {
+      if (gmdl_limit_reached(
+              gcu_array_count(&builder.statements), limits->max_statements)) {
+        result = GMDL_ERR_LIMIT;
+        goto cleanup;
+      }
       GMDL_Result recorded = obj_record_statement(
           rest, GMDL_OBJ_STATEMENT_CSH, allocator, &builder.statements);
       if (recorded != GMDL_OK) {
