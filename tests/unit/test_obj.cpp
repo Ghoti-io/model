@@ -838,6 +838,77 @@ TEST(ObjNames, ABareMtllibStillClearsThePath) {
   gmdl_obj_free(obj);
 }
 
+//
+// Dump: section 9 promises a structural round-trip, and floats that survive.
+//
+
+namespace {
+
+/** Dump a model and parse the result back. */
+GMDL_Obj * dump_and_reload(const GMDL_Obj * obj) {
+  TempFile out("");
+  EXPECT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  EXPECT_NE(sink, nullptr);
+  EXPECT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+  GMDL_Obj * reloaded = nullptr;
+  GMDL_Result r = gmdl_obj_load_file(out.path(), nullptr, nullptr, &reloaded);
+  EXPECT_EQ(r, GMDL_OK) << gmdl_result_string(r);
+  return reloaded;
+}
+
+} // namespace
+
+TEST(ObjDump, FloatsSurviveTheRoundTrip) {
+  // "%f" wrote six decimals, so this vertex came back as the origin. The
+  // value is compared rather than the text, because the promise is about
+  // the model and not about the spelling.
+  GMDL_Obj * first = load_text("v 0.0000001 -3.4028235e38 12345.678\n");
+  ASSERT_NE(first, nullptr);
+  GMDL_Obj * second = dump_and_reload(first);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->vertex_count, 1u);
+  EXPECT_FLOAT_EQ(second->vertices[0].x, first->vertices[0].x);
+  EXPECT_FLOAT_EQ(second->vertices[0].y, first->vertices[0].y);
+  EXPECT_FLOAT_EQ(second->vertices[0].z, first->vertices[0].z);
+  EXPECT_NE(second->vertices[0].x, 0.0f) << "the old %f wrote this as zero";
+  gmdl_obj_free(first);
+  gmdl_obj_free(second);
+}
+
+TEST(ObjDump, FacesBeforeTheFirstGroupAreWritten) {
+  // Face 0 belongs to no group, so the group loop never reached it and the
+  // dump lost it. The reload succeeded with one face fewer, which is why
+  // nothing noticed.
+  GMDL_Obj * first = load_text("v 1 2 3\nf 1 1 1\ng later\nf 1 1 1\n");
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->face_count, 2u);
+  ASSERT_EQ(first->group_count, 1u);
+  ASSERT_EQ(first->groups[0].start_face, 1u);
+
+  GMDL_Obj * second = dump_and_reload(first);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(second->face_count, 2u);
+  EXPECT_EQ(second->group_count, 1u);
+  EXPECT_EQ(second->groups[0].start_face, 1u);
+  EXPECT_EQ(second->groups[0].face_count, 1u);
+  gmdl_obj_free(first);
+  gmdl_obj_free(second);
+}
+
+TEST(ObjDump, AModelWithNoLeadingOrphansIsUnchanged) {
+  GMDL_Obj * first = load_text("v 1 2 3\ng only\nf 1 1 1\n");
+  ASSERT_NE(first, nullptr);
+  GMDL_Obj * second = dump_and_reload(first);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(second->face_count, 1u);
+  EXPECT_EQ(second->group_count, 1u);
+  EXPECT_EQ(second->groups[0].start_face, 0u);
+  gmdl_obj_free(first);
+  gmdl_obj_free(second);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

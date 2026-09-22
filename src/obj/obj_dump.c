@@ -129,25 +129,33 @@ GMDL_Result gmdl_obj_dump(const GMDL_Obj * obj, FILE * fd) {
   }
 
   for (size_t i = 0; i < obj->vertex_count; i++) {
-    if (fprintf(fd, "v %f %f %f\n", obj->vertices[i].x, obj->vertices[i].y,
+    if (fprintf(fd, "v %.9g %.9g %.9g\n", obj->vertices[i].x, obj->vertices[i].y,
             obj->vertices[i].z) < 0) {
       return GMDL_ERR_IO;
     }
   }
   for (size_t i = 0; i < obj->texcoord_count; i++) {
-    if (fprintf(fd, "vt %f %f\n", obj->texcoords[i].u, obj->texcoords[i].v)
+    if (fprintf(fd, "vt %.9g %.9g\n", obj->texcoords[i].u, obj->texcoords[i].v)
         < 0) {
       return GMDL_ERR_IO;
     }
   }
   for (size_t i = 0; i < obj->normal_count; i++) {
-    if (fprintf(fd, "vn %f %f %f\n", obj->normals[i].x, obj->normals[i].y,
+    if (fprintf(fd, "vn %.9g %.9g %.9g\n", obj->normals[i].x, obj->normals[i].y,
             obj->normals[i].z) < 0) {
       return GMDL_ERR_IO;
     }
   }
 
   if (obj->group_count > 0) {
+    // Faces declared before the first "g" belong to no group (3.6). The
+    // group loop below only walks group ranges, so without this they were
+    // written nowhere and the dump did not round-trip - silently, because
+    // the reload succeeded and simply had fewer faces.
+    if (obj->groups[0].start_face > 0
+        && obj_dump_face_range(fd, obj, 0, obj->groups[0].start_face) < 0) {
+      return GMDL_ERR_IO;
+    }
     for (size_t g = 0; g < obj->group_count; g++) {
       if (fprintf(fd, "g %s\n", obj->groups[g].name) < 0) {
         return GMDL_ERR_IO;

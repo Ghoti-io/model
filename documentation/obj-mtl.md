@@ -353,7 +353,7 @@ it in `dropped_faces`; that is the pattern.
 debugging and for tests. The guarantee is **structural round-trip**: parsing
 the dump yields a model with the same counts, the same indices, the same
 names, the same group ranges and the same material assignments. Floats are
-written with `%f`, so a value survives to six decimal places only (11.1).
+written with `%.9g`, which round-trips every float exactly.
 
 The dump writes `usemtl` when the material changes between consecutive faces,
 `g` for each group before its faces, and relative indices as absolute ones.
@@ -382,18 +382,13 @@ crashes nor leaks, and a `GMDL_OK` model survives a dump and reload.
 
 ## 11. Implementation status
 
-Reproductions use `gmdl_obj_load()` on the given bytes.
+Nothing known. Every defect this section used to list is fixed and pinned by
+a test; the shortfalls that remain are absences rather than misbehaviour, and
+section 12 is where they are written down.
 
-1. **Dump loses float precision.** `%f` writes six decimals; `v 0.0000001 0 0`
-   round-trips to `0`. `%.9g` round-trips every float exactly.
-
-2. **Dump drops faces that precede the first group.** When a model has any
-   groups, `gmdl_obj_dump()` writes only the faces inside group ranges. For
-   `v 1 2 3`, `f 1 1 1`, `g later`, face 0 belongs to no group and is not
-   written, so the dump does not round-trip.
-
-3. **A fourth face field is ignored.** `f 1/2/3/4` yields `1/2/3`. Whether
-   that is right is an open question (12); today it is at least undocumented.
+Whether a fourth face field should keep being ignored is one of those, and
+it now sits in 12 rather than here: section 3.5 states the behaviour, so it
+is a decision to revisit and not an undocumented surprise.
 
 ---
 

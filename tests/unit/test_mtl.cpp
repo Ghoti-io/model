@@ -445,6 +445,28 @@ TEST(MtlColor, PlainDissolveStillParses) {
   gmdl_mtl_free(mtl);
 }
 
+TEST(MtlDump, FloatsSurviveTheRoundTrip) {
+  GMDL_Mtl * first = load_text("newmtl a\nKd 0.0000001 0.5 1\nNs 1234.5678\n");
+  ASSERT_NE(first, nullptr);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_mtl_dump(first, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Mtl * second = nullptr;
+  ASSERT_EQ(gmdl_mtl_load_file(out.path(), nullptr, nullptr, &second),
+      GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->material_count, 1u);
+  EXPECT_FLOAT_EQ(second->materials[0].Kd[0], first->materials[0].Kd[0]);
+  EXPECT_NE(second->materials[0].Kd[0], 0.0f);
+  EXPECT_FLOAT_EQ(second->materials[0].Ns, first->materials[0].Ns);
+  gmdl_mtl_free(first);
+  gmdl_mtl_free(second);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
