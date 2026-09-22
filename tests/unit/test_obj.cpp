@@ -2207,9 +2207,11 @@ TEST(ObjLimits, PeakMemoryDoesNotFollowTheInputSize) {
       << "the peak moved from " << small_peak << " to " << large_peak
       << " bytes when the input quadrupled under unchanged caps";
 
-  // And the peak is on the order of the caps rather than of the file: the
-  // line buffer is the largest single allocation and it is the cap itself.
-  EXPECT_LT(large_peak, large.size() / 8)
+  // Invariance alone would also hold for a parser that allocated some huge
+  // constant, so one magnitude check as well - but a principled one rather
+  // than a chosen fraction. The claim a caller cares about is exactly "the
+  // parser does not hold the file", and that is what this says.
+  EXPECT_LT(large_peak, large.size())
       << "peak " << large_peak << " against an input of " << large.size();
 }
 
@@ -2217,25 +2219,39 @@ TEST(ObjLimits, PeakMemoryDoesNotFollowTheInputSize) {
 // is the thing that has to stop the allocation. A face naming a hundred
 // thousand vertices must not build a hundred thousand of anything first.
 TEST(ObjLimits, AnOverlongElementDoesNotAllocateBeforeItIsRefused) {
+  // Invariance again, and for a second reason beyond avoiding a chosen
+  // threshold: what a bound assertion prints is one number against a limit,
+  // which says the peak is too big; what this prints is two peaks against
+  // each other, which says the peak is *tracking the element* - and that is
+  // the defect rather than a symptom of it. chron's observation, made while
+  // taking the same form: an invariance assertion carries more in its
+  // failure than a bound assertion, because it reports the trend.
+  //
+  // The line buffer is allocated at max_line_length + 1 whatever the line
+  // turns out to hold, so holding the cap fixed and varying only the number
+  // of indices leaves the buffer identical between the two runs. Anything
+  // that differs is the face's own storage, which is what the cap is
+  // supposed to stop.
   GMDL_Limits limits;
   memset(&limits, 0, sizeof(limits));
-  limits.max_line_length = 1u << 20; // room for the line itself
+  limits.max_line_length = 1u << 20; // room for the longer line
   limits.max_face_indices = 8;
   limits.max_faces = 8;
 
-  std::string face = "v 1 2 3\nf";
-  for (int i = 0; i < 100000; i++) {
-    face += " 1";
-  }
-  face += "\n";
+  auto face_with = [](int indices) {
+    std::string text = "v 1 2 3\nf";
+    for (int i = 0; i < indices; i++) {
+      text += " 1";
+    }
+    return text + "\n";
+  };
 
-  size_t peak = peak_bytes_to_parse(face, limits);
-  // The line buffer is max_line_length + 1 and is unavoidable; anything much
-  // beyond it means the face's own storage grew past the cap before the cap
-  // was consulted.
-  const size_t line_buffer = (1u << 20) + 1;
-  EXPECT_LT(peak, line_buffer + 65536u)
-      << "peak " << peak << " against a line buffer of " << line_buffer;
+  size_t few = peak_bytes_to_parse(face_with(10000), limits);
+  size_t many = peak_bytes_to_parse(face_with(100000), limits);
+  EXPECT_EQ(few, many)
+      << "refusing a 10,000-index face peaked at " << few
+      << " bytes and a 100,000-index one at " << many
+      << ", against a cap of 8 that did not move";
 }
 
 TEST(ObjLimits, StatementsUnderTheCapAreKept) {

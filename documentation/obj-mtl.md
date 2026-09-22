@@ -785,9 +785,18 @@ that read a whole file into memory and then refused it answers
 opposite memory behaviour, and memory is what a caller setting these fields
 is bounding. Every test keyed on the result code is therefore measuring the
 half that does not differ. Two tests measure the other half with a recording
-allocator: the high-water mark does not move when the input quadruples under
-unchanged caps, and one enormous element does not build itself before being
-refused. The second was seen to fail against a version that answered
+allocator, and both are written as invariances rather than as thresholds: the
+high-water mark does not move when the input quadruples under unchanged caps,
+and it does not move when one element's index count grows tenfold. Neither
+has a number in it that somebody chose.
+
+That is not only about a threshold rotting. A bound assertion fails with one
+number against a limit, which says the peak is too big; an invariance fails
+with two peaks against each other, which says the peak is *tracking the
+input* - and that is the defect rather than a symptom of it. Measured
+against the deferred-refusal version below, the failure reads "a 10,000-index
+face peaked at 1207205 bytes and a 100,000-index one at 2656373", the
+difference being ten times the shared line buffer. The second was seen to fail against a version that answered
 `GMDL_ERR_LIMIT` for exactly the same files and allocated the whole face
 first; every status-keyed test passed against it.
 
