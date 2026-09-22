@@ -336,6 +336,9 @@ nothing is resolved against the `.mtl`'s own directory, because only the
 caller knows where the file it handed over came from. A repeated directive
 keeps the last one; the format has no way to say two maps of one kind.
 
+Unlike the names in 3.9 there is no fixed cap: the path is allocated, so
+`max_line_length` is what bounds it. It is freed with the ::GMDL_Mtl.
+
 **A line whose argument begins with `-` carries texture options** -
 `-o`, `-s`, `-clamp`, `-bm` and the rest - and is `GMDL_ERR_UNSUPPORTED`.
 The file is well-formed and this library is the one falling short, which is
@@ -436,7 +439,17 @@ Because of section 1, a `GMDL_OK` model may contain:
   `vertex` slot (the file wrote `0`);
 - `nan` or `inf` coordinates;
 - a group with no faces;
-- a `material_index` whose name no MTL library defines.
+- a `material_index` whose name no MTL library defines;
+- a texture map path naming anything at all.
+
+That last one is the only entry here that is a security question rather than
+a correctness one. A map path is a string from the file, unresolved and
+unexamined - `../../etc/passwd` and an absolute path are both things a `.mtl`
+can say, and this library will hand either back without comment, because a
+parser that silently rewrote the path would be lying about what the file
+contains. A consumer that opens one must resolve it against a directory it
+chose and check the result is still inside it. Nothing downstream can do
+that check, because by then the path looks like any other.
 
 A consumer indexes nothing without a range check. cjelly's
 `cjelly_model_mesh_from_obj()` skips a face on any of the first two and counts

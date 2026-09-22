@@ -113,11 +113,18 @@ of its own - a face line cut in half becomes a second, shorter face.
 
 ## Status
 
-80 tests, clean under Valgrind and under ASan+UBSan, 87.6% line coverage. Both
-fuzzers run clean: OBJ 2.1M executions, MTL 4.1M.
+161 tests, clean under Valgrind and under ASan+UBSan, 94.0% line coverage.
+Both fuzzers run clean; the last campaign was three minutes each, 1.6M and
+1.3M executions, and each run dumps every model it parses and reads the dump
+back rather than only checking that parsing does not crash.
 
-The uncovered lines are almost entirely allocation-failure branches, which
-need fault injection to reach.
+Both writers are at 100%, which took handing them a stream that fails on
+demand: every `fprintf` is checked and none of those arms can be reached by
+dumping to a file that works.
+
+What is left uncovered is allocation failure, which needs fault injection,
+and two branches that cannot be reached at all and say so in a comment where
+somebody tidying up will find it.
 
 ## License
 
