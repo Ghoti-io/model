@@ -114,9 +114,10 @@ of its own - a face line cut in half becomes a second, shorter face.
 ## Status
 
 161 tests, clean under Valgrind and under ASan+UBSan, 94.0% line coverage.
-Both fuzzers run clean; the last campaign was three minutes each, 1.6M and
-1.3M executions, and each run dumps every model it parses and reads the dump
-back rather than only checking that parsing does not crash.
+Both fuzzers run clean; the last campaign was five minutes each, 2.4M and
+1.9M executions against a corpus of 6172 and 4741 entries, and each run dumps
+every model it parses and reads the dump back rather than only checking that
+parsing does not crash.
 
 Both writers are at 100%, which took handing them a stream that fails on
 demand: every `fprintf` is checked and none of those arms can be reached by
