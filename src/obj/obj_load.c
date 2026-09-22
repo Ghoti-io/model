@@ -749,12 +749,13 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         current_smoothing = 0;
       }
       else {
-        int value = 0;
-        if (sscanf(rest, "%d", &value) != 1) {
-          result = GMDL_ERR_FORMAT;
+        int32_t value = 0;
+        GMDL_Result parsed = gmdl_parse_int32(rest, &value);
+        if (parsed != GMDL_OK) {
+          result = parsed;
           goto cleanup;
         }
-        current_smoothing = (int32_t)value;
+        current_smoothing = value;
       }
     }
     // "call" and "csh" are recorded and never acted on. A parser that ran a

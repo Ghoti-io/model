@@ -680,7 +680,17 @@ endif
 # -fno-sanitize-recover: without it UBSan PRINTS a diagnostic and carries on,
 # so the process still exits 0 and the suite reports clean over undefined
 # behaviour it just described. A gate that cannot fail is not a gate.
-ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g
+#
+# float-cast-overflow is named separately because GCC does NOT put it in the
+# `undefined` group - and so `-fno-sanitize-recover=undefined` does not reach
+# it either. Measured: a cast of 1e30 to int under `-fsanitize=undefined
+# -fno-sanitize-recover=undefined` printed nothing and exited 0, and with this
+# flag it reports. Converting a float that does not fit is undefined
+# behaviour, this library does it wherever a numeric option lands in an
+# integer field, and neither half of the gate was watching. The same reasoning
+# does not extend to float-divide-by-zero, which IEEE defines.
+UBSAN_CHECKS := undefined,float-cast-overflow
+ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) -fno-sanitize-recover=$(UBSAN_CHECKS) -fno-omit-frame-pointer -g
 ASAN_BUILD_DIR := ./build/$(BUILD)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
 ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
@@ -759,7 +769,7 @@ test-asan: $(ASAN_TEST_EXECUTABLES)
 FUZZ_CC ?= clang
 FUZZ_CXX ?= clang++
 FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
-FUZZ_SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1
+FUZZ_SAN := -fsanitize=address,$(UBSAN_CHECKS) -fno-omit-frame-pointer -g -O1
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
 FUZZ_DIR := $(BUILD_DIR)/fuzz

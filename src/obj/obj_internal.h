@@ -33,6 +33,7 @@
 #include <ghoti.io/model/stream.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -123,6 +124,30 @@ GMDL_Result gmdl_first_token(const char * rest, char * out, size_t out_size);
  *   ::GMDL_ERR_LIMIT when it does not fit.
  */
 GMDL_Result gmdl_rest_of_line(const char * rest, char * out, size_t out_size);
+
+/**
+ * Read a whole number into an `int32_t` field, refusing one that does not fit.
+ *
+ * Replaces `sscanf("%d")`, which is *undefined behaviour* when the value does
+ * not fit the object - C17 7.21.6.2p10 - and which glibc resolves by handing
+ * back something wrapped. Measured: `s 2147483648` arrived as
+ * `-2147483648`, and `s 99999999999999999999` as `-1`.
+ *
+ * Refusing rather than saturating, for the reason section 3.9 gives about a
+ * truncated name: a smoothing group clamped to `INT32_MAX` is a different
+ * group, and two files that named two groups would be read as naming one.
+ * That is not the face-index case (3.5), where saturating is right precisely
+ * because it keeps the value *out* of the range the consumer checks; here
+ * every `int32_t` is a legitimate value and there is nowhere safe to land.
+ *
+ * Trailing text is ignored, as `sscanf` ignored it, so `s 4abc` is still 4.
+ *
+ * @param rest The text after a directive.
+ * @param out Receives the value. Untouched unless ::GMDL_OK is returned.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT when there is no number, or
+ *   ::GMDL_ERR_LIMIT when there is one and it does not fit.
+ */
+GMDL_Result gmdl_parse_int32(const char * rest, int32_t * out);
 
 /**
  * Match a directive at the start of a line.

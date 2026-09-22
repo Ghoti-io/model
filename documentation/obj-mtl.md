@@ -353,7 +353,21 @@ after it until the next one, and it is recorded per face in
 Per face rather than as a run of faces, because "do these two faces share a
 smoothing group" is the question a consumer generating normals actually asks,
 and a run would make it work that out for itself. A value that is neither
-`off` nor a number is `GMDL_ERR_FORMAT`.
+`off` nor a number is `GMDL_ERR_FORMAT`, and one that is a number too large
+for an `int32_t` is `GMDL_ERR_LIMIT` - not the nearest value that fits.
+
+Refusing rather than clamping, and the reason is the one 3.9 gives about a
+truncated name. Every `int32_t` is a legitimate smoothing group, so there is
+nowhere safe for an out-of-range one to land: clamped to `INT32_MAX` it
+becomes a group that other faces may really be in, and the question this
+field exists to answer - do these two faces share a group - gets a confident
+wrong answer. That is the opposite of the call 3.5 makes for a face index,
+where saturating is right *because* it keeps the value outside the range the
+consumer checks. The two are not inconsistent; they are the same rule applied
+to fields with different notions of "out of range".
+
+Text after the number is still ignored, so `s 4abc` is 4. The change here was
+the overflow, not a new strictness about what may follow.
 
 The dump writes `s` only where the value changes, so a model that never
 mentions smoothing writes none. The group in force carries across the runs
@@ -612,6 +626,15 @@ Each field holds its default whether or not the file said so, and the map's
 own `present` mask says which were stated - the same division as 4.2, for the
 same reason.
 
+`-texres` is the only option whose field is an integer, so it is the only one
+that can be handed a number it cannot hold. One outside `int32_t` - `1e30`,
+or a `nan` - is `GMDL_ERR_LIMIT` (5). Converting it instead was undefined
+behaviour, reachable from an ordinary map line, and it went unnoticed because
+GCC leaves `float-cast-overflow` out of `-fsanitize=undefined` *and* out of
+what `-fno-sanitize-recover=undefined` covers, so the sanitiser gate was
+neither checking this class nor able to fail over it. Both halves are named
+explicitly in the Makefile now.
+
 **These were `GMDL_ERR_UNSUPPORTED` until the `map_Bump` alias was added, and
 that combination was untenable.** Blender writes `map_Bump -bm 0.350000
 nrm.png` for every normal or bump map it exports. While `map_Bump` went
@@ -717,6 +740,16 @@ assuming a surface would record something the file never said.
 mean the defaults. Only the line cap has a default because the input's size
 already bounds the record counts, and a legitimate model can be very large;
 set the others for untrusted input.
+
+Not every bound is in this table. A field's own width is one too, and three
+places read an integer with `sscanf("%d")`, which is undefined behaviour when
+the value does not fit - C17 7.21.6.2p10 - and which glibc resolved by
+wrapping: `s 2147483648` arrived as `-2147483648`, and
+`s 99999999999999999999` as `-1`. `s`, `illum` and `sharpness` now answer
+`GMDL_ERR_LIMIT`, and a `-texres` whose number is outside `int32_t` does too
+(4.5). The same reasoning as a record cap: a value the model cannot hold is a
+limit, and a limit is reported rather than resolved by storing something
+else.
 
 Section 1 promises a cap on every unbounded quantity, and `max_statements`
 was missing from this table until it was measured for: with every other field

@@ -340,8 +340,18 @@ static GMDL_Result mtl_parse_map(const char * rest,
     else if (mtl_token_is(token, length, "-texres")) {
       float value = 0.0f;
       ok = mtl_take_floats(&argument, &value, 1, 1) == 1;
-      parsed.texres = (int32_t)value;
-      parsed.present |= GMDL_MTL_MAP_HAS_TEXRES;
+      if (ok) {
+        // Casting a float that does not fit is undefined behaviour, and the
+        // bounds are written as powers of two because those are the ones a
+        // float represents exactly: everything in [-2^31, 2^31) narrows
+        // cleanly and nothing else does. A NaN fails both comparisons, which
+        // is why the test is negated rather than written the obvious way.
+        if (!(value >= -2147483648.0f && value < 2147483648.0f)) {
+          return GMDL_ERR_LIMIT;
+        }
+        parsed.texres = (int32_t)value;
+        parsed.present |= GMDL_MTL_MAP_HAS_TEXRES;
+      }
     }
     else if (mtl_token_is(token, length, "-imfchan")) {
       size_t argument_length = 0;
@@ -637,12 +647,13 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_D;
     }
     else if (gmdl_line_is(line_text, "illum", &rest)) {
-      int value = 0;
-      if (sscanf(rest, "%d", &value) != 1) {
-        result = GMDL_ERR_FORMAT;
+      int32_t value = 0;
+      GMDL_Result parsed = gmdl_parse_int32(rest, &value);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
-      material->illum = (int32_t)value;
+      material->illum = value;
       material->present |= GMDL_MTL_HAS_ILLUM;
     }
     else if (gmdl_line_is(line_text, "Ke", &rest)) {
@@ -725,12 +736,13 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_ANISOR;
     }
     else if (gmdl_line_is(line_text, "sharpness", &rest)) {
-      int value = 0;
-      if (sscanf(rest, "%d", &value) != 1) {
-        result = GMDL_ERR_FORMAT;
+      int32_t value = 0;
+      GMDL_Result parsed = gmdl_parse_int32(rest, &value);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
-      material->sharpness = (int32_t)value;
+      material->sharpness = value;
       material->present |= GMDL_MTL_HAS_SHARPNESS;
     }
     else if (gmdl_line_is(line_text, "map_aat", &rest)) {

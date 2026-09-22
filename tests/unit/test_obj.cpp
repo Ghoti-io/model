@@ -8,6 +8,13 @@
 
 #include "test_helpers.h"
 
+// Reached directly, the way tests/unit/test_locale.cpp reaches the numeric
+// scope. The line-reading helpers have a contract wider than any caller uses
+// - they accept text that has not had its leading blanks removed, because a
+// contract that says "provided somebody else trimmed it first" is a
+// precondition nothing checks - and only a direct call exercises that.
+#include "../../src/obj/obj_internal.h"
+
 #include <cstddef>
 #include <cstring>
 #include <fstream>
@@ -43,6 +50,50 @@ GMDL_Result load_text_expecting_failure(
 }
 
 } // namespace
+
+//
+// The internal line helpers, called directly
+//
+
+TEST(LineHelpers, LeadingBlanksAreSkipped) {
+  char out[32];
+  EXPECT_EQ(gmdl_first_token("   \t name rest", out, sizeof(out)), GMDL_OK);
+  EXPECT_STREQ(out, "name");
+
+  EXPECT_EQ(gmdl_rest_of_line("  \t two words  \t", out, sizeof(out)), GMDL_OK);
+  EXPECT_STREQ(out, "two words");
+
+  int32_t value = -7;
+  EXPECT_EQ(gmdl_parse_int32("  \t 42abc", &value), GMDL_OK);
+  EXPECT_EQ(value, 42);
+}
+
+// The last line in obj_common.c no caller reaches. Reaching it here is
+// cheaper than leaving an uncovered line for the next person to triage, and
+// it pins the guard as part of the contract rather than as insurance nobody
+// has ever collected on.
+TEST(LineHelpers, TheReaderRejectsNullArguments) {
+  const char * line = nullptr;
+  EXPECT_EQ(gmdl_line_next(nullptr, &line), GMDL_ERR_INVALID);
+  GMDL_Line_Reader reader;
+  EXPECT_EQ(gmdl_line_next(&reader, nullptr), GMDL_ERR_INVALID);
+}
+
+TEST(LineHelpers, NothingThereIsAFormatErrorAndNoFitIsALimit) {
+  char out[8];
+  EXPECT_EQ(gmdl_first_token("   ", out, sizeof(out)), GMDL_ERR_FORMAT);
+  EXPECT_EQ(gmdl_rest_of_line("  \t ", out, sizeof(out)), GMDL_ERR_FORMAT);
+  EXPECT_EQ(gmdl_first_token("toolongforthis", out, sizeof(out)),
+      GMDL_ERR_LIMIT);
+  EXPECT_EQ(gmdl_rest_of_line("toolongforthis", out, sizeof(out)),
+      GMDL_ERR_LIMIT);
+
+  int32_t value = -7;
+  EXPECT_EQ(gmdl_parse_int32("   ", &value), GMDL_ERR_FORMAT);
+  EXPECT_EQ(gmdl_parse_int32("abc", &value), GMDL_ERR_FORMAT);
+  EXPECT_EQ(gmdl_parse_int32("99999999999999999999", &value), GMDL_ERR_LIMIT);
+  EXPECT_EQ(value, -7) << "a refused value must not have been written";
+}
 
 //
 // Argument handling
@@ -618,6 +669,41 @@ TEST(ObjParse, AGroupStillStopsAtTheFirstBlank) {
   ASSERT_NE(obj, nullptr);
   ASSERT_EQ(obj->group_count, 1u);
   EXPECT_STREQ(obj->groups[0].name, "two");
+  gmdl_obj_free(obj);
+}
+
+// `sscanf("%d")` is undefined behaviour when the value does not fit, and
+// glibc resolved it by wrapping: `s 2147483648` arrived as -2147483648 and
+// `s 99999999999999999999` as -1. A wrapped group number is worse than a
+// refused one, because it is a *valid* group number that two different files
+// now share - the same shape as the face index that wrapped into range.
+TEST(ObjParse, ASmoothingGroupTooLargeForItsFieldIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("s 2147483648\n"), GMDL_ERR_LIMIT);
+  EXPECT_EQ(
+      load_text_expecting_failure("s 99999999999999999999\n"), GMDL_ERR_LIMIT);
+  EXPECT_EQ(load_text_expecting_failure("s -2147483649\n"), GMDL_ERR_LIMIT);
+  // No number at all stays a format error: a different question, a different
+  // answer, and the helper has to keep them apart.
+  EXPECT_EQ(load_text_expecting_failure("s\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("s abc\n"), GMDL_ERR_FORMAT);
+}
+
+// Both extremes fit and are kept, and trailing text is still ignored the way
+// sscanf ignored it - the point of the change was the overflow, not a new
+// strictness about what may follow a number.
+TEST(ObjParse, ASmoothingGroupAtTheLimitIsKept) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+      "s 2147483647\nf 1 2 3\n"
+      "s -2147483648\nf 1 2 3\n"
+      "s 4abc\nf 1 2 3\n"
+      "s off\nf 1 2 3\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 4u);
+  EXPECT_EQ(obj->faces[0].smoothing_group, 2147483647);
+  EXPECT_EQ(obj->faces[1].smoothing_group, -2147483648);
+  EXPECT_EQ(obj->faces[2].smoothing_group, 4);
+  EXPECT_EQ(obj->faces[3].smoothing_group, 0);
   gmdl_obj_free(obj);
 }
 

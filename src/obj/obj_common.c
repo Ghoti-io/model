@@ -24,6 +24,9 @@
  * Helpers shared by the OBJ and MTL parsers.
  */
 
+#include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <ghoti.io/model/macros.h>
@@ -149,6 +152,25 @@ GMDL_Result gmdl_first_token(const char * rest, char * out, size_t out_size) {
   }
   memcpy(out, rest, length);
   out[length] = '\0';
+  return GMDL_OK;
+}
+
+GMDL_Result gmdl_parse_int32(const char * rest, int32_t * out) {
+  while (*rest == ' ' || *rest == '\t') {
+    rest++;
+  }
+  errno = 0;
+  char * end = NULL;
+  long value = strtol(rest, &end, 10);
+  if (end == rest) {
+    return GMDL_ERR_FORMAT;
+  }
+  // ERANGE covers a value too big for a long; the comparisons cover one that
+  // fits a 64-bit long and not an int32_t field. Both are the same answer.
+  if (errno == ERANGE || value > INT32_MAX || value < INT32_MIN) {
+    return GMDL_ERR_LIMIT;
+  }
+  *out = (int32_t)value;
   return GMDL_OK;
 }
 

@@ -496,6 +496,57 @@ TEST(MtlLine, ATrailingDoubleBackslashLeavesTheNameEndingInOne) {
 // Both sides used to stop at the first blank, so they matched each other as
 // "two" and nothing in this library could see the truncation - the two wrongs
 // cancelled, and only a reader outside it would have noticed.
+// `(int32_t)1e30f` is undefined behaviour, and it was reached by an ordinary
+// map line. It survived because GCC leaves float-cast-overflow out of the
+// `undefined` group, so the sanitizer gate never watched this class at all -
+// and left it out of `-fno-sanitize-recover=undefined` too, which would have
+// let it print and exit 0 even once it did. Both are fixed in the Makefile;
+// this is the case that proved the gate fires.
+TEST(MtlMapOptions, ATexresTooLargeForTheFieldIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nmap_Kd -texres 1e30 t.png\n"),
+      GMDL_ERR_LIMIT);
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nmap_Kd -texres -1e30 t.png\n"),
+      GMDL_ERR_LIMIT);
+  // A NaN fails the range test rather than sliding through it, which is the
+  // reason the comparison is written negated.
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nmap_Kd -texres nan t.png\n"),
+      GMDL_ERR_LIMIT);
+  // The boundary itself: 2^31 does not fit and 2^31 - 128 does. The lower
+  // number is the largest below 2^31 that a float represents exactly, which
+  // is what makes it the right side of the boundary to test.
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nmap_Kd -texres 2147483648 t.png\n"),
+      GMDL_ERR_LIMIT);
+  GMDL_Mtl * mtl = load_text("newmtl m\nmap_Kd -texres 2147483520 t.png\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_EQ(mtl->materials[0].map_Kd.texres, 2147483520);
+  gmdl_mtl_free(mtl);
+}
+
+// `illum` and `sharpness` read through the same helper, which replaced
+// sscanf("%d") - undefined behaviour on a value that does not fit, and one
+// glibc resolves by wrapping.
+TEST(MtlParse, AnIntegerTooLargeForItsFieldIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nillum 99999999999999999999\n"),
+      GMDL_ERR_LIMIT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nillum 2147483648\n"),
+      GMDL_ERR_LIMIT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nsharpness -2147483649\n"),
+      GMDL_ERR_LIMIT);
+  // Still a format error when there is no number at all, which is a
+  // different answer and has to stay one.
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nillum\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nillum abc\n"), GMDL_ERR_FORMAT);
+  // The extremes themselves fit and are kept.
+  GMDL_Mtl * mtl = load_text("newmtl m\nillum 2147483647\nsharpness -2147483648\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_EQ(mtl->materials[0].illum, 2147483647);
+  EXPECT_EQ(mtl->materials[0].sharpness, -2147483648);
+  gmdl_mtl_free(mtl);
+}
+
 TEST(MtlParse, AMaterialNameKeepsItsSpaces) {
   GMDL_Mtl * mtl = load_text("newmtl two words\nKd 0.5 0.25 0.125\n");
   ASSERT_NE(mtl, nullptr);
