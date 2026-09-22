@@ -565,6 +565,62 @@ TEST(ObjParse, MtllibRecorded) {
   gmdl_obj_free(obj);
 }
 
+// Blender 4.3.2 exports `mtllib my model.mtl` for a document saved under that
+// name - no unusual settings, no hand editing - and the first-token reading
+// of that line named the file "my". Measured against the exporter, not
+// reasoned about: this is what the reference actually writes by default.
+TEST(ObjParse, AnMtllibPathKeepsItsSpaces) {
+  GMDL_Obj * obj = load_text("mtllib my model.mtl\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_STREQ(obj->mtllib, "my model.mtl");
+  gmdl_obj_free(obj);
+}
+
+// Whitespace the writer left after the path is not part of it. A comment is
+// cut before the directive is matched, so the same applies to `mtllib a.mtl
+// # note`, which is why that case is here too.
+TEST(ObjParse, TrailingBlanksAreNotPartOfThePath) {
+  GMDL_Obj * obj = load_text("mtllib a.mtl  \t\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_STREQ(obj->mtllib, "a.mtl");
+  gmdl_obj_free(obj);
+
+  GMDL_Obj * commented = load_text("mtllib a.mtl # the materials\nv 0 0 0\n");
+  ASSERT_NE(commented, nullptr);
+  EXPECT_STREQ(commented->mtllib, "a.mtl");
+  gmdl_obj_free(commented);
+}
+
+// A material name may contain spaces, and both halves of the pair have to
+// agree about that or an OBJ stops finding its own materials. Blender reads
+// `usemtl two words` as one name; it writes underscores instead, so a file
+// like this comes from some other exporter and used to arrive here as "two".
+TEST(ObjParse, AMaterialNameKeepsItsSpaces) {
+  GMDL_Obj * obj = load_text(
+      "usemtl two words\n"
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+      "f 1 2 3\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->material_mapping_count, 1u);
+  EXPECT_STREQ(obj->material_mappings[0].name, "two words");
+  gmdl_obj_free(obj);
+}
+
+// `g` is the exception, and deliberately: `g a b` is documented as putting an
+// element in two groups at once (12), so reading the line as one name would
+// decide that open question by accident and in the direction that cannot be
+// undone. Pinned so the inconsistency is a decision rather than an oversight.
+TEST(ObjParse, AGroupStillStopsAtTheFirstBlank) {
+  GMDL_Obj * obj = load_text(
+      "g two words\n"
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+      "f 1 2 3\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->group_count, 1u);
+  EXPECT_STREQ(obj->groups[0].name, "two");
+  gmdl_obj_free(obj);
+}
+
 TEST(ObjParse, GroupsRecorded) {
   GMDL_Obj * obj = load_text(
       "g first\n"

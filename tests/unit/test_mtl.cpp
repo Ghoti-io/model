@@ -492,14 +492,29 @@ TEST(MtlLine, ATrailingDoubleBackslashLeavesTheNameEndingInOne) {
   gmdl_mtl_free(mtl);
 }
 
+// The other half of the pair: an OBJ's `usemtl two words` has to find this.
+// Both sides used to stop at the first blank, so they matched each other as
+// "two" and nothing in this library could see the truncation - the two wrongs
+// cancelled, and only a reader outside it would have noticed.
+TEST(MtlParse, AMaterialNameKeepsItsSpaces) {
+  GMDL_Mtl * mtl = load_text("newmtl two words\nKd 0.5 0.25 0.125\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_STREQ(mtl->materials[0].name, "two words");
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[0], 0.5f);
+  gmdl_mtl_free(mtl);
+}
+
 TEST(MtlLine, WithoutTheBlankLineTheNextLineJoinsTheName) {
   // Same input without the blank line: "Ka 1 1 1" is joined onto the name's
-  // line, so the name is "a\Ka" and nothing sets Ka. Pinned because it is
-  // surprising, and because it is what the continuation rule says.
+  // line, so the whole of it is the name and nothing sets Ka. Pinned because
+  // it is surprising, and because it is what the continuation rule says. The
+  // name swallows the numbers too now that a name runs to the end of its
+  // line; before, it stopped at the first blank and was "a\Ka".
   GMDL_Mtl * mtl = load_text("newmtl a\\\\\nKa 1 1 1\n");
   ASSERT_NE(mtl, nullptr);
   ASSERT_EQ(mtl->material_count, 1u);
-  EXPECT_STREQ(mtl->materials[0].name, "a\\Ka");
+  EXPECT_STREQ(mtl->materials[0].name, "a\\Ka 1 1 1");
   EXPECT_FLOAT_EQ(mtl->materials[0].Ka[0], 0.0f);
   gmdl_mtl_free(mtl);
 }

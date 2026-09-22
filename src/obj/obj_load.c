@@ -788,9 +788,12 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     }
     else if (gmdl_line_is(line_text, "usemtl", &rest)) {
       // A bare "usemtl" is GMDL_ERR_FORMAT (3.7); an over-long one is
-      // GMDL_ERR_LIMIT (3.9). gmdl_first_token() distinguishes them.
+      // GMDL_ERR_LIMIT (3.9). gmdl_rest_of_line() distinguishes them, and
+      // takes the whole line because a material name may contain spaces and
+      // `newmtl` reads its own the same way - a name truncated on one side
+      // and not the other would stop matching.
       char mtl_name[GMDL_OBJ_MAX_NAME_LENGTH];
-      GMDL_Result named = gmdl_first_token(rest, mtl_name, sizeof(mtl_name));
+      GMDL_Result named = gmdl_rest_of_line(rest, mtl_name, sizeof(mtl_name));
       if (named != GMDL_OK) {
         result = named;
         goto cleanup;
@@ -828,10 +831,13 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       current_material = mapped;
     }
     else if (gmdl_line_is(line_text, "mtllib", &rest)) {
+      // The whole line is the path, spaces included - Blender exports
+      // `mtllib my model.mtl` for a document saved under that name, and
+      // taking the first token off it names a file that does not exist.
       // A bare "mtllib" clears the path (3.8); one too long for the field is
       // GMDL_ERR_LIMIT (3.9), since a path cut at 255 bytes names a
       // different file, or none.
-      GMDL_Result named = gmdl_first_token(rest, mtllib, sizeof(mtllib));
+      GMDL_Result named = gmdl_rest_of_line(rest, mtllib, sizeof(mtllib));
       if (named == GMDL_ERR_FORMAT) {
         mtllib[0] = '\0';
       }

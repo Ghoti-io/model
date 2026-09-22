@@ -101,6 +101,30 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line);
 GMDL_Result gmdl_first_token(const char * rest, char * out, size_t out_size);
 
 /**
+ * Read everything after a directive as one value, blanks in the middle kept.
+ *
+ * For the directives whose argument is a single path or name that may contain
+ * spaces. Blender 4.3.2 reads them this way, and writes them this way too: a
+ * document exported to "my model.obj" carries `mtllib my model.mtl`, which
+ * gmdl_first_token() reduces to the path "my" - a file that does not exist.
+ *
+ * Not every directive can be read like this. `g a b` is documented as putting
+ * an element in two groups at once (3.12), so the first-token reading stays
+ * there until that is resolved; `usemtl`, `newmtl` and `mtllib` have no such
+ * form and take the whole line.
+ *
+ * Leading and trailing blanks are dropped. Comments are cut from the line
+ * before any directive is matched, so nothing else needs stripping.
+ *
+ * @param rest The text after a directive.
+ * @param out Receives the value, NUL-terminated.
+ * @param out_size Bytes available at @p out, including the terminator.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT when there is nothing there, or
+ *   ::GMDL_ERR_LIMIT when it does not fit.
+ */
+GMDL_Result gmdl_rest_of_line(const char * rest, char * out, size_t out_size);
+
+/**
  * Match a directive at the start of a line.
  *
  * A directive ends at whitespace or at the end of the line, so that "usemtlx"

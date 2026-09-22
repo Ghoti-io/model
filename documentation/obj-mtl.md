@@ -280,7 +280,15 @@ with `face_count` 0.
 ### 3.7 `usemtl name`
 
 Sets the material for the faces that follow. The name is required; a bare
-`usemtl` is `GMDL_ERR_FORMAT`. Only the first token is the name.
+`usemtl` is `GMDL_ERR_FORMAT`. **The whole line is the name**, spaces
+included, with blanks at either end dropped - the same reading `newmtl` uses
+(4.1), because a name truncated on one side and not the other would stop
+matching. Blender reads `usemtl two words` as one name; it substitutes
+underscores when it writes, so such a file comes from some other exporter.
+
+This is not the reading `g` uses, and the difference is deliberate: `g a b`
+is documented as putting an element in two groups at once, so taking a group
+line whole would settle that open question by accident (3.12, 12).
 
 Materials are not resolved by the OBJ parser. Each distinct name is assigned
 an index in order of first use, recorded in `material_mappings`, and faces
@@ -289,9 +297,21 @@ names against an MTL library with `gmdl_mtl_find()`.
 
 ### 3.8 `mtllib path`
 
-Names the material library. The documentation allows several paths on one
-line; this library keeps the **first token of the last `mtllib` line** (12),
-so a path containing a space is cut at the space. A bare `mtllib` clears it.
+Names the material library. This library keeps the **whole of the last
+`mtllib` line** as one path, blanks at either end dropped. A bare `mtllib`
+clears it.
+
+The documentation allows several paths on one line, and Blender does not
+implement that: given `mtllib a.mtl b.mtl` it looks for a single file called
+`a.mtl b.mtl`, finds nothing, and loads no materials at all. So the
+whole-line reading is the reference's as well as this one's, and it is what
+the reference *writes*: exporting a document saved as `my model.obj` produces
+`mtllib my model.mtl`, with no unusual settings involved. Taking the first
+token of that line named the file `my`.
+
+Several `mtllib` **lines** are a different matter - Blender loads all of
+them, and this library still keeps only the last. That one is unresolved and
+is in section 12, because it needs a list where the model has a fixed field.
 
 ### 3.9 Names and paths
 
@@ -439,8 +459,15 @@ which is how a file carrying an exporter's private extension still loads.
 ### 4.1 `newmtl name`
 
 Begins a material. The name is required (`GMDL_ERR_FORMAT` without one) and
-is the first token. Duplicate names are retained as separate materials;
-`gmdl_mtl_find()` returns the first.
+is **the whole of the line**, spaces included, with blanks at either end
+dropped - the same reading `usemtl` uses (3.7) and the same one a texture map
+path already used (4.5). Blender reads `newmtl two words` as one material.
+Duplicate names are retained as separate materials; `gmdl_mtl_find()` returns
+the first.
+
+The two sides have to agree about where a name ends or an OBJ stops finding
+its own materials, and while both truncated at the first blank they agreed
+with each other and nothing inside this library could see it.
 
 Properties before any `newmtl` have nothing to apply to and are ignored.
 
@@ -987,8 +1014,14 @@ section 12 is where they are written down.
 
 ## 12. Open questions
 
-- **Multiple `mtllib` paths and paths with spaces.** Keep a list, or keep
-  one path including spaces? Either is a change to `GMDL_Obj`.
+- **Several `mtllib` lines.** Not the question it used to be: "keep a list,
+  or keep one path including spaces" turned out to be a false choice, because
+  Blender does both - one path per line, spaces and all, and every line's
+  library loaded. The spaces half is fixed (3.8). What is left is that this
+  library keeps only the last line's path, so a file naming two libraries
+  silently loses one. Fixing it needs `GMDL_Obj.mtllib` to become a list,
+  which is a breaking change to a published field with a consumer in the
+  workspace (`libs/cjelly`), so it is a decision rather than an oversight.
 - **Multiple group names per `g` line.** The documentation allows `g a b`;
   supporting it means a face can be in several groups, which the contiguous
   range model cannot express.

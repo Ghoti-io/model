@@ -152,6 +152,28 @@ GMDL_Result gmdl_first_token(const char * rest, char * out, size_t out_size) {
   return GMDL_OK;
 }
 
+GMDL_Result gmdl_rest_of_line(
+    const char * rest, char * out, size_t out_size) {
+  while (*rest == ' ' || *rest == '\t') {
+    rest++;
+  }
+  size_t length = strlen(rest);
+  // Comments are already gone by the time a directive is read, so anything
+  // trailing here is whitespace the writer left behind.
+  while (length > 0 && (rest[length - 1] == ' ' || rest[length - 1] == '\t')) {
+    length--;
+  }
+  if (length == 0) {
+    return GMDL_ERR_FORMAT;
+  }
+  if (length >= out_size) {
+    return GMDL_ERR_LIMIT;
+  }
+  memcpy(out, rest, length);
+  out[length] = '\0';
+  return GMDL_OK;
+}
+
 bool gmdl_line_is(
     const char * line, const char * directive, const char ** out_rest) {
   size_t length = strlen(directive);

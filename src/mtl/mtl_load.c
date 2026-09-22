@@ -539,9 +539,12 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     const char * rest = NULL;
     if (gmdl_line_is(line_text, "newmtl", &rest)) {
       // A bare "newmtl" is GMDL_ERR_FORMAT; an over-long name is
-      // GMDL_ERR_LIMIT rather than its first 127 bytes (3.9).
+      // GMDL_ERR_LIMIT rather than its first 127 bytes (3.9). The whole line
+      // is the name: Blender reads `newmtl two words` as one material and
+      // matches it against an OBJ's `usemtl two words`, and the two sides
+      // have to agree about where a name ends.
       char name[GMDL_MTL_MAX_NAME_LENGTH];
-      GMDL_Result named = gmdl_first_token(rest, name, sizeof(name));
+      GMDL_Result named = gmdl_rest_of_line(rest, name, sizeof(name));
       if (named != GMDL_OK) {
         result = named;
         goto cleanup;
