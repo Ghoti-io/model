@@ -130,6 +130,10 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line) {
 }
 
 GMDL_Result gmdl_first_token(const char * rest, char * out, size_t out_size) {
+  // Never taken today: every caller gets `rest` from gmdl_line_is(), which
+  // has already skipped the blanks. Kept so the function's contract is the
+  // text after a directive rather than the text after a directive provided
+  // somebody else trimmed it first, which is a precondition nothing checks.
   while (*rest == ' ' || *rest == '\t') {
     rest++;
   }

@@ -433,6 +433,10 @@ TEST(MtlColor, AValueThatDoesNotParseIsStillMalformed) {
       GMDL_ERR_FORMAT);
 }
 
+TEST(MtlDissolve, AValueThatDoesNotParseIsMalformed) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nd x\n"), GMDL_ERR_FORMAT);
+}
+
 TEST(MtlColor, ANameBeginningWithAKeywordIsNotTheKeyword) {
   // "xyzzy" is not the "xyz" form, so it falls through to being malformed
   // rather than unsupported.
@@ -736,9 +740,12 @@ TEST(MtlMap, OptionsAreUnsupportedNotMalformed) {
   // references do not even agree on what the options are - Blender consumes
   // -clamp, VTK 9.3 folds it into the filename - so guessing would be taking
   // a side the caller cannot see.
+  // Every kind, because each leaves the parser by its own arm.
   for (const char * line : {"map_Kd -o 1 1 1 tex.png\n",
            "map_Kd -s 2 2 2 tex.png\n", "map_Kd -clamp on tex.png\n",
-           "map_bump -bm 0.5 b.png\n"}) {
+           "map_Ka -o 1 a.png\n", "map_Ks -o 1 s.png\n",
+           "map_Ns -o 1 n.png\n", "map_d -o 1 alpha.png\n",
+           "map_bump -bm 0.5 b.png\n", "bump -bm 0.5 b.png\n"}) {
     EXPECT_EQ(load_text_expecting_failure(std::string("newmtl a\n") + line),
         GMDL_ERR_UNSUPPORTED)
         << line;

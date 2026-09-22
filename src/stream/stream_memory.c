@@ -91,12 +91,19 @@ GMDL_Result gmdl_stream_create_memory(
  */
 static GMDL_Result gmdl_result_from_file(GCU_File_Result result) {
   switch (result) {
+    // Unreachable as things stand, and kept anyway: the one caller asks only
+    // about a failure, and passes GCU_FILE_UNLIMITED so cutil has no cap to
+    // exceed. Dropping either arm would leave the two most dangerous answers
+    // falling into the default and coming back as GMDL_ERR_IO the moment
+    // somebody calls this from a second place - which is how a mapping
+    // function stops being total. Coverage therefore shows them as never
+    // executed, and that is the correct state for them to be in.
     case GCU_FILE_OK:
       return GMDL_OK;
-    case GCU_FILE_ERR_OOM:
-      return GMDL_ERR_OOM;
     case GCU_FILE_ERR_LIMIT:
       return GMDL_ERR_LIMIT;
+    case GCU_FILE_ERR_OOM:
+      return GMDL_ERR_OOM;
     case GCU_FILE_ERR_INVALID:
       // Not the same INVALID. gmdl_stream_create_file() checks its own
       // arguments before calling, so cutil cannot be telling us we passed a

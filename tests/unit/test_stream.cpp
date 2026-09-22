@@ -64,6 +64,17 @@ TEST(Stream, AccessorsTolerateNull) {
   EXPECT_NE(gmdl_stream_eof(nullptr), 0);
 }
 
+TEST(Stream, ReadRejectsNullArguments) {
+  MemStream s("abcdef");
+  char buffer[4] = {};
+  size_t got = 0;
+  EXPECT_EQ(gmdl_stream_read(nullptr, buffer, 4, &got), GMDL_ERR_INVALID);
+  EXPECT_EQ(gmdl_stream_read(s.get(), buffer, 4, nullptr), GMDL_ERR_INVALID);
+  EXPECT_EQ(gmdl_stream_read(s.get(), nullptr, 4, &got), GMDL_ERR_INVALID);
+  // A null buffer with nothing to read into it is not an error.
+  EXPECT_EQ(gmdl_stream_read(s.get(), nullptr, 0, &got), GMDL_OK);
+}
+
 TEST(Stream, ReadReturnsWhatIsThere) {
   MemStream s("abcdef");
   char buffer[4] = {};

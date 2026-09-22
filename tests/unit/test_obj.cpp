@@ -939,6 +939,26 @@ TEST(ObjLine, ABackslashInsideANameIsJustACharacter) {
 }
 
 //
+// Every refusal in a face reference (3.5). Each of these left the parser by
+// a different return, and none of them had been reached.
+//
+
+TEST(ObjFace, ATextureFieldThatIsNotANumberIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nvt 0 0\nf 1/x 1 1\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(ObjFace, JunkAfterTheTextureFieldIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nvt 0 0\nf 1/1x 1 1\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(ObjFace, ANormalFieldThatIsNotANumberIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nvn 0 0 1\nf 1/1/x 1 1\n"),
+      GMDL_ERR_FORMAT);
+}
+
+//
 // Every write the dumper checks can fail, and until this swept them none of
 // those arms had ever executed (section 9).
 //
