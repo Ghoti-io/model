@@ -249,7 +249,15 @@ Properties before any `newmtl` have nothing to apply to and are ignored.
 ### 4.2 Properties
 
 Each applies to the current material. Trailing text after the expected
-values is ignored. Every property is optional; an absent one leaves zero.
+values is ignored. Every property is optional; an absent one leaves zero,
+**except `d`, which is 1**.
+
+`d` is the exception because its zero is not a neutral starting value: it
+means the material is invisible, and a file says that by writing `d 0`, not
+by saying nothing. Leaving it at zero made an ordinary material disappear
+in any consumer that believed the field, and made `gmdl_mtl_dump()` write
+`d 0` and assert it to every other program. An explicit `d 0` is still zero
+and still round-trips.
 
 | Property | Values | Field |
 | --- | --- | --- |
@@ -257,7 +265,7 @@ values is ignored. Every property is optional; an absent one leaves zero.
 | `Kd r g b` | diffuse colour | `Kd` |
 | `Ks r g b` | specular colour | `Ks` |
 | `Ns n` | specular exponent | `Ns` |
-| `d n` | dissolve; 1 is opaque | `d` |
+| `d n` | dissolve; 1 is opaque, and is the default | `d` |
 | `illum n` | illumination model, integer | `illum` |
 
 The colour properties have three documented forms. `K? r g b` is the
@@ -383,9 +391,11 @@ the sources - the `%.9g` exponent forms, `1.00000001e-07` and
 `-3.40282347e+38` among them. That is a measured result rather than an
 intention; `notes/model/obj-differential.md` in the workspace has the method.
 
-**The MTL output is not**, for a material that omits `d`. See 11.1. Until
-that is fixed, treat `gmdl_mtl_dump()` as a debugging and testing aid rather
-than as something to hand to another program.
+**The MTL output is read correctly too**, measured the same way: a material
+with every property set, one that omits `d`, and one that is explicitly
+invisible all come back from both readers with the opacity the source had.
+That last pair is the interesting one, and is why 4.2 gives `d` a default
+rather than the dumper a special case.
 
 The dump writes `usemtl` when the material changes between consecutive faces,
 `g` for each group before its faces, and relative indices as absolute ones.
@@ -455,21 +465,9 @@ holds on all of it.
 
 ## 11. Implementation status
 
-1. **`gmdl_mtl_dump()` writes `d 0` for a material that never mentioned
-   `d`, which every other reader takes to mean invisible.** 4.2 leaves an
-   absent property at zero, and the dumper writes every property
-   unconditionally, so the two compose into an assertion the source file
-   never made. Given a material with no `d` line, Blender 4.3 reads the
-   source as alpha 1 and our dump of it as alpha 0; VTK 9.3 reads opacity 1
-   and then 0. This is not a corner: `tests/data/models/violin_case/vp.mtl`
-   has 72 materials and no `d` line at all, so a dump of it is 72 invisible
-   materials. The fix is a decision, not a patch - see 12.
-
-The shortfalls that remain besides that one are absences rather than
-misbehaviour, and section 12 is where they are written down. Whether a
-fourth face field should keep being ignored is one of those, and it sits in
-12 rather than here: section 3.5 states the behaviour, so it is a decision
-to revisit and not an undocumented surprise.
+Nothing known. Every defect this section has listed is fixed and pinned by a
+test; the shortfalls that remain are absences rather than misbehaviour, and
+section 12 is where they are written down.
 
 ---
 
@@ -487,16 +485,13 @@ to revisit and not an undocumented surprise.
   points matter for CAD-style models.
 - **Texture maps in MTL.** `map_Kd` at minimum. Needs a path field and a
   decision on the `-o`, `-s`, `-clamp` options.
-- **What an absent `d` should be.** 4.2 leaves it at zero, with every other
-  property, and 11.1 is what that costs on the way out. Three ways to fix
-  it, in increasing order of faithfulness and cost: have the dumper omit `d`
-  when it is zero (no API change, but a material whose dissolve really is
-  zero then reads as opaque elsewhere); default an absent `d` to 1, which is
-  what every other reader does and what the field means, at the price of
-  changing a documented default and what `GMDL_Mtl_Material.d` holds; or
-  record whether the property was present, which is exact and is a new field
-  in the public struct. The same question hangs over `Ns` and `illum`,
-  though nothing invisible comes of getting those wrong.
+- **An absent `Ns` or `illum`.** Both still default to zero, as 4.2 says.
+  `d` was given a real default because its zero means invisible; these two
+  have the same shape of problem - the dump asserts a value the source never
+  wrote - but nothing disappears when they are wrong, so they were left
+  alone rather than guessed at. Recording whether a property was present
+  would settle all three exactly, at the cost of a field in the public
+  struct.
 - **`Tr` as `1 - d`.** Some exporters write only `Tr`. Map it when `d` is
   absent?
 - **Extra face fields.** Reject `1/2/3/4`, or keep ignoring it?

@@ -196,7 +196,15 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         result = GMDL_ERR_OOM;
         goto cleanup;
       }
+      // Zero first, so a field added later starts defined rather than
+      // holding whatever the array's memory did.
       memset(material, 0, sizeof(*material));
+      // Then the one property whose zero means something. An absent "d" is
+      // fully opaque, which is what the format means and what every other
+      // reader assumes; leaving it at zero made an ordinary material
+      // invisible, and made gmdl_mtl_dump() write "d 0" and say so out
+      // loud to anything that read the result.
+      material->d = 1.0f;
       memcpy(material->name, name, strlen(name) + 1);
       current = gcu_array_count(&materials) - 1;
       have_current = true;

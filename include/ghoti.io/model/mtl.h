@@ -52,7 +52,7 @@ typedef struct {
   float Kd[3]; ///< Diffuse colour (RGB).
   float Ks[3]; ///< Specular colour (RGB).
   float Ns;    ///< Specular exponent.
-  float d;     ///< Dissolve (opacity; 1.0 is opaque).
+  float d;     ///< Dissolve (opacity; 1.0 is opaque, and the default).
   int32_t illum; ///< Illumination model.
 } GMDL_Mtl_Material;
 

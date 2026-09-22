@@ -179,7 +179,8 @@ TEST(MtlParse, PropertyNamesMustEndAtWhitespace) {
   ASSERT_NE(mtl, nullptr);
   ASSERT_EQ(mtl->material_count, 1u);
   EXPECT_FLOAT_EQ(mtl->materials[0].Kd[0], 0.5f);
-  EXPECT_FLOAT_EQ(mtl->materials[0].d, 0.0f) << "no 'd' line was present";
+  EXPECT_FLOAT_EQ(mtl->materials[0].d, 1.0f)
+      << "'dissolve' is not 'd', so d keeps its opaque default";
   gmdl_mtl_free(mtl);
 }
 
@@ -491,6 +492,77 @@ TEST(MtlLine, WithoutTheBlankLineTheNextLineJoinsTheName) {
   ASSERT_EQ(mtl->material_count, 1u);
   EXPECT_STREQ(mtl->materials[0].name, "a\\Ka");
   EXPECT_FLOAT_EQ(mtl->materials[0].Ka[0], 0.0f);
+  gmdl_mtl_free(mtl);
+}
+
+//
+// An absent "d" is opaque (4.2). Zero would mean invisible, which no source
+// file says by saying nothing.
+//
+
+TEST(MtlDissolve, AbsentDissolveIsOpaque) {
+  GMDL_Mtl * mtl = load_text("newmtl body\nKd 0.8 0.1 0.1\nNs 96\nillum 2\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_FLOAT_EQ(mtl->materials[0].d, 1.0f);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlDissolve, EveryMaterialGetsItsOwnDefault) {
+  // The default is set per material at newmtl, not once for the file.
+  GMDL_Mtl * mtl = load_text(
+      "newmtl a\nd 0.25\n"
+      "newmtl b\nKd 1 1 1\n"
+      "newmtl c\nd 0\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 3u);
+  EXPECT_FLOAT_EQ(mtl->materials[0].d, 0.25f);
+  EXPECT_FLOAT_EQ(mtl->materials[1].d, 1.0f) << "absent";
+  EXPECT_FLOAT_EQ(mtl->materials[2].d, 0.0f) << "explicit zero is still zero";
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlDissolve, AnExplicitZeroSurvivesTheRoundTrip) {
+  // The default must not swallow a material that really is invisible.
+  GMDL_Mtl * first = load_text("newmtl ghost\nd 0\n");
+  ASSERT_NE(first, nullptr);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_mtl_dump(first, sink), GMDL_OK);
+  fclose(sink);
+  GMDL_Mtl * second = nullptr;
+  ASSERT_EQ(gmdl_mtl_load_file(out.path(), nullptr, nullptr, &second),
+      GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->material_count, 1u);
+  EXPECT_FLOAT_EQ(second->materials[0].d, 0.0f);
+  gmdl_mtl_free(first);
+  gmdl_mtl_free(second);
+}
+
+TEST(MtlDissolve, TheDumpOfAnAbsentDissolveSaysOpaque) {
+  // This is the interop case: the dump used to write "d 0", which Blender
+  // and VTK both read as fully transparent for a source that said nothing.
+  GMDL_Mtl * mtl = load_text("newmtl body\nKd 0.8 0.1 0.1\n");
+  ASSERT_NE(mtl, nullptr);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_mtl_dump(mtl, sink), GMDL_OK);
+  fclose(sink);
+
+  FILE * check = fopen(out.path(), "rb");
+  ASSERT_NE(check, nullptr);
+  std::string text;
+  char buf[256];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), check)) > 0) text.append(buf, n);
+  fclose(check);
+  EXPECT_NE(text.find("\nd 1\n"), std::string::npos)
+      << "expected an opaque dissolve in:\n" << text;
   gmdl_mtl_free(mtl);
 }
 
