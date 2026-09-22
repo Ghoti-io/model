@@ -152,9 +152,8 @@ if not grow:
          "measuring nothing")
 grow = int(grow.group(1))
 
-# Capacity 0 is excluded on purpose: the per-face overflow array starts empty
-# and grows on its first element, so no document size can fail to outgrow it.
 capacities = []
+empty = []
 for source in ("src/obj/obj_load.c", "src/mtl/mtl_load.c"):
     text = read(source)
     for name, count in re.findall(
@@ -163,8 +162,33 @@ for source in ("src/obj/obj_load.c", "src/mtl/mtl_load.c"):
             text, re.S):
         if int(count) > 0:
             capacities.append((source, name, int(count)))
+        else:
+            empty.append((source, name))
 if not capacities:
     fail("found no builder capacities at all; the pattern must have rotted")
+
+# A capacity of zero allocates nothing, so that call's GMDL_ERR_OOM arm cannot
+# run, and obj_load.c says so in a comment next to it.  Nothing else holds the
+# comment to the code: give the array a starting capacity and the arm becomes
+# reachable while the comment goes on claiming it is not, and the coverage
+# report - which would now show a genuine gap - reads the same either way.
+# That is its own failure shape, and a common one: the argument gets written
+# down for the next person and stops one step short of being enforceable.
+EMPTY_ON_PURPOSE = {"overflow"}
+surprises = sorted({name for _, name in empty} - EMPTY_ON_PURPOSE)
+if surprises:
+    problems.append(
+        "%s %s created with a capacity of zero, so the GMDL_ERR_OOM arm on "
+        "that call cannot run and the allocation sweep will report it "
+        "uncovered. Either give it a capacity or say in a comment why the "
+        "check stays, and add it to EMPTY_ON_PURPOSE here"
+        % (", ".join(surprises), "is" if len(surprises) == 1 else "are"))
+filled = sorted(EMPTY_ON_PURPOSE - {name for _, name in empty})
+if filled:
+    problems.append(
+        "%s no longer starts empty, so the comment in src/obj/obj_load.c "
+        "saying its GMDL_ERR_OOM arm cannot run is now wrong, and the arm "
+        "wants a test rather than an explanation" % ", ".join(filled))
 
 for source, name, count in capacities:
     if count >= grow:
@@ -182,5 +206,5 @@ if problems:
 print("check-lists: %d maps in %d lists, %d arrays in %d lists, all present"
       % (len(scalar), len(lists), len(arrays_obj), len(obj_lists)))
 print("check-lists: %d builder capacities, largest %d, all under the sweep's "
-      "kGrow of %d"
-      % (len(capacities), max(c for _, _, c in capacities), grow))
+      "kGrow of %d; %d deliberately empty"
+      % (len(capacities), max(c for _, _, c in capacities), grow, len(empty)))
