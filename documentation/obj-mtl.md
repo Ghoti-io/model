@@ -281,6 +281,14 @@ coordinate to give.
 Both resolve negative and relative indices exactly as faces do (3.5), and an
 `l` or `p` naming nothing is `GMDL_ERR_FORMAT`.
 
+**A material named before an `l` or a `p` is not recorded.** `usemtl` sets
+the material for faces, and neither `GMDL_Obj_Line` nor `points` carries one,
+so a file that colours its polylines loses that. The parse still succeeds -
+the `usemtl` is read and applies to any face after it - and a test pins the
+behaviour so it stays deliberate rather than becoming a surprise. Section 12
+holds the question, because recording it means a material on three element
+kinds and a writer that re-emits `usemtl` in the line and point runs too.
+
 ### 3.13 Not read
 
 Two groups of directives, both deliberate.
@@ -300,8 +308,23 @@ each would become a field on every face, describing something no consumer of
 this library asks about. `shadow_obj` and `trace_obj` are the two carrying
 real data - paths - and section 12 keeps the question open.
 
+**Texture map libraries**: `maplib` and `usemap`. These stand to texture maps
+as `mtllib` and `usemtl` do to materials, and almost nothing writes them -
+exporters put the map in the `.mtl` instead (4.5). Reading them means a
+second name-to-index mapping beside the material one, for a feature with no
+observed users.
+
+**File inclusion**: `call`, `csh` and `scmp`, from the original specification's
+general statements. `call` pulls in another `.obj`, optionally with
+arguments, and `csh` runs a shell command. Neither is implemented, and `csh`
+is one this library would decline to implement: a geometry file that executes
+a command when parsed is not a thing a consumer of an untrusted model can
+want. `call` is the same question as a texture map path in section 8 with the
+stakes raised, since the included file is parsed rather than merely opened.
+
 A line whose directive is none of the above and none of 3.1-3.12 is skipped,
-which is how a file carrying an exporter's private extension still loads.
+which is how a file carrying an exporter's private extension still loads -
+and, for `csh`, is the behaviour rather than an omission.
 
 ---
 
@@ -754,6 +777,10 @@ section 12 is where they are written down.
 - **`shadow_obj` and `trace_obj`.** The two render attributes carrying real
   data - a path each. Recording them means deciding where per-state
   attributes live, which 3.13 explains is the blocker for all nine.
+- **A material on a polyline or a point.** `usemtl` applies to `l` and `p`
+  as it does to `f`, and only faces record it (3.12). Fixing it means a
+  `material_index` on three element kinds and a writer that re-emits
+  `usemtl` in the line and point runs.
 - **Texture map options.** `-o`, `-s`, `-clamp`, `-bm` and the rest are
   `GMDL_ERR_UNSUPPORTED` today (4.5). Implementing them means a place to put
   them and a decision about `-bm`, which Blender applies and VTK 9.3 does not

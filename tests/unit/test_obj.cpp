@@ -1253,6 +1253,49 @@ TEST(ObjLine, LinesAndPointsSurviveTheRoundTrip) {
   gmdl_obj_free(second);
 }
 
+TEST(ObjLine, AMaterialNamedBeforeALineIsNotRecorded) {
+  // Pinned rather than assumed. usemtl applies to l and p as it does to f,
+  // and neither carries a material, so a file colouring its polylines loses
+  // that - see 3.12 and section 12. The parse still succeeds and the
+  // material still reaches the faces.
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\n"
+                             "usemtl red\n"
+                             "l 1 2\n"
+                             "f 1 2 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->line_count, 1u);
+  ASSERT_EQ(obj->face_count, 1u);
+  ASSERT_EQ(obj->material_mapping_count, 1u);
+  EXPECT_EQ(obj->faces[0].material_index, obj->material_mappings[0].index)
+      << "the face still gets it";
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
+  // 3.13: the free-form sub-language, the render attributes, the texture map
+  // library pair, and the general statements. A file carrying them still
+  // loads, and "csh" in particular is skipped on purpose - a geometry file
+  // that runs a command when parsed is not something this library will do.
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "vp 0.5\n"
+                             "cstype bezier\n"
+                             "deg 3\n"
+                             "bevel on\n"
+                             "c_interp on\n"
+                             "lod 4\n"
+                             "shadow_obj shadow.obj\n"
+                             "trace_obj trace.obj\n"
+                             "maplib maps.mtl\n"
+                             "usemap chrome\n"
+                             "csh rm -rf /\n"
+                             "call other.obj\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->vertex_count, 1u);
+  EXPECT_EQ(obj->face_count, 1u);
+  gmdl_obj_free(obj);
+}
+
 TEST(ObjLine, TheElementCapsCoverLinesAndPoints) {
   GMDL_Limits limits;
   gmdl_limits_default(&limits);
