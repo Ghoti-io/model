@@ -1612,6 +1612,68 @@ TEST(ObjLimits, StatementsUnderTheCapAreKept) {
   gmdl_obj_free(obj);
 }
 
+// --- Index range ------------------------------------------------------
+
+// An index too large to represent must stay OUT of range, never wrap into it.
+// "f 4294967297" resolves to 4294967296, whose low 32 bits are zero, so
+// narrowing pointed the face at vertex 0 - a real vertex the file never
+// named, which the consumer's range check would happily accept. Section 1
+// puts range checking on the consumer, and that only works while an
+// unrepresentable index cannot arrive disguised as a valid one.
+//
+// The assertion is the PROPERTY - "not a valid index for this model" - and
+// not a particular sentinel, because the contract promises only the former.
+TEST(ObjFace, AnIndexTooLargeToRepresentStaysOutOfRange) {
+  for (const char * huge : {"4294967297", "8589934593", "-4294967297"}) {
+    GMDL_Obj * obj =
+        load_text(std::string("v 0 0 0\nv 1 0 0\nf ") + huge + " 1 2\n");
+    ASSERT_NE(obj, nullptr) << huge;
+    ASSERT_EQ(obj->face_count, 1u) << huge;
+    const int32_t resolved = obj->faces[0].vertex[0];
+    EXPECT_FALSE(resolved >= 0
+        && static_cast<size_t>(resolved) < obj->vertex_count)
+        << huge << " resolved to " << resolved
+        << ", which is a vertex this file never named";
+    gmdl_obj_free(obj);
+  }
+}
+
+// Guard against over-correcting: an absurd but representable index is still
+// read as written, and is simply out of range for a two-vertex model.
+TEST(ObjFace, AnAbsurdButRepresentableIndexIsStillRead) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nf 2147483647 1 2\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 1u);
+  EXPECT_EQ(obj->faces[0].vertex[0], 2147483646);
+  gmdl_obj_free(obj);
+}
+
+// Writing a maximal index must not overflow on the way out.
+//
+// "f 2147483648" resolves to INT32_MAX, which 3.5 says to record rather than
+// reject; the dumper then writes it 1-based, and "INT32_MAX + 1" in a plain
+// int is undefined behaviour. This went unseen because UBSan recovers by
+// default - it printed the diagnostic and the suite still exited 0 - so the
+// Makefile now passes -fno-sanitize-recover=undefined and this test gives it
+// something to catch.
+TEST(ObjDump, AMaximalIndexIsWrittenWithoutOverflowing) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nf 2147483648 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 1u);
+  ASSERT_EQ(obj->faces[0].vertex[0], 2147483647);
+
+  char * buffer = nullptr;
+  size_t size = 0;
+  FILE * sink = open_memstream(&buffer, &size);
+  ASSERT_NE(sink, nullptr);
+  EXPECT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+  EXPECT_NE(std::string(buffer, size).find("2147483648"), std::string::npos)
+      << "the index did not survive the round trip";
+  free(buffer);
+  gmdl_obj_free(obj);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

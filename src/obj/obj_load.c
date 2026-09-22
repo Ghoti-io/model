@@ -229,11 +229,35 @@ static int32_t obj_index(long value, size_t declared) {
   if (value == 0) {
     return -1;
   }
+
+  long resolved;
   if (value < 0) {
     // Relative: -1 is the last one declared.
-    return (int32_t)((long)declared + value);
+    resolved = (long)declared + value;
   }
-  return (int32_t)(value - 1);
+  else {
+    resolved = value - 1;
+  }
+
+  // An index too large to represent must be held OUT of range, never
+  // narrowed into it. "f 4294967297" resolves to 4294967296, whose low 32
+  // bits are zero: narrowing would point the face at vertex 0 - a vertex the
+  // file never named, in range, and accepted by exactly the range check
+  // section 1 makes the consumer responsible for. That division of labour
+  // only works while an unrepresentable index cannot arrive disguised as a
+  // valid one.
+  //
+  // INT32_MAX and INT32_MIN are safe to saturate to because this is an
+  // int32_t: a model with INT32_MAX elements of a kind cannot have its later
+  // ones addressed through this API whatever we return here, so no reachable
+  // element loses its index to the clamp.
+  if (resolved > INT32_MAX) {
+    return INT32_MAX;
+  }
+  if (resolved < INT32_MIN) {
+    return INT32_MIN;
+  }
+  return (int32_t)resolved;
 }
 
 /**

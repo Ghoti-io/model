@@ -31,10 +31,18 @@
 #include <ghoti.io/model/obj.h>
 #include "../core/number_internal.h"
 
-/** Print one "v", "v/vt", "v//vn" or "v/vt/vn" reference. */
+/**
+ * Print one "v", "v/vt", "v//vn" or "v/vt/vn" reference.
+ *
+ * The "+ 1" is done in a wider type on purpose. These are 0-based int32_t
+ * indices and OBJ writes them 1-based, so an index of INT32_MAX - which
+ * "f 2147483648" produces, and which 3.5 says to record rather than reject -
+ * overflows a plain int. That is undefined behaviour in a function whose job
+ * is to serialise whatever was read.
+ */
 static int obj_dump_reference(
     FILE * fd, int32_t vertex, int32_t texcoord, int32_t normal) {
-  if (fprintf(fd, " %d", vertex + 1) < 0) {
+  if (fprintf(fd, " %lld", (long long)vertex + 1) < 0) {
     return -1;
   }
   if (texcoord == -1 && normal == -1) {
@@ -43,10 +51,10 @@ static int obj_dump_reference(
   if (fprintf(fd, "/") < 0) {
     return -1;
   }
-  if (texcoord != -1 && fprintf(fd, "%d", texcoord + 1) < 0) {
+  if (texcoord != -1 && fprintf(fd, "%lld", (long long)texcoord + 1) < 0) {
     return -1;
   }
-  if (normal != -1 && fprintf(fd, "/%d", normal + 1) < 0) {
+  if (normal != -1 && fprintf(fd, "/%lld", (long long)normal + 1) < 0) {
     return -1;
   }
   return 0;
@@ -231,8 +239,9 @@ static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
       const GMDL_Obj_Line_Vertex * entry =
           &obj->line_vertices[element->start + j];
       int written = entry->texcoord == -1
-          ? fprintf(fd, " %d", entry->vertex + 1)
-          : fprintf(fd, " %d/%d", entry->vertex + 1, entry->texcoord + 1);
+          ? fprintf(fd, " %lld", (long long)entry->vertex + 1)
+          : fprintf(fd, " %lld/%lld", (long long)entry->vertex + 1,
+                (long long)entry->texcoord + 1);
       if (written < 0) {
         return -1;
       }
@@ -252,7 +261,7 @@ static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
         < 0) {
       return -1;
     }
-    if (fprintf(fd, "p %d\n", obj->points[i].vertex + 1) < 0) {
+    if (fprintf(fd, "p %lld\n", (long long)obj->points[i].vertex + 1) < 0) {
       return -1;
     }
   }
@@ -342,6 +351,7 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
 
   return GMDL_OK;
 }
+
 
 /**
  * Write an OBJ document with the numeric locale pinned.

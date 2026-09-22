@@ -185,6 +185,15 @@ An index that names an element that does not exist - positive past the end,
 or negative past the beginning - is recorded as resolved, that is, as a value
 outside `[0, count)`. It is not an error (section 1).
 
+An index too large to represent is held outside that range rather than
+allowed to wrap into it. `f 4294967297` resolves to 4294967296, whose low 32
+bits are zero, so narrowing it would point the face at vertex 0 - an index
+the consumer's range check accepts and the file never named. Section 1 makes
+range checking the consumer's job, and that division only holds while an
+unrepresentable index cannot arrive disguised as a valid one, so such an
+index saturates instead. The saturating value is not part of the contract;
+"not in `[0, count)`" is.
+
 A token that does not begin with an integer - `a`, `/1`, `1.5` is `1` followed
 by junk - is `GMDL_ERR_FORMAT`.
 
@@ -685,6 +694,10 @@ the same material assignments. Floats are written with `%.9g`, which
 round-trips every float exactly, and with `LC_NUMERIC` pinned to C for the
 length of the dump (2.7), so the bytes are the same whatever locale the
 calling program is in.
+
+Indices are written 1-based in a wider type than they are stored in. An
+index of `INT32_MAX` is representable and recordable, and `INT32_MAX + 1` in
+an `int` is undefined behaviour - so the addition is done in `long long`.
 
 **The OBJ output is read correctly by other tools.** Blender 4.3 and VTK 9.3
 were both given this library's dumps of the checked-in models and of

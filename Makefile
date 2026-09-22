@@ -677,7 +677,10 @@ endif
 ####################################################################
 # Sanitizer build (ASan + UBSan): separate build dir, run the test suite
 ####################################################################
-ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g
+# -fno-sanitize-recover: without it UBSan PRINTS a diagnostic and carries on,
+# so the process still exits 0 and the suite reports clean over undefined
+# behaviour it just described. A gate that cannot fail is not a gate.
+ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g
 ASAN_BUILD_DIR := ./build/$(BUILD)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
 ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
