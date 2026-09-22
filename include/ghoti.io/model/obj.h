@@ -35,6 +35,7 @@
 #include <ghoti.io/model/core.h>
 #include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/stream.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -56,6 +57,22 @@ typedef struct {
   float y; ///< Y coordinate.
   float z; ///< Z coordinate.
 } GMDL_Obj_Vertex;
+
+/**
+ * @brief A vertex colour, from the `r g b` extension to `v` (3.1).
+ *
+ * Recorded exactly as written: not clamped, not converted out of whatever
+ * colour space the writer had in mind, and not rejected for being outside
+ * `[0, 1]`. Blender reads `1.5` as sRGB and hands its renderer `2.537`;
+ * deciding that is a consumer's job, and a parser that did it would make the
+ * file unrecoverable.
+ */
+typedef struct {
+  float r;      ///< Red, as written.
+  float g;      ///< Green, as written.
+  float b;      ///< Blue, as written.
+  bool present; ///< False when this vertex's `v` line carried no colour.
+} GMDL_Obj_Color;
 
 /**
  * @brief A 2D texture coordinate.
@@ -214,6 +231,20 @@ typedef struct {
 typedef struct {
   GMDL_Obj_Vertex * vertices; ///< Vertices, or NULL when there are none.
   size_t vertex_count;        ///< Number of vertices.
+
+  /**
+   * Vertex colours, or NULL when no `v` line in the file carried one.
+   *
+   * When it is not NULL it has exactly ::vertex_count entries, so it is
+   * indexed by the same subscript as ::vertices. A file may colour some
+   * vertices and not others - Blender discards the colours of such a file
+   * entirely - and the entries for the uncoloured ones have `present` false
+   * and hold white, which is the value that changes nothing when a consumer
+   * multiplies by it. Keeping the array parallel rather than widening
+   * ::GMDL_Obj_Vertex means a file without colours pays nothing for them.
+   */
+  GMDL_Obj_Color * colors;
+  size_t color_count; ///< Number of colours: 0, or ::vertex_count.
 
   GMDL_Obj_TexCoord * texcoords; ///< Texture coordinates, or NULL.
   size_t texcoord_count;         ///< Number of texture coordinates.

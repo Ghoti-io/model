@@ -27,7 +27,9 @@ checks ranges before indexing. cjelly's mesh builder is the reference consumer
 and does exactly this, counting what it dropped.
 
 **Malformed is different from unexpected.** A `v` line with two numbers is
-malformed and is `GMDL_ERR_FORMAT`. A `curv` line is a directive this library
+malformed and is `GMDL_ERR_FORMAT` - which is stricter than either reference,
+both of which pad the missing `z` with zero, and is the specification's
+reading rather than a guess (3.1, 12). A `curv` line is a directive this library
 does not implement and is ignored, as the OBJ documentation asks. A `Kd xyz`
 line is a documented form this library does not implement and is
 `GMDL_ERR_UNSUPPORTED`. The three answers are different because the caller's
@@ -139,15 +141,59 @@ is why it is offered - and why it is not the default.
 
 ## 3. OBJ
 
-### 3.1 `v x y z [w]`
+### 3.1 `v x y z [w]` and `v x y z r g b`
 
-A vertex. Three numbers are required; a fourth (`w`) is accepted and
-discarded. Fewer than three is `GMDL_ERR_FORMAT`. Text after the numbers is
-ignored.
+A vertex. Three numbers are required; fewer is `GMDL_ERR_FORMAT`. Text after
+the numbers is ignored.
 
-### 3.2 `vt u v [w]`
+**Six or more numbers is the vertex-colour extension**, and the colour is
+fields four to six. The rule is a count of *numbers*, not of tokens, so
+`v 1 2 3 red green blue` is an uncoloured vertex and not an error.
 
-A texture coordinate. Two numbers required; a third accepted and discarded.
+| Numbers | Read as |
+| --- | --- |
+| 3 | `x y z` |
+| 4 | `x y z w`; `w` is discarded (see below) |
+| 5 | `x y z` and two numbers that are not a colour |
+| 6 | `x y z r g b` |
+| 7 or more | `x y z r g b`, the seventh onwards ignored |
+
+Every row was measured against Blender 4.3.2, which agrees on all of them -
+including the last, where `x y z w r g b` would be the other reasonable
+reading and neither importer takes it. The boundary between five and six is
+the whole rule, so it is what the tests pin.
+
+`w` is a rational weight for free-form geometry, which section 3.14 does not
+support, so nothing here could consume it and it is dropped.
+
+Colours are recorded exactly as written: not clamped, not converted out of
+whatever colour space the writer had in mind. Blender treats file values as
+sRGB and hands its renderer `2.537` for a `1.5`, and discards every colour in
+a file containing a negative component. Both are a consumer's decisions; a
+parser that made them would leave no way back to what the file said.
+
+A file may colour some vertices and not others. `GMDL_Obj.colors` is NULL
+unless at least one `v` line carried a colour, and otherwise has exactly
+`vertex_count` entries so that it is indexed by vertex number; the entries for
+uncoloured vertices have `present` false and hold white, which is the value
+that changes nothing when a consumer multiplies by it. Blender's answer to
+such a file is to discard every colour in it - which a caller can still do
+from what is recorded here, where the reverse is not true.
+
+The writer emits a colour only for a vertex whose `present` is set, so a file
+that mixed the two round-trips unchanged rather than gaining colours it never
+had.
+
+### 3.2 `vt u [v] [w]`
+
+A texture coordinate. **Only `u` is required**; `v` and `w` default to zero
+and `w` is discarded, there being nothing three-dimensional in this model's
+texture space.
+
+The two references disagree here - Blender reads `vt 0.5` and VTK calls it
+"Error reading 'vt'" - so this follows the specification, which says both are
+optional, and with it the more permissive of the two. `vt` with no number at
+all is `GMDL_ERR_FORMAT`.
 
 ### 3.3 `vn x y z`
 
@@ -158,6 +204,14 @@ A normal. Three numbers required. Not normalised by the parser.
 A number is whatever `strtof` accepts: optional sign, decimal or exponent
 form, and also `nan`, `inf` and hexadecimal floats. The parser records them
 as written. A consumer that cannot draw a `nan` checks for it (section 8).
+
+A token counts as a number when the conversion consumes *any* of it, so
+`v 0 1 0abc` is three numbers. That is deliberately not the rule an MTL
+option list uses (4.5), where a token must be a number in its entirety or the
+arguments of `-o` would eat the front of the path that follows them. A `v` or
+`vt` line has no path at the end, both reference importers read a partial
+token this way, and 3.1 has said text after the numbers is ignored since
+before colours arrived.
 
 ### 3.5 `f` - faces
 
@@ -252,6 +306,7 @@ A longer one is `GMDL_ERR_LIMIT`.
 | Array | Element | Notes |
 | --- | --- | --- |
 | `vertices` | `x y z` floats | in file order |
+| `colors` | `r g b` and `present` | NULL unless some `v` carried a colour; otherwise one per vertex (3.1) |
 | `texcoords` | `u v` | |
 | `normals` | `x y z` | |
 | `faces` | `GMDL_Obj_Face` | 0-based indices, `-1` for absent; `overflow` past four; `material_index`; `smoothing_group` |
@@ -749,6 +804,14 @@ the sources - the `%.9g` exponent forms, `1.00000001e-07` and
 `-3.40282347e+38` among them. That is a measured result rather than an
 intention; `notes/model/obj-differential.md` in the workspace has the method.
 
+**Vertex colours survive both directions**, measured as a loop rather than
+as two half-checks: Blender was made to export a coloured mesh, this library
+parsed that file and dumped it, and Blender read the dump with the same three
+colours on the same three vertices. A colour this library invented would have
+shown up as a colour Blender did not have, and a colour it dropped as none at
+all; the loop catches both, where comparing our parse against our own dump
+catches neither.
+
 **The MTL output is read correctly too**, measured the same way. The dump
 writes a property only when the material's `present` mask says the source
 stated it, so a material that omitted `Kd` or `d` reads back from Blender
@@ -839,7 +902,10 @@ a small value, so the same corpus exercises every cap:
 The invariants the harnesses check: whatever the result, the parser neither
 crashes nor leaks; and a `GMDL_OK` model is dumped, parsed back, and compared
 against the original. For OBJ the comparison covers every count, every
-coordinate value, every group name and span, the `mtllib` path, each face's
+coordinate value, every vertex colour - its three components and whether the
+vertex had one at all, since an absent colour holds white and a dumper that
+wrote white for it would reload with all three components matching - every
+group name and span, the `mtllib` path, each face's
 material by name and smoothing group, each polyline's span and material,
 each point's material, every recorded `call` and `csh`, and - with the
 exception below - every face, polyline and point index. For MTL
@@ -889,7 +955,7 @@ them rather than because the dumper is wrong.
   from the index comparison and from nothing else. Polylines and points
   resolve their indices the same way, so the exemption reaches them too.
 
-All three exemptions were measured rather than assumed: over the accumulated
+All four exemptions were measured rather than assumed: over the accumulated
 corpus they account for every disagreement, and the invariant as stated
 holds on all of it.
 
@@ -899,7 +965,12 @@ exist, so a quantity with no field in `GMDL_Limits` is invisible to them -
 missing, and no amount of fuzzing would have said so. They compare a load
 against a reload, so a defect that is symmetric across both survives the
 comparison: a face index that wrapped on the way in wrapped identically on
-the way back and the invariant held while the value was wrong. And an input
+the way back and the invariant held while the value was wrong. The same
+shape reaches *unit* tests written as round trips, and did: the vertex-colour
+round trip compared the reload's colour count against the source's, so
+removing the step that hands colours to the model left both at zero and the
+test green. A round trip needs one assertion about what the source actually
+held, or it can agree about nothing at all. And an input
 large enough to show an unbounded allocation is far past the sizes libFuzzer
 generates. These are jobs for unit tests that assert the property directly
 (section 5), not for more fuzzing time.
@@ -932,12 +1003,17 @@ section 12 is where they are written down.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is the one place 4.5 takes it
   further than either.
+- **A `v` line with fewer than three numbers.** `GMDL_ERR_FORMAT` here;
+  Blender and VTK both read `v 0 1` as `(0, 1, 0)`. The specification requires
+  three, so this is the specification against both references - the opposite
+  of the call made for `vt` in 3.2, where the specification said the numbers
+  were optional and the strict reference was the one out on its own. Worth
+  noting together, because "follow the specification" and "follow the
+  references" pick different sides here and it is not obvious either is wrong.
 - **Extra face fields.** Reject `1/2/3/4`, or keep ignoring it?
 - **`nan` and `inf`.** Record faithfully (current) or reject at parse time?
   Section 1 argues for faithful; a stricter mode via `GMDL_Limits` is an
   option that changes no default.
-- **Vertex colours.** `v x y z r g b` is a common extension; the three extra
-  numbers are currently discarded under 3.1.
 - **Which exporters' spellings are still missing.** `map_Bump` and `map_refl`
   were found by asking Blender about 27 candidate spellings, not by reading
   the reference - the reference does not list them. Blender is one exporter;

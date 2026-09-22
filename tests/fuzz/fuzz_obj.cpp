@@ -204,6 +204,7 @@ void check_round_trip(const GMDL_Obj * obj) {
   REQUIRE(reloaded == GMDL_OK && again, "our own dump did not parse back");
 
   REQUIRE(obj->vertex_count == again->vertex_count, "vertex_count");
+  REQUIRE(obj->color_count == again->color_count, "color_count");
   REQUIRE(obj->texcoord_count == again->texcoord_count, "texcoord_count");
   REQUIRE(obj->normal_count == again->normal_count, "normal_count");
   REQUIRE(obj->face_count == again->face_count, "face_count");
@@ -220,6 +221,17 @@ void check_round_trip(const GMDL_Obj * obj) {
             && same_float(obj->vertices[i].y, again->vertices[i].y)
             && same_float(obj->vertices[i].z, again->vertices[i].z),
         "vertex value");
+  }
+  for (size_t i = 0; i < obj->color_count; i++) {
+    // `present` too, not just the three numbers: an absent colour holds
+    // white, so a dumper that wrote white for it would reload as a colour
+    // whose components all matched and only this flag would say otherwise.
+    REQUIRE(obj->colors[i].present == again->colors[i].present,
+        "colour presence");
+    REQUIRE(same_float(obj->colors[i].r, again->colors[i].r)
+            && same_float(obj->colors[i].g, again->colors[i].g)
+            && same_float(obj->colors[i].b, again->colors[i].b),
+        "colour value");
   }
   for (size_t i = 0; i < obj->texcoord_count; i++) {
     REQUIRE(same_float(obj->texcoords[i].u, again->texcoords[i].u)

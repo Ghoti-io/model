@@ -279,8 +279,20 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
   }
 
   for (size_t i = 0; i < obj->vertex_count; i++) {
-    if (fprintf(fd, "v %.9g %.9g %.9g\n", obj->vertices[i].x, obj->vertices[i].y,
-            obj->vertices[i].z) < 0) {
+    // A vertex whose colour is absent is written without one even in a file
+    // that has colours, because that is what the file said and writing white
+    // instead would turn "no colour here" into a colour on the way out.
+    const GMDL_Obj_Color * color
+        = (obj->colors && i < obj->color_count && obj->colors[i].present)
+        ? &obj->colors[i]
+        : NULL;
+    int written = color
+        ? fprintf(fd, "v %.9g %.9g %.9g %.9g %.9g %.9g\n", obj->vertices[i].x,
+            obj->vertices[i].y, obj->vertices[i].z, color->r, color->g,
+            color->b)
+        : fprintf(fd, "v %.9g %.9g %.9g\n", obj->vertices[i].x,
+            obj->vertices[i].y, obj->vertices[i].z);
+    if (written < 0) {
       return GMDL_ERR_IO;
     }
   }

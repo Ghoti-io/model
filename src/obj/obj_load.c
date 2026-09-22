@@ -51,6 +51,14 @@
  */
 typedef struct {
   GCU_Array vertices;
+  /**
+   * Vertex colours, empty until the file's first coloured `v` line.
+   *
+   * The invariant between lines is that this holds either zero entries or
+   * exactly as many as @c vertices, so obj_color_append() has to backfill
+   * absent entries for whatever came before the first colour.
+   */
+  GCU_Array colors;
   GCU_Array texcoords;
   GCU_Array normals;
   GCU_Array faces;
@@ -69,6 +77,8 @@ static bool obj_builder_init(
   b->allocator = allocator;
   return gcu_array_create_in_place(
              &b->vertices, sizeof(GMDL_Obj_Vertex), 128, allocator)
+      && gcu_array_create_in_place(
+          &b->colors, sizeof(GMDL_Obj_Color), 128, allocator)
       && gcu_array_create_in_place(
           &b->texcoords, sizeof(GMDL_Obj_TexCoord), 128, allocator)
       && gcu_array_create_in_place(
@@ -105,6 +115,7 @@ static void obj_builder_destroy(obj_builder_t * b) {
     gcu_allocator_free(b->allocator, statement->text);
   }
   gcu_array_destroy_in_place(&b->vertices);
+  gcu_array_destroy_in_place(&b->colors);
   gcu_array_destroy_in_place(&b->texcoords);
   gcu_array_destroy_in_place(&b->normals);
   gcu_array_destroy_in_place(&b->faces);
@@ -124,6 +135,64 @@ static void obj_steal_into(
   size_t count = 0;
   *out_data = gcu_array_steal(array, &count);
   *out_count = count;
+}
+
+/**
+ * Read up to @p max numbers from @p rest, returning how many were there.
+ *
+ * `strtof` skips leading whitespace and reports where it stopped, so a token
+ * is a number exactly when the conversion consumed anything at all. That is a
+ * *prefix* rule, and it is deliberately not the whole-token rule
+ * mtl_token_float() uses: there, "-o 1 2" is followed by a path and a
+ * half-eaten "2.png" would become a texture called ".png", so a token has to
+ * be all number or nothing. A `v` or `vt` line has no path at the end for a
+ * partial token to corrupt, both reference importers read "0abc" as 0 there,
+ * and section 3.1 has said "text after the numbers is ignored" since before
+ * colours arrived. Two rules, two reasons; they are not a copy of each other
+ * that drifted.
+ *
+ * @param rest The text after the directive.
+ * @param out Receives the numbers. At least @p max entries.
+ * @param max How many to read before stopping, however many follow.
+ * @return How many numbers were read, 0 to @p max.
+ */
+static size_t obj_take_floats(const char * rest, float * out, size_t max) {
+  size_t taken = 0;
+  while (taken < max) {
+    char * end = NULL;
+    float value = strtof(rest, &end);
+    if (end == rest) {
+      break;
+    }
+    out[taken++] = value;
+    rest = end;
+  }
+  return taken;
+}
+
+/** The colour an uncoloured vertex gets: white, which multiplies to nothing. */
+static const GMDL_Obj_Color obj_color_absent = {1.0f, 1.0f, 1.0f, false};
+
+/**
+ * Record @p color for the vertex that was just appended.
+ *
+ * Restores the builder's invariant first: a file whose hundredth `v` line is
+ * the first with a colour needs ninety-nine absent entries before it, because
+ * the array is indexed by vertex number and nothing else records which vertex
+ * a colour belongs to.
+ *
+ * @param b The builder, whose @c vertices already holds the new vertex.
+ * @param color The colour, present or absent.
+ * @return false only on allocation failure.
+ */
+static bool obj_color_append(obj_builder_t * b, const GMDL_Obj_Color * color) {
+  size_t wanted = gcu_array_count(&b->vertices);
+  while (gcu_array_count(&b->colors) + 1 < wanted) {
+    if (!gcu_array_append(&b->colors, (void *)&obj_color_absent)) {
+      return false;
+    }
+  }
+  return gcu_array_append(&b->colors, (void *)color);
 }
 
 /**
@@ -359,10 +428,21 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
 
     const char * rest = NULL;
     if (gmdl_line_is(line_text, "v", &rest)) {
-      GMDL_Obj_Vertex v;
-      if (sscanf(rest, "%f %f %f", &v.x, &v.y, &v.z) != 3) {
+      // Six or more numbers means the `r g b` extension, and the colour is
+      // fields four to six whether or not a `w` might have been intended to
+      // sit among them - which is what Blender does, measured on four, five,
+      // six and seven numbers. Four or five is a plain vertex with a `w` or
+      // with junk after it, and neither carries a colour.
+      float number[6];
+      size_t count = obj_take_floats(rest, number, 6);
+      if (count < 3) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
+      }
+      GMDL_Obj_Vertex v = {number[0], number[1], number[2]};
+      GMDL_Obj_Color color = obj_color_absent;
+      if (count >= 6) {
+        color = (GMDL_Obj_Color){number[3], number[4], number[5], true};
       }
       if (gmdl_limit_reached(
               gcu_array_count(&builder.vertices), limits->max_vertices)) {
@@ -373,13 +453,25 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         result = GMDL_ERR_OOM;
         goto cleanup;
       }
+      if ((color.present || gcu_array_count(&builder.colors) != 0)
+          && !obj_color_append(&builder, &color)) {
+        result = GMDL_ERR_OOM;
+        goto cleanup;
+      }
     }
     else if (gmdl_line_is(line_text, "vt", &rest)) {
-      GMDL_Obj_TexCoord vt;
-      if (sscanf(rest, "%f %f", &vt.u, &vt.v) != 2) {
+      // `vt u [v] [w]`: only u is required, and both of the others default to
+      // zero. The reference importers disagree here - Blender reads "vt 0.5"
+      // and VTK calls it an error - so this follows the specification and the
+      // more permissive of the two. `w` is read and dropped; nothing in this
+      // model is three-dimensional in texture space.
+      float number[3];
+      size_t count = obj_take_floats(rest, number, 3);
+      if (count < 1) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
+      GMDL_Obj_TexCoord vt = {number[0], count >= 2 ? number[1] : 0.0f};
       if (gmdl_limit_reached(
               gcu_array_count(&builder.texcoords), limits->max_texcoords)) {
         result = GMDL_ERR_LIMIT;
@@ -391,11 +483,12 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       }
     }
     else if (gmdl_line_is(line_text, "vn", &rest)) {
-      GMDL_Obj_Normal vn;
-      if (sscanf(rest, "%f %f %f", &vn.x, &vn.y, &vn.z) != 3) {
+      float number[3];
+      if (obj_take_floats(rest, number, 3) < 3) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
+      GMDL_Obj_Normal vn = {number[0], number[1], number[2]};
       if (gmdl_limit_reached(
               gcu_array_count(&builder.normals), limits->max_normals)) {
         result = GMDL_ERR_LIMIT;
@@ -762,6 +855,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
 
     obj_steal_into(
         &builder.vertices, (void **)&obj->vertices, &obj->vertex_count);
+    obj_steal_into(&builder.colors, (void **)&obj->colors, &obj->color_count);
     obj_steal_into(
         &builder.texcoords, (void **)&obj->texcoords, &obj->texcoord_count);
     obj_steal_into(&builder.normals, (void **)&obj->normals,
@@ -834,6 +928,7 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   const GMDL_Allocator * allocator = obj->allocator;
 
   gcu_allocator_free(allocator, obj->vertices);
+  gcu_allocator_free(allocator, obj->colors);
   gcu_allocator_free(allocator, obj->texcoords);
   gcu_allocator_free(allocator, obj->normals);
   if (obj->faces) {

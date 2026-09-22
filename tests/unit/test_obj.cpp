@@ -10,6 +10,8 @@
 
 #include <cstddef>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 
 #include <string>
 
@@ -125,8 +127,171 @@ TEST(ObjParse, VerticesTexcoordsAndNormals) {
 
 TEST(ObjParse, IncompleteVertexIsAFormatError) {
   EXPECT_EQ(load_text_expecting_failure("v 1 2\n"), GMDL_ERR_FORMAT);
-  EXPECT_EQ(load_text_expecting_failure("vt 1\n"), GMDL_ERR_FORMAT);
   EXPECT_EQ(load_text_expecting_failure("vn 1 2\n"), GMDL_ERR_FORMAT);
+  // "vt" is the exception: only u is required (3.2).
+  EXPECT_EQ(load_text_expecting_failure("vt\n"), GMDL_ERR_FORMAT);
+}
+
+// `vt u [v] [w]` - v and w are optional and default to 0, which is what the
+// specification says and what Blender reads. VTK calls "vt 0.5" an error;
+// this follows the more permissive of the two references deliberately, so the
+// test says which behaviour is intended rather than which one happens.
+TEST(ObjParse, ATextureCoordinateNeedsOnlyItsFirstNumber) {
+  GMDL_Obj * obj = load_text("vt 0.5\nvt 0.25 0.75\nvt 1 2 3\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->texcoord_count, 3u);
+  EXPECT_FLOAT_EQ(obj->texcoords[0].u, 0.5f);
+  EXPECT_FLOAT_EQ(obj->texcoords[0].v, 0.0f);
+  EXPECT_FLOAT_EQ(obj->texcoords[1].u, 0.25f);
+  EXPECT_FLOAT_EQ(obj->texcoords[1].v, 0.75f);
+  // A third number is read and dropped, not a format error.
+  EXPECT_FLOAT_EQ(obj->texcoords[2].u, 1.0f);
+  EXPECT_FLOAT_EQ(obj->texcoords[2].v, 2.0f);
+  gmdl_obj_free(obj);
+}
+
+//
+// Vertex colours - the `v x y z r g b` extension (3.1)
+//
+
+// The three extra numbers used to be discarded without a word, which is the
+// same shape of defect as dropping a texture map option: the file said
+// something and the model did not carry it.
+TEST(ObjParse, AVertexCarriesItsColour) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0 1 0 0\n"
+      "v 1 0 0 0 1 0\n"
+      "v 0 1 0 0 0 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->vertex_count, 3u);
+  ASSERT_NE(obj->colors, nullptr);
+  ASSERT_EQ(obj->color_count, 3u);
+  EXPECT_TRUE(obj->colors[0].present);
+  EXPECT_FLOAT_EQ(obj->colors[0].r, 1.0f);
+  EXPECT_FLOAT_EQ(obj->colors[0].g, 0.0f);
+  EXPECT_FLOAT_EQ(obj->colors[0].b, 0.0f);
+  EXPECT_FLOAT_EQ(obj->colors[1].g, 1.0f);
+  EXPECT_FLOAT_EQ(obj->colors[2].b, 1.0f);
+  // The position is unaffected by the colour sharing the line.
+  EXPECT_FLOAT_EQ(obj->vertices[2].y, 1.0f);
+  gmdl_obj_free(obj);
+}
+
+// A file that never mentions a colour must not pay for the array. This is
+// also the check that "has colours" is answerable at all: without it the
+// caller would have to scan every entry's `present` flag to find out.
+TEST(ObjParse, AFileWithNoColoursAllocatesNone) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->colors, nullptr);
+  EXPECT_EQ(obj->color_count, 0u);
+  gmdl_obj_free(obj);
+}
+
+// Four numbers is `w`, not the first third of a colour; five is a vertex with
+// junk after it. Measured against Blender, which colours at six and not
+// before. Sampling only three and six would have left the boundary untested,
+// and the boundary is the whole rule.
+TEST(ObjParse, ColourNeedsAllSixNumbers) {
+  for (const char * line : {"v 1 2 3\n", "v 1 2 3 4\n", "v 1 2 3 4 5\n"}) {
+    GMDL_Obj * obj = load_text(line);
+    ASSERT_NE(obj, nullptr) << line;
+    EXPECT_EQ(obj->colors, nullptr) << line;
+    EXPECT_EQ(obj->vertex_count, 1u) << line;
+    EXPECT_FLOAT_EQ(obj->vertices[0].x, 1.0f) << line;
+    gmdl_obj_free(obj);
+  }
+  GMDL_Obj * six = load_text("v 1 2 3 4 5 6\n");
+  ASSERT_NE(six, nullptr);
+  ASSERT_NE(six->colors, nullptr);
+  EXPECT_TRUE(six->colors[0].present);
+  EXPECT_FLOAT_EQ(six->colors[0].r, 4.0f);
+  gmdl_obj_free(six);
+}
+
+// Seven numbers might have been meant as `x y z w r g b`, but Blender reads
+// the colour from fields four to six regardless and so does this. Recorded
+// because it is a guess either way and the next person should see which guess
+// was made and on what evidence.
+TEST(ObjParse, ASeventhNumberDoesNotMoveTheColour) {
+  GMDL_Obj * obj = load_text("v 1 2 3 4 5 6 7\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_NE(obj->colors, nullptr);
+  EXPECT_FLOAT_EQ(obj->colors[0].r, 4.0f);
+  EXPECT_FLOAT_EQ(obj->colors[0].g, 5.0f);
+  EXPECT_FLOAT_EQ(obj->colors[0].b, 6.0f);
+  gmdl_obj_free(obj);
+}
+
+// Colours are recorded as written. Blender throws away every colour in a file
+// containing a negative component and converts anything above 1 out of sRGB;
+// both are decisions for whoever renders this, and a parser that made them
+// would leave no way back to what the file said.
+TEST(ObjParse, AColourOutsideZeroToOneIsKeptAsWritten) {
+  GMDL_Obj * obj = load_text("v 0 0 0 -0.5 255 1.5\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_NE(obj->colors, nullptr);
+  EXPECT_FLOAT_EQ(obj->colors[0].r, -0.5f);
+  EXPECT_FLOAT_EQ(obj->colors[0].g, 255.0f);
+  EXPECT_FLOAT_EQ(obj->colors[0].b, 1.5f);
+  gmdl_obj_free(obj);
+}
+
+// A file may colour some vertices and not others. The array is indexed by
+// vertex number, so the uncoloured ones need an entry too - and the entry has
+// to say it is not a colour, or "white" and "no colour" become the same
+// thing. Blender's answer is to discard every colour in such a file; this
+// keeps them, because discarding is something the caller can still do.
+TEST(ObjParse, ColoursMayBeMissingFromSomeVertices) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\n"      // before the first colour: backfilled
+      "v 1 0 0 1 0 0\n"
+      "v 2 0 0\n"      // after one: appended as absent
+      "v 3 0 0 0 0 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->vertex_count, 4u);
+  ASSERT_NE(obj->colors, nullptr);
+  ASSERT_EQ(obj->color_count, 4u);
+  EXPECT_FALSE(obj->colors[0].present);
+  EXPECT_TRUE(obj->colors[1].present);
+  EXPECT_FALSE(obj->colors[2].present);
+  EXPECT_TRUE(obj->colors[3].present);
+  // An absent entry holds white, so a consumer that ignores `present` and
+  // multiplies straight through still gets the unmodified vertex.
+  EXPECT_FLOAT_EQ(obj->colors[0].r, 1.0f);
+  EXPECT_FLOAT_EQ(obj->colors[0].g, 1.0f);
+  EXPECT_FLOAT_EQ(obj->colors[0].b, 1.0f);
+  gmdl_obj_free(obj);
+}
+
+// The backfill has to reach an arbitrary distance back, not just one vertex.
+// A single-vertex prefix would pass against a loop that ran once.
+TEST(ObjParse, TheBackfillReachesEveryEarlierVertex) {
+  std::string text;
+  for (int i = 0; i < 300; i++) {
+    text += "v " + std::to_string(i) + " 0 0\n";
+  }
+  text += "v 999 0 0 0.25 0.5 0.75\n";
+  GMDL_Obj * obj = load_text(text);
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->vertex_count, 301u);
+  ASSERT_EQ(obj->color_count, 301u);
+  for (size_t i = 0; i < 300; i++) {
+    ASSERT_FALSE(obj->colors[i].present) << "vertex " << i;
+  }
+  EXPECT_TRUE(obj->colors[300].present);
+  EXPECT_FLOAT_EQ(obj->colors[300].g, 0.5f);
+  gmdl_obj_free(obj);
+}
+
+// Six tokens where three of them are not numbers is three numbers, so no
+// colour - the count is of numbers, not of tokens.
+TEST(ObjParse, WordsWhereAColourWouldBeAreNotAColour) {
+  GMDL_Obj * obj = load_text("v 1 2 3 red green blue\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->colors, nullptr);
+  EXPECT_FLOAT_EQ(obj->vertices[0].z, 3.0f);
+  gmdl_obj_free(obj);
 }
 
 // OBJ indices are 1-based in the file and stored 0-based.
@@ -881,6 +1046,66 @@ TEST(ObjDump, FloatsSurviveTheRoundTrip) {
   gmdl_obj_free(second);
 }
 
+// A colour that was read has to be written, or the library quietly loses it
+// on the way back out - which is the same defect as never reading it, moved
+// one file along.
+TEST(ObjDump, ColoursSurviveTheRoundTrip) {
+  const std::string source =
+      "v 0 0 0 1 0 0\n"
+      "v 1 0 0\n" // no colour, in a file that has them
+      "v 0 1 0 0.25 0.5 0.75\n"
+      "f 1 2 3\n";
+  GMDL_Obj * first = load_text(source);
+  ASSERT_NE(first, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(first, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * second = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &second), GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  // Against the source, not just against each other: a library that dropped
+  // colours entirely would give both sides a count of zero, the loop below
+  // would compare nothing, and the round trip would agree about nothing at
+  // all. Measured - removing the steal left this test green.
+  ASSERT_EQ(first->color_count, 3u);
+  ASSERT_EQ(second->color_count, first->color_count);
+  for (size_t i = 0; i < first->color_count; i++) {
+    EXPECT_EQ(second->colors[i].present, first->colors[i].present) << i;
+    EXPECT_FLOAT_EQ(second->colors[i].r, first->colors[i].r) << i;
+    EXPECT_FLOAT_EQ(second->colors[i].g, first->colors[i].g) << i;
+    EXPECT_FLOAT_EQ(second->colors[i].b, first->colors[i].b) << i;
+  }
+  gmdl_obj_free(second);
+  gmdl_obj_free(first);
+}
+
+// The round trip above would still pass if the writer emitted white for the
+// uncoloured vertex, because white reads back as a colour that happens to
+// equal the default. Read the bytes instead: the line must have three numbers
+// on it and not six.
+TEST(ObjDump, AnUncolouredVertexIsWrittenWithoutAColour) {
+  GMDL_Obj * obj = load_text("v 0 0 0 1 0 0\nv 1 2 3\n");
+  ASSERT_NE(obj, nullptr);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  std::ifstream in(out.path());
+  std::string text((std::istreambuf_iterator<char>(in)),
+      std::istreambuf_iterator<char>());
+  EXPECT_NE(text.find("v 0 0 0 1 0 0\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("v 1 2 3\n"), std::string::npos) << text;
+  gmdl_obj_free(obj);
+}
+
 TEST(ObjDump, FacesBeforeTheFirstGroupAreWritten) {
   // Face 0 belongs to no group, so the group loop never reached it and the
   // dump lost it. The reload succeeded with one face fewer, which is why
@@ -985,6 +1210,10 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "csh -date\n"
                           "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
                           "v 2 0 0\nv 2 1 0\n"
+                          // One coloured vertex among uncoloured ones, so the
+                          // sweep walks both arms of the vertex writer. The
+                          // fifth time a new directive arrived without one.
+                          "v 3 0 0 0.5 0.25 0.125\n"
                           "vt 0 0\nvt 1 0\n"
                           "vn 0 0 1\n"
                           "l 1 2\n"
