@@ -61,6 +61,85 @@ static const char * gmdl_mtl_refl_type_name(GMDL_Mtl_Refl_Type type) {
   }
 }
 
+/**
+ * Write one texture map: its directive, the options the file stated, its path.
+ *
+ * Only options with a bit in `present` are written, so a map that came in
+ * bare goes out bare. The vector options are written in full even when the
+ * file gave one or two components, because the unstated ones hold the
+ * format's defaults and reparse to the same values.
+ *
+ * @param fd Destination.
+ * @param directive The keyword, e.g. "map_Kd".
+ * @param map The map. Nothing is written when its path is NULL.
+ * @param type_name `-type` for a typed `refl`, else NULL.
+ * @return 0, or -1 on a write failure.
+ */
+static int mtl_dump_map(FILE * fd, const char * directive,
+    const GMDL_Mtl_Map * map, const char * type_name) {
+  if (!map->path) {
+    return 0;
+  }
+  if (fprintf(fd, "%s", directive) < 0) {
+    return -1;
+  }
+  if (type_name && fprintf(fd, " -type %s", type_name) < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_BLENDU)
+      && fprintf(fd, " -blendu %s", map->blendu ? "on" : "off") < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_BLENDV)
+      && fprintf(fd, " -blendv %s", map->blendv ? "on" : "off") < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_CLAMP)
+      && fprintf(fd, " -clamp %s", map->clamp ? "on" : "off") < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_BOOST)
+      && fprintf(fd, " -boost %.9g", (double)map->boost) < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_BM)
+      && fprintf(fd, " -bm %.9g", (double)map->bm) < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_MM)
+      && fprintf(fd, " -mm %.9g %.9g", (double)map->mm[0], (double)map->mm[1])
+          < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_O)
+      && fprintf(fd, " -o %.9g %.9g %.9g", (double)map->o[0],
+             (double)map->o[1], (double)map->o[2])
+          < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_S)
+      && fprintf(fd, " -s %.9g %.9g %.9g", (double)map->s[0],
+             (double)map->s[1], (double)map->s[2])
+          < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_T)
+      && fprintf(fd, " -t %.9g %.9g %.9g", (double)map->t[0],
+             (double)map->t[1], (double)map->t[2])
+          < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_TEXRES)
+      && fprintf(fd, " -texres %d", map->texres) < 0) {
+    return -1;
+  }
+  if ((map->present & GMDL_MTL_MAP_HAS_IMFCHAN)
+      && fprintf(fd, " -imfchan %c", "rgbmlz"[map->imfchan]) < 0) {
+    return -1;
+  }
+  return fprintf(fd, " %s\n", map->path) < 0 ? -1 : 0;
+}
+
 static GMDL_Result mtl_dump_pinned(const GMDL_Mtl * mtl, FILE * fd) {
   if (!mtl || !fd) {
     return GMDL_ERR_INVALID;
@@ -160,43 +239,19 @@ static GMDL_Result mtl_dump_pinned(const GMDL_Mtl * mtl, FILE * fd) {
     // "map_bump", the spelling the format's own description leads with -
     // the two are one property here, so the round trip is of the material
     // and not of the keyword that set it.
-    if (m->map_Ka && fprintf(fd, "map_Ka %s\n", m->map_Ka) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->map_Kd && fprintf(fd, "map_Kd %s\n", m->map_Kd) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->map_Ks && fprintf(fd, "map_Ks %s\n", m->map_Ks) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->map_Ns && fprintf(fd, "map_Ns %s\n", m->map_Ns) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->map_d && fprintf(fd, "map_d %s\n", m->map_d) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->map_bump && fprintf(fd, "map_bump %s\n", m->map_bump) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->map_Ke && fprintf(fd, "map_Ke %s\n", m->map_Ke) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->map_Pr && fprintf(fd, "map_Pr %s\n", m->map_Pr) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->map_Pm && fprintf(fd, "map_Pm %s\n", m->map_Pm) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->map_Ps && fprintf(fd, "map_Ps %s\n", m->map_Ps) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->norm && fprintf(fd, "norm %s\n", m->norm) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->disp && fprintf(fd, "disp %s\n", m->disp) < 0) {
-      return GMDL_ERR_IO;
-    }
-    if (m->decal && fprintf(fd, "decal %s\n", m->decal) < 0) {
+    if (mtl_dump_map(fd, "map_Ka", &m->map_Ka, NULL) < 0
+        || mtl_dump_map(fd, "map_Kd", &m->map_Kd, NULL) < 0
+        || mtl_dump_map(fd, "map_Ks", &m->map_Ks, NULL) < 0
+        || mtl_dump_map(fd, "map_Ns", &m->map_Ns, NULL) < 0
+        || mtl_dump_map(fd, "map_d", &m->map_d, NULL) < 0
+        || mtl_dump_map(fd, "map_bump", &m->map_bump, NULL) < 0
+        || mtl_dump_map(fd, "map_Ke", &m->map_Ke, NULL) < 0
+        || mtl_dump_map(fd, "map_Pr", &m->map_Pr, NULL) < 0
+        || mtl_dump_map(fd, "map_Pm", &m->map_Pm, NULL) < 0
+        || mtl_dump_map(fd, "map_Ps", &m->map_Ps, NULL) < 0
+        || mtl_dump_map(fd, "norm", &m->norm, NULL) < 0
+        || mtl_dump_map(fd, "disp", &m->disp, NULL) < 0
+        || mtl_dump_map(fd, "decal", &m->decal, NULL) < 0) {
       return GMDL_ERR_IO;
     }
     // A cube map is six lines, so this walks the slots. The untyped slot
@@ -204,14 +259,10 @@ static GMDL_Result mtl_dump_pinned(const GMDL_Mtl * mtl, FILE * fd) {
     // inventing a surface the file never named would be worse than echoing
     // the omission.
     for (size_t j = 0; j < GMDL_MTL_REFL_COUNT; j++) {
-      if (!m->refl[j]) {
-        continue;
-      }
-      int written = j == GMDL_MTL_REFL_UNTYPED
-          ? fprintf(fd, "refl %s\n", m->refl[j])
-          : fprintf(fd, "refl -type %s %s\n", gmdl_mtl_refl_type_name(
-                (GMDL_Mtl_Refl_Type)j), m->refl[j]);
-      if (written < 0) {
+      const char * type_name = j == GMDL_MTL_REFL_UNTYPED
+          ? NULL
+          : gmdl_mtl_refl_type_name((GMDL_Mtl_Refl_Type)j);
+      if (mtl_dump_map(fd, "refl", &m->refl[j], type_name) < 0) {
         return GMDL_ERR_IO;
       }
     }

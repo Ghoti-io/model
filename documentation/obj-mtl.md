@@ -504,8 +504,49 @@ accept input the reference rejects, which is a worse disagreement than the
 one it would fix, so the accepted set is exactly the measured one and a test
 pins the rejected spellings too.
 
-**The path is the whole of the rest of the line**, with trailing blanks
-removed, so `map_Kd my tex.png` names one file called `my tex.png`. The
+**Options come first, then the path.** Each option is introduced by a leading
+`-`:
+
+| Option | Field | Default |
+| --- | --- | --- |
+| `-blendu on\|off` | `blendu` | on |
+| `-blendv on\|off` | `blendv` | on |
+| `-clamp on\|off` | `clamp` | off |
+| `-boost f` | `boost` | 0 |
+| `-bm f` | `bm` | 1 |
+| `-mm base gain` | `mm[2]` | 0, 1 |
+| `-o u [v [w]]` | `o[3]` | 0, 0, 0 |
+| `-s u [v [w]]` | `s[3]` | 1, 1, 1 |
+| `-t u [v [w]]` | `t[3]` | 0, 0, 0 |
+| `-texres n` | `texres` | 0 |
+| `-imfchan r\|g\|b\|m\|l\|z` | `imfchan` | `l` |
+| `-type <name>` | the `refl` slot (4.6) | untyped |
+
+Each field holds its default whether or not the file said so, and the map's
+own `present` mask says which were stated - the same division as 4.2, for the
+same reason.
+
+**These were `GMDL_ERR_UNSUPPORTED` until the `map_Bump` alias was added, and
+that combination was untenable.** Blender writes `map_Bump -bm 0.350000
+nrm.png` for every normal or bump map it exports. While `map_Bump` went
+unrecognised the line was skipped and the file loaded without its bump map;
+recognising the spelling without the option turned that into a refusal of the
+whole file. The first is silent data loss, the second is worse, and
+implementing the options is the only answer that is neither.
+
+An option this library does not know is still `GMDL_ERR_UNSUPPORTED`. Several
+of the documented ones change what a map *means* - `-clamp` and `-imfchan`
+among them - so handing a consumer the path while dropping an option it could
+not read would describe a material the file did not.
+
+**A vector option takes only as many components as are really numbers.**
+`map_Kd -o 1 2 2.png` is an origin of `(1, 2, 0)` and a path of `2.png`: a
+token counts as a component only when the conversion consumes all of it, so
+the filename cannot be eaten a digit at a time.
+
+**The path is the whole of the rest of the line** once the options are
+consumed, with trailing blanks removed, so `map_Kd my tex.png` names one file
+called `my tex.png`. The
 format's own description does not say; both Blender 4.3 and VTK 9.3 read it
 this way, and that agreement is the only reason to prefer it over taking the
 first token. Trailing blanks are dropped because Blender drops them and VTK
@@ -884,10 +925,6 @@ section 12 is where they are written down.
 - **`shadow_obj` and `trace_obj`.** The two render attributes carrying real
   data - a path each. Recording them means deciding where per-state
   attributes live, which 3.14 explains is the blocker for all nine.
-- **Texture map options.** `-o`, `-s`, `-clamp`, `-bm` and the rest are
-  `GMDL_ERR_UNSUPPORTED` today (4.5). Implementing them means a place to put
-  them and a decision about `-bm`, which Blender applies and VTK 9.3 does not
-  parse at all.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is the one place 4.5 takes it
   further than either.

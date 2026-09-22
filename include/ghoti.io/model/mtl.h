@@ -102,18 +102,85 @@ typedef enum GMDL_Mtl_Refl_Type {
 } GMDL_Mtl_Refl_Type;
 
 /**
+ * @brief Which of a texture map's options the file actually stated.
+ *
+ * Every option field carries the format's documented default whether or not
+ * the file said so, so a consumer that ignores this mask still behaves
+ * correctly. The mask is for the consumer that must tell "the file asked for
+ * the default" from "the file did not ask" - a writer, mainly.
+ */
+typedef enum GMDL_Mtl_Map_Present {
+  GMDL_MTL_MAP_HAS_BLENDU = 1u << 0,  ///< `-blendu`
+  GMDL_MTL_MAP_HAS_BLENDV = 1u << 1,  ///< `-blendv`
+  GMDL_MTL_MAP_HAS_BOOST = 1u << 2,   ///< `-boost`
+  GMDL_MTL_MAP_HAS_MM = 1u << 3,      ///< `-mm`
+  GMDL_MTL_MAP_HAS_O = 1u << 4,       ///< `-o`
+  GMDL_MTL_MAP_HAS_S = 1u << 5,       ///< `-s`
+  GMDL_MTL_MAP_HAS_T = 1u << 6,       ///< `-t`
+  GMDL_MTL_MAP_HAS_TEXRES = 1u << 7,  ///< `-texres`
+  GMDL_MTL_MAP_HAS_CLAMP = 1u << 8,   ///< `-clamp`
+  GMDL_MTL_MAP_HAS_BM = 1u << 9,      ///< `-bm`
+  GMDL_MTL_MAP_HAS_IMFCHAN = 1u << 10 ///< `-imfchan`
+} GMDL_Mtl_Map_Present;
+
+/**
+ * @brief The channel `-imfchan` selects from a scalar map's image.
+ */
+typedef enum GMDL_Mtl_Imfchan {
+  GMDL_MTL_IMFCHAN_R = 0, ///< Red.
+  GMDL_MTL_IMFCHAN_G,     ///< Green.
+  GMDL_MTL_IMFCHAN_B,     ///< Blue.
+  GMDL_MTL_IMFCHAN_M,     ///< Matte.
+  GMDL_MTL_IMFCHAN_L,     ///< Luminance - the default for a scalar map.
+  GMDL_MTL_IMFCHAN_Z      ///< Depth.
+} GMDL_Mtl_Imfchan;
+
+/**
+ * @brief A texture map: a path, and the options stated before it.
+ *
+ * `map_Kd -s 2 2 2 brick.png` is one map with a scale. Options precede the
+ * path, each introduced by a leading `-`, and the path is whatever follows
+ * the last of them (4.5).
+ */
+typedef struct GMDL_Mtl_Map {
+  /** The file the map names, or NULL when the material stated no such map. */
+  char * path;
+  /** Bitmask of ::GMDL_Mtl_Map_Present - which options the file stated. */
+  uint32_t present;
+  bool blendu; ///< `-blendu`; blending in u. Default on.
+  bool blendv; ///< `-blendv`; blending in v. Default on.
+  bool clamp;  ///< `-clamp`; clamp rather than tile. Default off.
+  float boost; ///< `-boost`; mip-map sharpening. Default 0.
+  float mm[2]; ///< `-mm base gain`. Defaults 0 and 1.
+  float o[3];  ///< `-o u v w`; origin offset. Defaults 0.
+  float s[3];  ///< `-s u v w`; scale. Defaults 1.
+  float t[3];  ///< `-t u v w`; turbulence. Defaults 0.
+  int32_t texres; ///< `-texres`; resolution. Default 0.
+  /**
+   * `-bm`; bump multiplier. Default 1.
+   *
+   * Blender writes this on every normal and bump map it exports
+   * (`map_Bump -bm 0.350000 nrm.png`), so a reader that refuses it refuses
+   * most of what Blender produces.
+   */
+  float bm;
+  GMDL_Mtl_Imfchan imfchan; ///< `-imfchan`. Default luminance.
+} GMDL_Mtl_Map;
+
+/**
  * @brief A single material definition.
  *
  * Each property field holds a usable value whatever the file said; `present`
  * says which of them the file actually stated. A renderer can ignore
  * `present` and get sensible material; a writer must not.
  *
- * The texture map paths are the exception, and need no bit in `present`: a
- * pointer says for itself whether the file stated one, because NULL is not a
- * value any file can ask for. They are stored exactly as the file wrote
- * them - relative paths stay relative, and no separator is translated - so
- * resolving one against the directory the `.mtl` came from is the caller's
- * job, and the caller is the only one that knows that directory.
+ * The texture maps need no bit in `present`: a ::GMDL_Mtl_Map carries a NULL
+ * `path` when the file stated no such map, because NULL is not a value any
+ * file can ask for, and its own `present` mask covers its options. Paths are
+ * stored exactly as the file wrote them - relative paths stay relative, and
+ * no separator is translated - so resolving one against the directory the
+ * `.mtl` came from is the caller's job, and the caller is the only one that
+ * knows that directory.
  */
 typedef struct {
   char name[GMDL_MTL_MAX_NAME_LENGTH]; ///< Material name.
@@ -150,28 +217,29 @@ typedef struct {
   float anisor; ///< PBR anisotropy rotation.
   bool map_aat; ///< `map_aat on` requests texture antialiasing.
 
-  char * map_Ka; ///< `map_Ka` path, or NULL when the file stated none.
-  char * map_Kd; ///< `map_Kd` path, or NULL when the file stated none.
-  char * map_Ks; ///< `map_Ks` path, or NULL when the file stated none.
-  char * map_Ns; ///< `map_Ns` path, or NULL when the file stated none.
-  char * map_d;  ///< `map_d` path, or NULL when the file stated none.
-  /** `map_bump` or `bump` path, or NULL. The two spell one property. */
-  char * map_bump;
-  char * map_Ke; ///< `map_Ke` path, or NULL.
-  char * map_Pr; ///< `map_Pr` path, or NULL.
-  char * map_Pm; ///< `map_Pm` path, or NULL.
-  char * map_Ps; ///< `map_Ps` path, or NULL.
-  char * norm;   ///< `norm` path - a PBR normal map - or NULL.
-  char * disp;   ///< `disp` path - a displacement map - or NULL.
-  char * decal;  ///< `decal` path, or NULL.
+  GMDL_Mtl_Map map_Ka; ///< `map_Ka`; `path` NULL when none was stated.
+  GMDL_Mtl_Map map_Kd; ///< `map_Kd`.
+  GMDL_Mtl_Map map_Ks; ///< `map_Ks`.
+  GMDL_Mtl_Map map_Ns; ///< `map_Ns`.
+  GMDL_Mtl_Map map_d;  ///< `map_d`.
+  /** `map_bump`, `bump` or `map_Bump`. The three spell one property. */
+  GMDL_Mtl_Map map_bump;
+  GMDL_Mtl_Map map_Ke; ///< `map_Ke`.
+  GMDL_Mtl_Map map_Pr; ///< `map_Pr`.
+  GMDL_Mtl_Map map_Pm; ///< `map_Pm`.
+  GMDL_Mtl_Map map_Ps; ///< `map_Ps`.
+  GMDL_Mtl_Map norm;   ///< `norm` - a PBR normal map.
+  GMDL_Mtl_Map disp;   ///< `disp` - a displacement map.
+  GMDL_Mtl_Map decal;  ///< `decal`.
   /**
-   * `refl` paths, indexed by ::GMDL_Mtl_Refl_Type; each NULL when unstated.
+   * `refl` maps, indexed by ::GMDL_Mtl_Refl_Type; each `path` NULL when
+   * unstated.
    *
    * A cube map arrives as six separate `refl` lines, so this is an array
-   * rather than one path: they are one property of the material stated
+   * rather than one map: they are one property of the material stated
    * across several directives, which nothing else in MTL does.
    */
-  char * refl[GMDL_MTL_REFL_COUNT];
+  GMDL_Mtl_Map refl[GMDL_MTL_REFL_COUNT];
 } GMDL_Mtl_Material;
 
 /**

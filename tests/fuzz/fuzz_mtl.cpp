@@ -54,17 +54,41 @@ bool ends_with_backslash(const char * text) {
  * the path "a\\", which is how such a library is reached at all. The format
  * has no escape for it.
  */
-/** Every path a material can hold, in one place, so nothing is forgotten. */
-void collect_paths(const GMDL_Mtl_Material * m, std::vector<const char *> & out) {
-  const char * const fixed[] = {m->map_Ka, m->map_Kd, m->map_Ks, m->map_Ns,
-      m->map_d, m->map_bump, m->map_Ke, m->map_Pr, m->map_Pm, m->map_Ps,
-      m->norm, m->disp, m->decal};
-  for (const char * p : fixed) {
+/** Every map a material can hold, in one place, so nothing is forgotten. */
+void collect_maps(
+    const GMDL_Mtl_Material * m, std::vector<const GMDL_Mtl_Map *> & out) {
+  const GMDL_Mtl_Map * const fixed[] = {&m->map_Ka, &m->map_Kd, &m->map_Ks,
+      &m->map_Ns, &m->map_d, &m->map_bump, &m->map_Ke, &m->map_Pr, &m->map_Pm,
+      &m->map_Ps, &m->norm, &m->disp, &m->decal};
+  for (const GMDL_Mtl_Map * p : fixed) {
     out.push_back(p);
   }
   for (size_t i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
-    out.push_back(m->refl[i]);
+    out.push_back(&m->refl[i]);
   }
+}
+
+/** Whether two maps say the same thing - path, options and all. */
+bool same_map(const GMDL_Mtl_Map * a, const GMDL_Mtl_Map * b) {
+  if (!a->path || !b->path) {
+    return a->path == b->path;
+  }
+  if (strcmp(a->path, b->path) != 0 || a->present != b->present) {
+    return false;
+  }
+  if (a->blendu != b->blendu || a->blendv != b->blendv || a->clamp != b->clamp
+      || a->texres != b->texres || a->imfchan != b->imfchan) {
+    return false;
+  }
+  if (memcmp(&a->boost, &b->boost, sizeof(a->boost)) != 0
+      || memcmp(a->mm, b->mm, sizeof(a->mm)) != 0
+      || memcmp(a->o, b->o, sizeof(a->o)) != 0
+      || memcmp(a->s, b->s, sizeof(a->s)) != 0
+      || memcmp(a->t, b->t, sizeof(a->t)) != 0
+      || memcmp(&a->bm, &b->bm, sizeof(a->bm)) != 0) {
+    return false;
+  }
+  return true;
 }
 
 bool is_representable(const GMDL_Mtl * mtl) {
@@ -73,10 +97,10 @@ bool is_representable(const GMDL_Mtl * mtl) {
     if (ends_with_backslash(m->name)) {
       return false;
     }
-    std::vector<const char *> paths;
-    collect_paths(m, paths);
-    for (const char * path : paths) {
-      if (ends_with_backslash(path)) {
+    std::vector<const GMDL_Mtl_Map *> maps;
+    collect_maps(m, maps);
+    for (const GMDL_Mtl_Map * map : maps) {
+      if (ends_with_backslash(map->path)) {
         return false;
       }
     }
@@ -166,13 +190,13 @@ void check_round_trip(const GMDL_Mtl * mtl) {
     // thing would produce. Collected rather than listed, so a path added to
     // the material cannot be left out of the comparison and quietly narrow
     // what this harness checks.
-    std::vector<const char *> pa;
-    std::vector<const char *> pb;
-    collect_paths(a, pa);
-    collect_paths(b, pb);
-    REQUIRE(pa.size() == pb.size(), "path count");
+    std::vector<const GMDL_Mtl_Map *> pa;
+    std::vector<const GMDL_Mtl_Map *> pb;
+    collect_maps(a, pa);
+    collect_maps(b, pb);
+    REQUIRE(pa.size() == pb.size(), "map count");
     for (size_t k = 0; k < pa.size(); k++) {
-      REQUIRE(same_path(pa[k], pb[k]), "map path");
+      REQUIRE(same_map(pa[k], pb[k]), "map path or option");
     }
   }
 

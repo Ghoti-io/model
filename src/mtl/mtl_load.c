@@ -130,21 +130,21 @@ static GMDL_Result mtl_parse_dissolve(const char * rest, float * out) {
  */
 static void mtl_material_free_paths(
     const GMDL_Allocator * allocator, GMDL_Mtl_Material * material) {
-  gcu_allocator_free(allocator, material->map_Ka);
-  gcu_allocator_free(allocator, material->map_Kd);
-  gcu_allocator_free(allocator, material->map_Ks);
-  gcu_allocator_free(allocator, material->map_Ns);
-  gcu_allocator_free(allocator, material->map_d);
-  gcu_allocator_free(allocator, material->map_bump);
-  gcu_allocator_free(allocator, material->map_Ke);
-  gcu_allocator_free(allocator, material->map_Pr);
-  gcu_allocator_free(allocator, material->map_Pm);
-  gcu_allocator_free(allocator, material->map_Ps);
-  gcu_allocator_free(allocator, material->norm);
-  gcu_allocator_free(allocator, material->disp);
-  gcu_allocator_free(allocator, material->decal);
+  gcu_allocator_free(allocator, material->map_Ka.path);
+  gcu_allocator_free(allocator, material->map_Kd.path);
+  gcu_allocator_free(allocator, material->map_Ks.path);
+  gcu_allocator_free(allocator, material->map_Ns.path);
+  gcu_allocator_free(allocator, material->map_d.path);
+  gcu_allocator_free(allocator, material->map_bump.path);
+  gcu_allocator_free(allocator, material->map_Ke.path);
+  gcu_allocator_free(allocator, material->map_Pr.path);
+  gcu_allocator_free(allocator, material->map_Pm.path);
+  gcu_allocator_free(allocator, material->map_Ps.path);
+  gcu_allocator_free(allocator, material->norm.path);
+  gcu_allocator_free(allocator, material->disp.path);
+  gcu_allocator_free(allocator, material->decal.path);
   for (size_t i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
-    gcu_allocator_free(allocator, material->refl[i]);
+    gcu_allocator_free(allocator, material->refl[i].path);
   }
 }
 
@@ -172,14 +172,229 @@ static void mtl_material_free_paths(
  * @return ::GMDL_OK, ::GMDL_ERR_FORMAT for no filename,
  *   ::GMDL_ERR_UNSUPPORTED for options, or ::GMDL_ERR_OOM.
  */
-static GMDL_Result mtl_parse_map(
-    const char * rest, const GMDL_Allocator * allocator, char ** slot) {
-  if (*rest == '-') {
-    return GMDL_ERR_UNSUPPORTED;
+/** Fill a map with the defaults the format documents for an unstated option. */
+static void mtl_map_defaults(GMDL_Mtl_Map * map) {
+  memset(map, 0, sizeof(*map));
+  map->blendu = true;
+  map->blendv = true;
+  map->mm[1] = 1.0f;
+  map->s[0] = map->s[1] = map->s[2] = 1.0f;
+  map->bm = 1.0f;
+  map->imfchan = GMDL_MTL_IMFCHAN_L;
+}
+
+/** The next whitespace-delimited token, with its length. */
+static const char * mtl_next_token(const char * cursor, size_t * length) {
+  while (*cursor == ' ' || *cursor == '\t') {
+    cursor++;
+  }
+  const char * start = cursor;
+  while (*cursor && *cursor != ' ' && *cursor != '\t') {
+    cursor++;
+  }
+  *length = (size_t)(cursor - start);
+  return start;
+}
+
+/** Is @p token exactly @p name? */
+static bool mtl_token_is(const char * token, size_t length, const char * name) {
+  return strlen(name) == length && memcmp(token, name, length) == 0;
+}
+
+/**
+ * Read a token as a float, but only if the WHOLE token is one.
+ *
+ * This is what keeps an option's arguments from eating the path. "-o 1 2"
+ * followed by "2.png" must stop at two arguments: strtof would happily take
+ * the "2" off the front of "2.png" and leave ".png" behind as the filename.
+ * A token counts as a number only when the conversion consumes all of it.
+ */
+static bool mtl_token_float(const char * token, size_t length, float * out) {
+  char buffer[64];
+  if (length == 0 || length >= sizeof(buffer)) {
+    return false;
+  }
+  memcpy(buffer, token, length);
+  buffer[length] = '\0';
+  char * end = NULL;
+  float value = strtof(buffer, &end);
+  if (end != buffer + length) {
+    return false;
+  }
+  *out = value;
+  return true;
+}
+
+/** Read up to @p max floats, stopping at the first token that is not one. */
+static size_t mtl_take_floats(
+    const char ** cursor, float * out, size_t max, size_t min) {
+  size_t taken = 0;
+  while (taken < max) {
+    size_t length = 0;
+    const char * token = mtl_next_token(*cursor, &length);
+    float value = 0.0f;
+    if (length == 0 || !mtl_token_float(token, length, &value)) {
+      break;
+    }
+    out[taken++] = value;
+    *cursor = token + length;
+  }
+  return taken >= min ? taken : 0;
+}
+
+/** Read an "on"/"off" argument. */
+static bool mtl_take_toggle(const char ** cursor, bool * out) {
+  size_t length = 0;
+  const char * token = mtl_next_token(*cursor, &length);
+  if (mtl_token_is(token, length, "on")) {
+    *out = true;
+  }
+  else if (mtl_token_is(token, length, "off")) {
+    *out = false;
+  }
+  else {
+    return false;
+  }
+  *cursor = token + length;
+  return true;
+}
+
+/** Names for `-type`, indexed by ::GMDL_Mtl_Refl_Type. */
+static const char * const kReflTypeNames[GMDL_MTL_REFL_COUNT] = {"", "sphere",
+    "cube_top", "cube_bottom", "cube_front", "cube_back", "cube_left",
+    "cube_right"};
+
+/**
+ * Read a texture map: its options, then its path.
+ *
+ * Options come first, each introduced by a leading `-`; the path is the whole
+ * of the rest of the line once they are consumed (4.5). An option this
+ * library does not know is GMDL_ERR_UNSUPPORTED rather than skipped, because
+ * several of them change what the map means - `-clamp` and `-imfchan` among
+ * them - and a renderer given the path without them draws something the file
+ * did not describe.
+ *
+ * @param rest The text after the directive.
+ * @param allocator Allocator for the path.
+ * @param slot Receives the map. Its previous path is freed.
+ * @param out_type Receives `-type` for a `refl`, or NULL where `-type` is not
+ *   a legal option.
+ */
+static GMDL_Result mtl_parse_map(const char * rest,
+    const GMDL_Allocator * allocator, GMDL_Mtl_Map * slot,
+    GMDL_Mtl_Refl_Type * out_type) {
+  GMDL_Mtl_Map parsed;
+  mtl_map_defaults(&parsed);
+  if (out_type) {
+    *out_type = GMDL_MTL_REFL_UNTYPED;
   }
 
-  size_t length = strlen(rest);
-  while (length > 0 && (rest[length - 1] == ' ' || rest[length - 1] == '\t')) {
+  const char * cursor = rest;
+  for (;;) {
+    size_t length = 0;
+    const char * token = mtl_next_token(cursor, &length);
+    if (length == 0 || token[0] != '-') {
+      break; // No more options; whatever is left is the path.
+    }
+
+    const char * after = token + length;
+    const char * argument = after;
+    bool ok = true;
+
+    if (mtl_token_is(token, length, "-blendu")) {
+      ok = mtl_take_toggle(&argument, &parsed.blendu);
+      parsed.present |= GMDL_MTL_MAP_HAS_BLENDU;
+    }
+    else if (mtl_token_is(token, length, "-blendv")) {
+      ok = mtl_take_toggle(&argument, &parsed.blendv);
+      parsed.present |= GMDL_MTL_MAP_HAS_BLENDV;
+    }
+    else if (mtl_token_is(token, length, "-clamp")) {
+      ok = mtl_take_toggle(&argument, &parsed.clamp);
+      parsed.present |= GMDL_MTL_MAP_HAS_CLAMP;
+    }
+    else if (mtl_token_is(token, length, "-boost")) {
+      ok = mtl_take_floats(&argument, &parsed.boost, 1, 1) == 1;
+      parsed.present |= GMDL_MTL_MAP_HAS_BOOST;
+    }
+    else if (mtl_token_is(token, length, "-bm")) {
+      ok = mtl_take_floats(&argument, &parsed.bm, 1, 1) == 1;
+      parsed.present |= GMDL_MTL_MAP_HAS_BM;
+    }
+    else if (mtl_token_is(token, length, "-mm")) {
+      ok = mtl_take_floats(&argument, parsed.mm, 2, 2) == 2;
+      parsed.present |= GMDL_MTL_MAP_HAS_MM;
+    }
+    else if (mtl_token_is(token, length, "-o")) {
+      ok = mtl_take_floats(&argument, parsed.o, 3, 1) != 0;
+      parsed.present |= GMDL_MTL_MAP_HAS_O;
+    }
+    else if (mtl_token_is(token, length, "-s")) {
+      ok = mtl_take_floats(&argument, parsed.s, 3, 1) != 0;
+      parsed.present |= GMDL_MTL_MAP_HAS_S;
+    }
+    else if (mtl_token_is(token, length, "-t")) {
+      ok = mtl_take_floats(&argument, parsed.t, 3, 1) != 0;
+      parsed.present |= GMDL_MTL_MAP_HAS_T;
+    }
+    else if (mtl_token_is(token, length, "-texres")) {
+      float value = 0.0f;
+      ok = mtl_take_floats(&argument, &value, 1, 1) == 1;
+      parsed.texres = (int32_t)value;
+      parsed.present |= GMDL_MTL_MAP_HAS_TEXRES;
+    }
+    else if (mtl_token_is(token, length, "-imfchan")) {
+      size_t argument_length = 0;
+      const char * name = mtl_next_token(argument, &argument_length);
+      static const char kChannels[] = "rgbmlz";
+      const char * found = (argument_length == 1)
+          ? memchr(kChannels, name[0], sizeof(kChannels) - 1)
+          : NULL;
+      if (!found) {
+        return GMDL_ERR_FORMAT;
+      }
+      parsed.imfchan = (GMDL_Mtl_Imfchan)(found - kChannels);
+      parsed.present |= GMDL_MTL_MAP_HAS_IMFCHAN;
+      argument = name + argument_length;
+    }
+    else if (mtl_token_is(token, length, "-type")) {
+      if (!out_type) {
+        return GMDL_ERR_UNSUPPORTED; // "-type" belongs to "refl" alone.
+      }
+      size_t argument_length = 0;
+      const char * name = mtl_next_token(argument, &argument_length);
+      GMDL_Mtl_Refl_Type found = GMDL_MTL_REFL_COUNT;
+      for (int i = 1; i < GMDL_MTL_REFL_COUNT; i++) {
+        if (mtl_token_is(name, argument_length, kReflTypeNames[i])) {
+          found = (GMDL_Mtl_Refl_Type)i;
+          break;
+        }
+      }
+      if (found == GMDL_MTL_REFL_COUNT) {
+        return GMDL_ERR_FORMAT;
+      }
+      *out_type = found;
+      argument = name + argument_length;
+    }
+    else {
+      // A documented option this library does not implement, or one no
+      // reference defines. Either way the map would mean something other
+      // than what we would store.
+      return GMDL_ERR_UNSUPPORTED;
+    }
+
+    if (!ok) {
+      return GMDL_ERR_FORMAT;
+    }
+    cursor = argument;
+  }
+
+  while (*cursor == ' ' || *cursor == '\t') {
+    cursor++;
+  }
+  size_t length = strlen(cursor);
+  while (length > 0
+      && (cursor[length - 1] == ' ' || cursor[length - 1] == '\t')) {
     length--;
   }
   if (length == 0) {
@@ -193,13 +408,14 @@ static GMDL_Result mtl_parse_map(
   if (!copy) {
     return GMDL_ERR_OOM;
   }
-  memcpy(copy, rest, length);
+  memcpy(copy, cursor, length);
   copy[length] = '\0';
+  parsed.path = copy;
 
   // A repeated directive means the later one: the format has no way to say
   // two maps of one kind, so the alternative is leaking the first.
-  gcu_allocator_free(allocator, *slot);
-  *slot = copy;
+  gcu_allocator_free(allocator, slot->path);
+  *slot = parsed;
   return GMDL_OK;
 }
 
@@ -226,50 +442,20 @@ static GMDL_Result mtl_parse_map(
  */
 static GMDL_Result mtl_parse_refl(const char * rest,
     const GMDL_Allocator * allocator, GMDL_Mtl_Material * material) {
-  static const struct {
-    const char * name;
-    GMDL_Mtl_Refl_Type type;
-  } types[] = {
-    {"sphere", GMDL_MTL_REFL_SPHERE},
-    {"cube_top", GMDL_MTL_REFL_CUBE_TOP},
-    {"cube_bottom", GMDL_MTL_REFL_CUBE_BOTTOM},
-    {"cube_front", GMDL_MTL_REFL_CUBE_FRONT},
-    {"cube_back", GMDL_MTL_REFL_CUBE_BACK},
-    {"cube_left", GMDL_MTL_REFL_CUBE_LEFT},
-    {"cube_right", GMDL_MTL_REFL_CUBE_RIGHT},
-  };
-
+  // The slot a "refl" belongs in is decided by an option inside it, so the
+  // map is parsed into a scratch record first and only then committed. That
+  // also means "-type" may appear anywhere among the other options rather
+  // than having to come first.
+  GMDL_Mtl_Map parsed;
+  mtl_map_defaults(&parsed);
   GMDL_Mtl_Refl_Type type = GMDL_MTL_REFL_UNTYPED;
-  if (*rest == '-') {
-    const char * after = NULL;
-    if (!gmdl_line_is(rest, "-type", &after)) {
-      return GMDL_ERR_UNSUPPORTED; // Some option other than -type.
-    }
-    char name[32];
-    if (gmdl_first_token(after, name, sizeof(name)) != GMDL_OK) {
-      // Absent, or too long to be any of the seven. Either way the line
-      // says -type and then does not name one.
-      return GMDL_ERR_FORMAT;
-    }
-    size_t index = 0;
-    for (; index < sizeof(types) / sizeof(types[0]); index++) {
-      if (strcmp(name, types[index].name) == 0) {
-        type = types[index].type;
-        break;
-      }
-    }
-    if (index == sizeof(types) / sizeof(types[0])) {
-      return GMDL_ERR_FORMAT; // A -type this format does not define.
-    }
-    rest = after + strlen(name);
-    while (*rest == ' ' || *rest == '\t') {
-      rest++;
-    }
-    if (*rest == '-') {
-      return GMDL_ERR_UNSUPPORTED; // -type, then a sampling option.
-    }
+  GMDL_Result result = mtl_parse_map(rest, allocator, &parsed, &type);
+  if (result != GMDL_OK) {
+    return result;
   }
-  return mtl_parse_map(rest, allocator, &material->refl[type]);
+  gcu_allocator_free(allocator, material->refl[type].path);
+  material->refl[type] = parsed;
+  return GMDL_OK;
 }
 
 /**
@@ -380,6 +566,20 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       // invisible, and made gmdl_mtl_dump() write "d 0" and say so out
       // loud to anything that read the result.
       material->d = 1.0f;
+      // Every map starts at the format's documented defaults, so a consumer
+      // that never looks at a map's `present` mask still gets a scale of 1
+      // and a bump multiplier of 1 rather than zeroes.
+      GMDL_Mtl_Map * maps[] = {&material->map_Ka, &material->map_Kd,
+          &material->map_Ks, &material->map_Ns, &material->map_d,
+          &material->map_bump, &material->map_Ke, &material->map_Pr,
+          &material->map_Pm, &material->map_Ps, &material->norm,
+          &material->disp, &material->decal};
+      for (size_t i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
+        mtl_map_defaults(maps[i]);
+      }
+      for (int i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
+        mtl_map_defaults(&material->refl[i]);
+      }
       memcpy(material->name, name, strlen(name) + 1);
       current = gcu_array_count(&materials) - 1;
       have_current = true;
@@ -539,35 +739,35 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_MAP_AAT;
     }
     else if (gmdl_line_is(line_text, "map_Ka", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ka);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ka, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Kd", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Kd);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Kd, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Ks", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ks);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ks, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Ns", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ns);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ns, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_d", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_d);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_d, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -586,56 +786,56 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_bump", &rest)
         || gmdl_line_is(line_text, "bump", &rest)
         || gmdl_line_is(line_text, "map_Bump", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_bump);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_bump, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Ke", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ke);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ke, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Pr", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pr);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pr, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Pm", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pm);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pm, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Ps", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ps);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ps, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "norm", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->norm);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->norm, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "disp", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->disp);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->disp, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "decal", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->decal);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->decal, NULL);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;

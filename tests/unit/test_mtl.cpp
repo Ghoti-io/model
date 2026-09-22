@@ -673,8 +673,8 @@ TEST(MtlMap, APlainPathIsRead) {
   GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd brick.png\n");
   ASSERT_NE(mtl, nullptr);
   ASSERT_EQ(mtl->material_count, 1u);
-  ASSERT_NE(mtl->materials[0].map_Kd, nullptr);
-  EXPECT_STREQ(mtl->materials[0].map_Kd, "brick.png");
+  ASSERT_NE(mtl->materials[0].map_Kd.path, nullptr);
+  EXPECT_STREQ(mtl->materials[0].map_Kd.path, "brick.png");
   gmdl_mtl_free(mtl);
 }
 
@@ -684,12 +684,12 @@ TEST(MtlMap, AMapNobodyStatedIsNull) {
   GMDL_Mtl * mtl = load_text("newmtl body\nKd 1 1 1\n");
   ASSERT_NE(mtl, nullptr);
   const GMDL_Mtl_Material & m = mtl->materials[0];
-  EXPECT_EQ(m.map_Ka, nullptr);
-  EXPECT_EQ(m.map_Kd, nullptr);
-  EXPECT_EQ(m.map_Ks, nullptr);
-  EXPECT_EQ(m.map_Ns, nullptr);
-  EXPECT_EQ(m.map_d, nullptr);
-  EXPECT_EQ(m.map_bump, nullptr);
+  EXPECT_EQ(m.map_Ka.path, nullptr);
+  EXPECT_EQ(m.map_Kd.path, nullptr);
+  EXPECT_EQ(m.map_Ks.path, nullptr);
+  EXPECT_EQ(m.map_Ns.path, nullptr);
+  EXPECT_EQ(m.map_d.path, nullptr);
+  EXPECT_EQ(m.map_bump.path, nullptr);
   gmdl_mtl_free(mtl);
 }
 
@@ -703,12 +703,12 @@ TEST(MtlMap, EveryKindIsRead) {
                              "map_bump b.png\n");
   ASSERT_NE(mtl, nullptr);
   const GMDL_Mtl_Material & m = mtl->materials[0];
-  EXPECT_STREQ(m.map_Ka, "a.png");
-  EXPECT_STREQ(m.map_Kd, "d.png");
-  EXPECT_STREQ(m.map_Ks, "s.png");
-  EXPECT_STREQ(m.map_Ns, "n.png");
-  EXPECT_STREQ(m.map_d, "alpha.png");
-  EXPECT_STREQ(m.map_bump, "b.png");
+  EXPECT_STREQ(m.map_Ka.path, "a.png");
+  EXPECT_STREQ(m.map_Kd.path, "d.png");
+  EXPECT_STREQ(m.map_Ks.path, "s.png");
+  EXPECT_STREQ(m.map_Ns.path, "n.png");
+  EXPECT_STREQ(m.map_d.path, "alpha.png");
+  EXPECT_STREQ(m.map_bump.path, "b.png");
   gmdl_mtl_free(mtl);
 }
 
@@ -717,7 +717,7 @@ TEST(MtlMap, APathMayContainSpaces) {
   // of the rest of the line, so "my tex.png" is one file and not two tokens.
   GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd my tex.png\n");
   ASSERT_NE(mtl, nullptr);
-  EXPECT_STREQ(mtl->materials[0].map_Kd, "my tex.png");
+  EXPECT_STREQ(mtl->materials[0].map_Kd.path, "my tex.png");
   gmdl_mtl_free(mtl);
 }
 
@@ -726,7 +726,7 @@ TEST(MtlMap, TrailingBlanksAreNotPartOfThePath) {
   // just named, which is the behaviour of the two worth not copying.
   GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd tex.png \t \n");
   ASSERT_NE(mtl, nullptr);
-  EXPECT_STREQ(mtl->materials[0].map_Kd, "tex.png");
+  EXPECT_STREQ(mtl->materials[0].map_Kd.path, "tex.png");
   gmdl_mtl_free(mtl);
 }
 
@@ -735,25 +735,88 @@ TEST(MtlMap, SeparatorsAreNotTranslated) {
   // only the caller knows what platform the path was written for.
   GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd sub\\tex.png\n");
   ASSERT_NE(mtl, nullptr);
-  EXPECT_STREQ(mtl->materials[0].map_Kd, "sub\\tex.png");
+  EXPECT_STREQ(mtl->materials[0].map_Kd.path, "sub\\tex.png");
   gmdl_mtl_free(mtl);
 }
 
-TEST(MtlMap, OptionsAreUnsupportedNotMalformed) {
-  // The file is well-formed; this library is the one falling short. The two
-  // references do not even agree on what the options are - Blender consumes
-  // -clamp, VTK 9.3 folds it into the filename - so guessing would be taking
-  // a side the caller cannot see.
-  // Every kind, because each leaves the parser by its own arm.
-  for (const char * line : {"map_Kd -o 1 1 1 tex.png\n",
-           "map_Kd -s 2 2 2 tex.png\n", "map_Kd -clamp on tex.png\n",
-           "map_Ka -o 1 a.png\n", "map_Ks -o 1 s.png\n",
-           "map_Ns -o 1 n.png\n", "map_d -o 1 alpha.png\n",
-           "map_bump -bm 0.5 b.png\n", "bump -bm 0.5 b.png\n"}) {
-    EXPECT_EQ(load_text_expecting_failure(std::string("newmtl a\n") + line),
-        GMDL_ERR_UNSUPPORTED)
-        << line;
-  }
+TEST(MtlMap, EveryOptionIsReadIntoItsOwnField) {
+  // These lines used to be GMDL_ERR_UNSUPPORTED, which rejected the whole
+  // file. That was survivable only while map_Bump went unrecognised: once it
+  // was added, "map_Bump -bm 0.35 nrm.png" - what Blender writes for every
+  // normal map it exports - began failing the entire MTL.
+  GMDL_Mtl * mtl = load_text(
+      "newmtl a\n"
+      "map_Kd -blendu off -blendv off -clamp on -boost 2 -texres 512 "
+      "-mm 0.25 1.5 -o 1 2 3 -s 4 5 6 -t 7 8 9 -imfchan g tex.png\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  const GMDL_Mtl_Map * m = &mtl->materials[0].map_Kd;
+  EXPECT_STREQ(m->path, "tex.png");
+  EXPECT_FALSE(m->blendu);
+  EXPECT_FALSE(m->blendv);
+  EXPECT_TRUE(m->clamp);
+  EXPECT_FLOAT_EQ(m->boost, 2.0f);
+  EXPECT_EQ(m->texres, 512);
+  EXPECT_FLOAT_EQ(m->mm[0], 0.25f);
+  EXPECT_FLOAT_EQ(m->mm[1], 1.5f);
+  EXPECT_FLOAT_EQ(m->o[2], 3.0f);
+  EXPECT_FLOAT_EQ(m->s[0], 4.0f);
+  EXPECT_FLOAT_EQ(m->t[2], 9.0f);
+  EXPECT_EQ(m->imfchan, GMDL_MTL_IMFCHAN_G);
+  EXPECT_EQ(m->present,
+      (uint32_t)(GMDL_MTL_MAP_HAS_BLENDU | GMDL_MTL_MAP_HAS_BLENDV
+          | GMDL_MTL_MAP_HAS_CLAMP | GMDL_MTL_MAP_HAS_BOOST
+          | GMDL_MTL_MAP_HAS_TEXRES | GMDL_MTL_MAP_HAS_MM
+          | GMDL_MTL_MAP_HAS_O | GMDL_MTL_MAP_HAS_S | GMDL_MTL_MAP_HAS_T
+          | GMDL_MTL_MAP_HAS_IMFCHAN));
+  gmdl_mtl_free(mtl);
+}
+
+// The line that caused all this, exactly as Blender 4.3.2 writes it.
+TEST(MtlMap, BlendersNormalMapLineLoads) {
+  GMDL_Mtl * mtl =
+      load_text("newmtl m\nmap_Bump -bm 0.350000 nrm.png\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_STREQ(mtl->materials[0].map_bump.path, "nrm.png");
+  EXPECT_FLOAT_EQ(mtl->materials[0].map_bump.bm, 0.35f);
+  EXPECT_TRUE(mtl->materials[0].map_bump.present & GMDL_MTL_MAP_HAS_BM);
+  gmdl_mtl_free(mtl);
+}
+
+// An option's arguments must not swallow a path that looks numeric.
+TEST(MtlMap, ANumericLookingPathIsNotAnOptionArgument) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nmap_Kd -o 1 2 2.png\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_STREQ(mtl->materials[0].map_Kd.path, "2.png")
+      << "the path was eaten as a third -o component";
+  EXPECT_FLOAT_EQ(mtl->materials[0].map_Kd.o[0], 1.0f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].map_Kd.o[1], 2.0f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].map_Kd.o[2], 0.0f) << "unstated w";
+  gmdl_mtl_free(mtl);
+}
+
+// A map that stated no options keeps the format's defaults, and says so.
+TEST(MtlMap, AnUnadornedMapCarriesTheDocumentedDefaults) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nmap_Kd tex.png\n");
+  ASSERT_NE(mtl, nullptr);
+  const GMDL_Mtl_Map * m = &mtl->materials[0].map_Kd;
+  EXPECT_EQ(m->present, 0u);
+  EXPECT_TRUE(m->blendu);
+  EXPECT_TRUE(m->blendv);
+  EXPECT_FALSE(m->clamp);
+  EXPECT_FLOAT_EQ(m->bm, 1.0f);
+  EXPECT_FLOAT_EQ(m->s[0], 1.0f);
+  EXPECT_FLOAT_EQ(m->mm[1], 1.0f);
+  EXPECT_EQ(m->imfchan, GMDL_MTL_IMFCHAN_L);
+  gmdl_mtl_free(mtl);
+}
+
+// An option nobody defines still takes the whole file down, because the map
+// would otherwise be stored meaning something the file did not say.
+TEST(MtlMap, AnUnknownOptionIsStillUnsupported) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nmap_Kd -nope 1 tex.png\n"),
+      GMDL_ERR_UNSUPPORTED);
 }
 
 TEST(MtlMap, ADirectiveWithNoPathIsMalformed) {
@@ -767,8 +830,8 @@ TEST(MtlMap, BumpAndMapBumpAreOneProperty) {
   GMDL_Mtl * mtl = load_text("newmtl a\nbump b.png\nnewmtl b\nmap_bump c.png\n");
   ASSERT_NE(mtl, nullptr);
   ASSERT_EQ(mtl->material_count, 2u);
-  EXPECT_STREQ(mtl->materials[0].map_bump, "b.png");
-  EXPECT_STREQ(mtl->materials[1].map_bump, "c.png");
+  EXPECT_STREQ(mtl->materials[0].map_bump.path, "b.png");
+  EXPECT_STREQ(mtl->materials[1].map_bump.path, "c.png");
   // One property, so one spelling comes back out.
   EXPECT_NE(dump_text(mtl).find("map_bump b.png"), std::string::npos);
   gmdl_mtl_free(mtl);
@@ -779,15 +842,15 @@ TEST(MtlMap, ARepeatedDirectiveKeepsTheLast) {
   // rather than leaked.
   GMDL_Mtl * mtl = load_text("newmtl a\nmap_Kd first.png\nmap_Kd second.png\n");
   ASSERT_NE(mtl, nullptr);
-  EXPECT_STREQ(mtl->materials[0].map_Kd, "second.png");
+  EXPECT_STREQ(mtl->materials[0].map_Kd.path, "second.png");
   gmdl_mtl_free(mtl);
 }
 
 TEST(MtlMap, ADirectiveBeginningWithAMapKeywordIsNotTheKeyword) {
   GMDL_Mtl * mtl = load_text("newmtl a\nmap_Kdx tex.png\nbumpy tex.png\n");
   ASSERT_NE(mtl, nullptr);
-  EXPECT_EQ(mtl->materials[0].map_Kd, nullptr);
-  EXPECT_EQ(mtl->materials[0].map_bump, nullptr);
+  EXPECT_EQ(mtl->materials[0].map_Kd.path, nullptr);
+  EXPECT_EQ(mtl->materials[0].map_bump.path, nullptr);
   gmdl_mtl_free(mtl);
 }
 
@@ -832,17 +895,17 @@ TEST(MtlMap, PathsSurviveTheRoundTrip) {
   for (size_t i = 0; i < 3; i++) {
     const GMDL_Mtl_Material & a = first->materials[i];
     const GMDL_Mtl_Material & b = second->materials[i];
-    ASSERT_EQ(a.map_Kd == nullptr, b.map_Kd == nullptr) << "material " << i;
-    if (a.map_Kd) {
-      EXPECT_STREQ(a.map_Kd, b.map_Kd) << "material " << i;
+    ASSERT_EQ(a.map_Kd.path == nullptr, b.map_Kd.path == nullptr) << "material " << i;
+    if (a.map_Kd.path) {
+      EXPECT_STREQ(a.map_Kd.path, b.map_Kd.path) << "material " << i;
     }
-    ASSERT_EQ(a.map_Ka == nullptr, b.map_Ka == nullptr) << "material " << i;
-    if (a.map_Ka) {
-      EXPECT_STREQ(a.map_Ka, b.map_Ka) << "material " << i;
+    ASSERT_EQ(a.map_Ka.path == nullptr, b.map_Ka.path == nullptr) << "material " << i;
+    if (a.map_Ka.path) {
+      EXPECT_STREQ(a.map_Ka.path, b.map_Ka.path) << "material " << i;
     }
-    ASSERT_EQ(a.map_bump == nullptr, b.map_bump == nullptr) << "material " << i;
-    if (a.map_bump) {
-      EXPECT_STREQ(a.map_bump, b.map_bump) << "material " << i;
+    ASSERT_EQ(a.map_bump.path == nullptr, b.map_bump.path == nullptr) << "material " << i;
+    if (a.map_bump.path) {
+      EXPECT_STREQ(a.map_bump.path, b.map_bump.path) << "material " << i;
     }
   }
   gmdl_mtl_free(first);
@@ -875,7 +938,7 @@ TEST(MtlMap, ATrailingDoubleBackslashLeavesThePathEndingInOne) {
   GMDL_Mtl * mtl = load_text("newmtl m\nmap_Kd a\\\\\n\nKa 1 1 1\n");
   ASSERT_NE(mtl, nullptr);
   ASSERT_EQ(mtl->material_count, 1u);
-  EXPECT_STREQ(mtl->materials[0].map_Kd, "a\\");
+  EXPECT_STREQ(mtl->materials[0].map_Kd.path, "a\\");
   EXPECT_FLOAT_EQ(mtl->materials[0].Ka[0], 1.0f);
   gmdl_mtl_free(mtl);
 }
@@ -885,7 +948,7 @@ TEST(MtlMap, AFailedLoadReleasesThePathsItHadAlreadyRead) {
   // library's to release. ASan and valgrind are what actually check this.
   EXPECT_EQ(load_text_expecting_failure("newmtl a\nmap_Kd one.png\n"
                                         "newmtl b\nmap_Ka two.png\n"
-                                        "map_Kd -o 1 tex.png\n"),
+                                        "map_Kd -nope 1 tex.png\n"),
       GMDL_ERR_UNSUPPORTED);
 }
 
@@ -911,6 +974,16 @@ TEST(MtlDump, EveryWriteFailureIsReported) {
                              "map_Ps ps.png\nnorm nm.png\ndisp dp.png\n"
                              "decal dc.png\nrefl sp.png\n"
                              "refl -type cube_top ct.png\n"
+                             // Every map OPTION has a write of its own, and
+                             // so a failure arm of its own. This line is the
+                             // fourth time this sweep has had to be widened
+                             // because the format grew and the sweep did not
+                             // notice; coverage of mtl_dump.c is what says
+                             // so, since the sweep still passes either way.
+                             "map_Kd -blendu off -blendv off -clamp on "
+                             "-boost 2 -bm 0.5 -mm 0.25 1.5 -o 1 2 3 "
+                             "-s 4 5 6 -t 7 8 9 -texres 512 -imfchan g "
+                             "opt.png\n"
                              "newmtl bare\n");
   ASSERT_NE(mtl, nullptr);
   ASSERT_EQ(mtl->material_count, 2u);
@@ -1049,13 +1122,13 @@ TEST(MtlVocabulary, EachMapDirectiveReachesItsOwnField) {
 
     // ...and nothing else moved.
     size_t filled = 0;
-    for (const char * p : {m.map_Ka, m.map_Kd, m.map_Ks, m.map_Ns, m.map_d,
-             m.map_bump, m.map_Ke, m.map_Pr, m.map_Pm, m.map_Ps, m.norm,
-             m.disp, m.decal}) {
+    for (const char * p : {m.map_Ka.path, m.map_Kd.path, m.map_Ks.path, m.map_Ns.path, m.map_d.path,
+             m.map_bump.path, m.map_Ke.path, m.map_Pr.path, m.map_Pm.path, m.map_Ps.path, m.norm.path,
+             m.disp.path, m.decal.path}) {
       filled += p != nullptr;
     }
     for (size_t i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
-      filled += m.refl[i] != nullptr;
+      filled += m.refl[i].path != nullptr;
     }
     EXPECT_EQ(filled, 1u) << c.first << " filled in more than its own path";
     EXPECT_EQ(m.present, 0u) << c.first << " set a scalar's bit";
@@ -1102,14 +1175,14 @@ TEST(MtlRefl, EveryTypeReachesItsOwnSlot) {
                              "refl -type cube_right right.png\n");
   ASSERT_NE(mtl, nullptr);
   const GMDL_Mtl_Material & m = mtl->materials[0];
-  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_SPHERE], "s.png");
-  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_TOP], "top.png");
-  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_BOTTOM], "bottom.png");
-  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_FRONT], "front.png");
-  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_BACK], "back.png");
-  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_LEFT], "left.png");
-  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_RIGHT], "right.png");
-  EXPECT_EQ(m.refl[GMDL_MTL_REFL_UNTYPED], nullptr);
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_SPHERE].path, "s.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_TOP].path, "top.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_BOTTOM].path, "bottom.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_FRONT].path, "front.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_BACK].path, "back.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_LEFT].path, "left.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_RIGHT].path, "right.png");
+  EXPECT_EQ(m.refl[GMDL_MTL_REFL_UNTYPED].path, nullptr);
 
   // And each comes back out under the same -type. Written as one comparison
   // so that a slot dumped under the wrong name is a failure rather than a
@@ -1132,8 +1205,8 @@ TEST(MtlRefl, ALineWithNoTypeKeepsItsOwnSlot) {
   // one. It gets a slot of its own and comes back out the way it went in.
   GMDL_Mtl * mtl = load_text("newmtl m\nrefl t.png\n");
   ASSERT_NE(mtl, nullptr);
-  EXPECT_STREQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED], "t.png");
-  EXPECT_EQ(mtl->materials[0].refl[GMDL_MTL_REFL_SPHERE], nullptr);
+  EXPECT_STREQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED].path, "t.png");
+  EXPECT_EQ(mtl->materials[0].refl[GMDL_MTL_REFL_SPHERE].path, nullptr);
   EXPECT_EQ(dump_text(mtl), "newmtl m\nrefl t.png\n\n");
   gmdl_mtl_free(mtl);
 }
@@ -1152,13 +1225,21 @@ TEST(MtlRefl, AnUnknownTypeIsMalformed) {
       load_text_expecting_failure("newmtl m\nrefl -type\n"), GMDL_ERR_FORMAT);
 }
 
-TEST(MtlRefl, AnyOtherOptionIsStillUnsupported) {
-  // -type is read because it names the slot rather than adjusting sampling.
-  // That is not a general opening of the option syntax.
-  EXPECT_EQ(load_text_expecting_failure("newmtl m\nrefl -s 2 2 2 t.png\n"),
-      GMDL_ERR_UNSUPPORTED);
-  EXPECT_EQ(load_text_expecting_failure(
-                "newmtl m\nrefl -type sphere -s 2 2 2 t.png\n"),
+TEST(MtlRefl, OptionsAreReadAndTypeMayComeAnywhere) {
+  // -type names the slot, so a refl is parsed into a scratch map and only
+  // then committed. That also means -type need not come first.
+  GMDL_Mtl * mtl = load_text("newmtl m\nrefl -s 2 2 2 -type sphere t.png\n");
+  ASSERT_NE(mtl, nullptr);
+  const GMDL_Mtl_Map * m = &mtl->materials[0].refl[GMDL_MTL_REFL_SPHERE];
+  EXPECT_STREQ(m->path, "t.png");
+  EXPECT_FLOAT_EQ(m->s[1], 2.0f);
+  EXPECT_EQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED].path, nullptr);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, TypeBelongsToReflAlone) {
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nmap_Kd -type sphere t.png\n"),
       GMDL_ERR_UNSUPPORTED);
 }
 
@@ -1209,21 +1290,21 @@ TEST(MtlVocabulary, EveryDirectiveRefusesWhatItCannotRead) {
       {"aniso x", GMDL_ERR_FORMAT},
       {"anisor x", GMDL_ERR_FORMAT},
       {"map_aat maybe", GMDL_ERR_FORMAT},
-      {"map_Ka -o 1 a.png", GMDL_ERR_UNSUPPORTED},
-      {"map_Kd -o 1 d.png", GMDL_ERR_UNSUPPORTED},
-      {"map_Ks -o 1 s.png", GMDL_ERR_UNSUPPORTED},
-      {"map_Ns -o 1 n.png", GMDL_ERR_UNSUPPORTED},
-      {"map_d -o 1 a.png", GMDL_ERR_UNSUPPORTED},
-      {"map_bump -bm 1 b.png", GMDL_ERR_UNSUPPORTED},
-      {"bump -bm 1 b.png", GMDL_ERR_UNSUPPORTED},
-      {"map_Ke -o 1 e.png", GMDL_ERR_UNSUPPORTED},
-      {"map_Pr -o 1 p.png", GMDL_ERR_UNSUPPORTED},
-      {"map_Pm -o 1 p.png", GMDL_ERR_UNSUPPORTED},
-      {"map_Ps -o 1 p.png", GMDL_ERR_UNSUPPORTED},
-      {"norm -o 1 n.png", GMDL_ERR_UNSUPPORTED},
-      {"disp -o 1 d.png", GMDL_ERR_UNSUPPORTED},
-      {"decal -o 1 d.png", GMDL_ERR_UNSUPPORTED},
-      {"refl -s 2 2 2 r.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ka -nope 1 a.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Kd -nope 1 d.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ks -nope 1 s.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ns -nope 1 n.png", GMDL_ERR_UNSUPPORTED},
+      {"map_d -nope 1 a.png", GMDL_ERR_UNSUPPORTED},
+      {"map_bump -nope 1 b.png", GMDL_ERR_UNSUPPORTED},
+      {"bump -nope 1 b.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ke -nope 1 e.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Pr -nope 1 p.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Pm -nope 1 p.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ps -nope 1 p.png", GMDL_ERR_UNSUPPORTED},
+      {"norm -nope 1 n.png", GMDL_ERR_UNSUPPORTED},
+      {"disp -nope 1 d.png", GMDL_ERR_UNSUPPORTED},
+      {"decal -nope 1 d.png", GMDL_ERR_UNSUPPORTED},
+      {"refl -nope 1 r.png", GMDL_ERR_UNSUPPORTED},
       {"map_Ka", GMDL_ERR_FORMAT},
       {"norm", GMDL_ERR_FORMAT},
       {"decal   ", GMDL_ERR_FORMAT},
@@ -1287,17 +1368,17 @@ TEST(MtlVocabulary, TheWholeVocabularySurvivesTheRoundTrip) {
   EXPECT_FLOAT_EQ(a.aniso, b.aniso);
   EXPECT_FLOAT_EQ(a.anisor, b.anisor);
   EXPECT_EQ(a.map_aat, b.map_aat);
-  EXPECT_STREQ(a.map_Ke, b.map_Ke);
-  EXPECT_STREQ(a.map_Pr, b.map_Pr);
-  EXPECT_STREQ(a.map_Pm, b.map_Pm);
-  EXPECT_STREQ(a.map_Ps, b.map_Ps);
-  EXPECT_STREQ(a.norm, b.norm);
-  EXPECT_STREQ(a.disp, b.disp);
-  EXPECT_STREQ(a.decal, b.decal);
+  EXPECT_STREQ(a.map_Ke.path, b.map_Ke.path);
+  EXPECT_STREQ(a.map_Pr.path, b.map_Pr.path);
+  EXPECT_STREQ(a.map_Pm.path, b.map_Pm.path);
+  EXPECT_STREQ(a.map_Ps.path, b.map_Ps.path);
+  EXPECT_STREQ(a.norm.path, b.norm.path);
+  EXPECT_STREQ(a.disp.path, b.disp.path);
+  EXPECT_STREQ(a.decal.path, b.decal.path);
   for (size_t i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
-    ASSERT_EQ(a.refl[i] == nullptr, b.refl[i] == nullptr) << "refl slot " << i;
-    if (a.refl[i]) {
-      EXPECT_STREQ(a.refl[i], b.refl[i]) << "refl slot " << i;
+    ASSERT_EQ(a.refl[i].path == nullptr, b.refl[i].path == nullptr) << "refl slot " << i;
+    if (a.refl[i].path) {
+      EXPECT_STREQ(a.refl[i].path, b.refl[i].path) << "refl slot " << i;
     }
   }
   gmdl_mtl_free(first);
@@ -1313,7 +1394,7 @@ TEST(MtlMap, EverySpellingOfBumpReachesTheSameField) {
         load_text(std::string("newmtl m\n") + spelling + " tex.png\n");
     ASSERT_NE(mtl, nullptr) << spelling;
     ASSERT_EQ(mtl->material_count, 1u) << spelling;
-    EXPECT_STREQ(mtl->materials[0].map_bump, "tex.png") << spelling;
+    EXPECT_STREQ(mtl->materials[0].map_bump.path, "tex.png") << spelling;
     gmdl_mtl_free(mtl);
   }
 }
@@ -1322,7 +1403,7 @@ TEST(MtlMap, MapReflIsTheUntypedReflectionMap) {
   GMDL_Mtl * mtl = load_text("newmtl m\nmap_refl sky.png\n");
   ASSERT_NE(mtl, nullptr);
   ASSERT_EQ(mtl->material_count, 1u);
-  EXPECT_STREQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED], "sky.png");
+  EXPECT_STREQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED].path, "sky.png");
   gmdl_mtl_free(mtl);
 }
 
@@ -1339,9 +1420,9 @@ TEST(MtlMap, CaseIsNotFoldedJustBecauseTwoAliasesExist) {
         load_text(std::string("newmtl m\n") + spelling + " tex.png\n");
     ASSERT_NE(mtl, nullptr) << spelling;
     ASSERT_EQ(mtl->material_count, 1u) << spelling;
-    EXPECT_EQ(mtl->materials[0].map_bump, nullptr) << spelling;
-    EXPECT_EQ(mtl->materials[0].map_Kd, nullptr) << spelling;
-    EXPECT_EQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED], nullptr)
+    EXPECT_EQ(mtl->materials[0].map_bump.path, nullptr) << spelling;
+    EXPECT_EQ(mtl->materials[0].map_Kd.path, nullptr) << spelling;
+    EXPECT_EQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED].path, nullptr)
         << spelling;
     gmdl_mtl_free(mtl);
   }
