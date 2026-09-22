@@ -17,6 +17,15 @@ the comparison is absent symmetrically: the round trip agrees and the map is
 gone.  Neither list can check the other, because each is half of the
 instrument.
 
+A builder array's initial capacity is named in two: the
+gcu_array_create_in_place() call that sets it, and - implicitly - the size of
+the documents the allocation-failure sweep parses.  An array that starts with
+room for more records than the sweep's documents contain never reallocates
+during a parse, so the arm that reports that reallocation failing is never
+reached, and the sweep goes on passing with a healthy-looking count.  That
+happened: the first draft reported 28 allocations and 17 fatal refusals, all
+of them in obj_builder_init().
+
 An owned array in GMDL_Obj is named in two: the steal that moves it out of
 the parser's builder into the model, and the free.  A missed steal hands the
 caller a NULL array for records that parsed; a missed free leaks every one of
@@ -132,6 +141,39 @@ for what, got in obj_lists.items():
     if missing:
         problems.append("%s is missing %s" % (what, ", ".join(missing)))
 
+#
+# The allocation-failure sweep's documents against the builders' capacities
+#
+
+sweep = read("tests/unit/test_allocator.cpp")
+grow = re.search(r"const size_t kGrow = (\d+);", sweep)
+if not grow:
+    fail("could not find kGrow in the allocation sweep; this gate is "
+         "measuring nothing")
+grow = int(grow.group(1))
+
+# Capacity 0 is excluded on purpose: the per-face overflow array starts empty
+# and grows on its first element, so no document size can fail to outgrow it.
+capacities = []
+for source in ("src/obj/obj_load.c", "src/mtl/mtl_load.c"):
+    text = read(source)
+    for name, count in re.findall(
+            r"gcu_array_create_in_place\(\s*&(?:\w+->)?(\w+)[^;]*?,"
+            r"\s*(\d+),\s*allocator\)",
+            text, re.S):
+        if int(count) > 0:
+            capacities.append((source, name, int(count)))
+if not capacities:
+    fail("found no builder capacities at all; the pattern must have rotted")
+
+for source, name, count in capacities:
+    if count >= grow:
+        problems.append(
+            "%s starts %s with room for %d records, which the allocation "
+            "sweep's documents (kGrow = %d) do not exceed, so that array "
+            "never grows during a parse and its failure arm goes unreached"
+            % (source, name, count, grow))
+
 if problems:
     for problem in problems:
         print("check-lists: %s" % problem, file=sys.stderr)
@@ -139,3 +181,6 @@ if problems:
 
 print("check-lists: %d maps in %d lists, %d arrays in %d lists, all present"
       % (len(scalar), len(lists), len(arrays_obj), len(obj_lists)))
+print("check-lists: %d builder capacities, largest %d, all under the sweep's "
+      "kGrow of %d"
+      % (len(capacities), max(c for _, _, c in capacities), grow))

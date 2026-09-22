@@ -1100,6 +1100,40 @@ per struct for a field added and listed nowhere, and one per struct for the
 gate's own pattern no longer matching, since a gate that cannot find what it
 is checking passes in silence.
 
+**Allocation failure.** Every allocation either loader makes is refused in
+turn, by `tests/unit/test_allocator.cpp`, the way `FailingSink` refuses the
+dumper's writes. The documents are sized so that every array the builders hold
+reallocates *during* the parse rather than only at setup, and
+`tools/check-lists.py` holds them to that: raising an initial capacity past
+the sweep's record count would silently return it to measuring the setup, and
+nothing else would notice.
+
+For each refused allocation the sweep asserts the result is `GMDL_OK` or
+`GMDL_ERR_OOM` and nothing else, that no block is left outstanding, that
+`GMDL_ERR_OOM` comes with no model at all, and - when the refusal is survived
+- that the model produced is byte-for-byte the one an unrefused parse
+produces. That last check is the load-bearing one. Not every allocation is
+load-bearing: `gcu_array_shrink_to_fit()` is called for its effect and its
+answer is discarded on purpose, so refusing it is correctly not an error. The
+question is therefore not whether a refusal was survived but whether surviving
+it changed the answer, and the dump is what a consumer would see.
+
+**Three ways of failing, because no one of them reaches all of it.** Refusing
+the *n*th request alone, refusing it and the one after, and refusing
+everything from it onwards are each the only setting that catches some defect:
+
+| Refuse | What only it reaches |
+| --- | --- |
+| request *n* | a single non-retried allocation whose arm loses data quietly, where refusing its successor too would mask it behind a correct failure |
+| requests *n*, *n*+1 | a failed *array append*. cutil's `reserve_n()` answers a refused 1.5x growth by retrying at the exact size needed, so one refused request never fails an append at all |
+| *n* onwards | an append's failure arm under exhaustion - but never a survived one, so a quiet give-up there reads as a correct failure |
+
+Each row was added because a defect planted in the loader was invisible to the
+rows above it, and all three were seen to catch one: a face overflow freed on
+no error path, a colour-padding loop changed to give up quietly, an arm
+returning `GMDL_ERR_FORMAT` for an allocation failure, and a recorded
+statement dropped rather than reported.
+
 **What the fuzzers structurally cannot find.** They drive the caps that
 exist, so a quantity with no field in `GMDL_Limits` is invisible to them -
 `call` and `csh` allocated without bound for as long as `max_statements` was

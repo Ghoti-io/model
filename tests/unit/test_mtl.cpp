@@ -1384,6 +1384,43 @@ TEST(MtlMap, AnUnknownTypeNameIsStillMalformed) {
       GMDL_ERR_FORMAT);
 }
 
+// The three refusals inside an option's argument reader, which the coverage
+// report showed had never run. Each is the same shape - an argument that is
+// not what the option takes - and each was reachable from a one-line file,
+// which is the useful thing about finding them: nothing stood in the way, and
+// nothing had asked.
+TEST(MtlMap, AnOptionArgumentTooLongForItsBufferIsRefused) {
+  // mtl_token_float() copies into a 64-byte buffer and refuses a token that
+  // does not fit rather than reading a prefix of it, since half a number is a
+  // different number. A path never reaches that arm; an option's argument is
+  // the only place a caller can put an arbitrarily long token that has to be
+  // read as a float.
+  std::string long_number(70, '9');
+  EXPECT_EQ(load_text_expecting_failure(
+                "newmtl m\nmap_Kd -bm " + long_number + " t.png\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(MtlMap, AToggleThatSaysNeitherOnNorOffIsRefused) {
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nmap_Kd -blendu maybe t.png\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nmap_Kd -clamp 1 t.png\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(MtlMap, AnImfchanNamingNoChannelIsRefused) {
+  // The channel is one of "rgbmlz" and exactly one character. Both halves of
+  // that matter: "q" is not a channel, and "rg" is not one either even though
+  // it starts with one.
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nmap_bump -imfchan q t.png\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nmap_bump -imfchan rg t.png\n"),
+      GMDL_ERR_FORMAT);
+}
+
 // `-type` on a colour map has to survive the dump, or reading it would only
 // have moved the loss one file along.
 TEST(MtlDump, TypeOnANonReflMapIsWritten) {

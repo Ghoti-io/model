@@ -538,6 +538,15 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
 
       // Vertices past the fourth go into an overflow array, which is handed to
       // the face at the end of the line.
+      //
+      // The OOM arm below cannot run today and is kept anyway. A capacity of
+      // zero allocates nothing, so gcu_array_create_in_place() can only fail
+      // here on a NULL array or a zero element size, neither of which a
+      // literal `&overflow` and a `sizeof` can be. The allocation-failure
+      // sweep in tests/unit/test_allocator.cpp reaches every other arm in
+      // this function and reports this one uncovered; that is the reason,
+      // rather than a gap. Giving the array a starting capacity would make it
+      // reachable again, which is why the check stays.
       GCU_Array overflow;
       if (!gcu_array_create_in_place(
               &overflow, sizeof(GMDL_Obj_Face_Overflow), 0, allocator)) {
