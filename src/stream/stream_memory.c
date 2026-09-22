@@ -66,9 +66,18 @@ GMDL_Result gmdl_stream_create_memory(
 /**
  * Map a cutil file result onto this library's.
  *
- * The two enumerations name the same failures, so this is a translation and
- * not a judgement; GCU_FILE_RESULT_COUNT is never returned, and an
- * unrecognised value is an internal error rather than a guess.
+ * GMDL_Result is the narrower of the two enumerations and is meant to stay
+ * that way: a caller of gmdl_obj_load_file() acts on "the file did not
+ * read", not on why it did not. So the cases named here are the ones with a
+ * distinct GMDL spelling, and every other file-domain failure - a path that
+ * is not there, permission refused, whatever cutil names next - is
+ * GMDL_ERR_IO.
+ *
+ * The fallback is deliberate rather than lazy. It used to be
+ * GMDL_ERR_INTERNAL, on the reasoning that an unrecognised value meant a bug
+ * here. cutil's enumeration grows, so that reasoning was wrong in the way
+ * that matters: it turned each addition into "internal library error" for a
+ * caller whose file had simply been deleted.
  */
 static GMDL_Result gmdl_result_from_file(GCU_File_Result result) {
   switch (result) {
@@ -81,10 +90,8 @@ static GMDL_Result gmdl_result_from_file(GCU_File_Result result) {
     case GCU_FILE_ERR_LIMIT:
       return GMDL_ERR_LIMIT;
     case GCU_FILE_ERR_IO:
-      return GMDL_ERR_IO;
-    case GCU_FILE_RESULT_COUNT:
     default:
-      return GMDL_ERR_INTERNAL;
+      return GMDL_ERR_IO;
   }
 }
 
