@@ -109,6 +109,22 @@ The first token on a line is the directive. Matching is exact and
 case-sensitive, and the directive must be followed by whitespace or the end
 of the line: `V` is not `v`, and `vertex` is not `v` followed by `ertex`.
 
+**Numbers do not depend on the caller's locale.** A decimal point is `.` in
+every OBJ and MTL file, whatever `LC_NUMERIC` says in the program that linked
+this library. `strtof`, `sscanf` and `printf` all consult it, so the parser
+pins `LC_NUMERIC` to C for the length of a load and the writer does the same
+for a dump. Without that, a caller running under a comma locale reads
+`v 0.5 0.5 0.5` as three zeroes and writes it back as `v 0,5 0,5 0,5`, which
+no reader accepts.
+
+A platform with no per-thread locale **fails to build** rather than producing
+a library that misparses. The pin needs `uselocale`/`newlocale`; where those
+are absent - MSVC has no `LC_NUMERIC_MASK`, and this library claims Windows -
+the alternative was stubs that silently did nothing, which is a correctness
+bug shipped quietly on a platform we cannot test. Defining
+`GMDL_ALLOW_LOCALE_DEPENDENT_NUMBERS` restores that behaviour for anyone who
+wants it, and puts the trade in their build system rather than in ours.
+
 A directive this library does not implement is ignored with its whole line.
 The full set of ignored OBJ directives is: `vp`, `cstype`, `deg`, `bmat`,
 `step`, `p`, `l`, `curv`, `curv2`, `surf`, `parm`, `trim`, `hole`, `scrv`,
@@ -647,7 +663,9 @@ it in `dropped_faces`; that is the pattern.
 guarantee is **structural round-trip**: parsing the dump yields a model with
 the same counts, the same indices, the same names, the same group ranges and
 the same material assignments. Floats are written with `%.9g`, which
-round-trips every float exactly.
+round-trips every float exactly, and with `LC_NUMERIC` pinned to C for the
+length of the dump (2.7), so the bytes are the same whatever locale the
+calling program is in.
 
 **The OBJ output is read correctly by other tools.** Blender 4.3 and VTK 9.3
 were both given this library's dumps of the checked-in models and of

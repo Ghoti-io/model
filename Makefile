@@ -251,7 +251,10 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 TEST_GATES ?= check-symbols
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
-VALGRIND_FLAGS := --leak-check=full --show-leak-kinds=definite,indirect,possible --track-origins=yes --error-exitcode=1
+# --suppressions: see tests/valgrind.supp. It holds allocations that are
+# demonstrably glibc's rather than ours, each with the evidence that its
+# frames are narrow enough not to hide a leak of our own.
+VALGRIND_FLAGS := --leak-check=full --show-leak-kinds=definite,indirect,possible --track-origins=yes --error-exitcode=1 --suppressions=tests/valgrind.supp
 
 ####################################################################
 # Test discovery

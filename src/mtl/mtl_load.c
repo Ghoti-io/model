@@ -37,6 +37,7 @@
 #include <ghoti.io/model/mtl.h>
 
 #include "../obj/obj_internal.h"
+#include "../core/number_internal.h"
 
 /**
  * Read a colour property's value.
@@ -294,8 +295,9 @@ static GMDL_Result mtl_parse_toggle(const char * rest, bool * out) {
   return GMDL_ERR_FORMAT;
 }
 
-GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
-    const GMDL_Allocator * allocator, GMDL_Mtl ** out_mtl) {
+static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
+    const GMDL_Limits * limits, const GMDL_Allocator * allocator,
+    GMDL_Mtl ** out_mtl) {
   if (!out_mtl) {
     return GMDL_ERR_INVALID;
   }
@@ -666,6 +668,16 @@ cleanup:
   }
   gcu_array_destroy_in_place(&materials);
   gcu_allocator_free(allocator, line);
+  return result;
+}
+
+/** Read an MTL document with the numeric locale pinned (number_internal.h). */
+GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
+    const GMDL_Allocator * allocator, GMDL_Mtl ** out_mtl) {
+  GMDL_Numeric_Scope numeric;
+  gmdl_numeric_scope_begin(&numeric);
+  GMDL_Result result = mtl_load_pinned(stream, limits, allocator, out_mtl);
+  gmdl_numeric_scope_end(&numeric);
   return result;
 }
 

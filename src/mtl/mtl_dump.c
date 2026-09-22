@@ -28,6 +28,7 @@
 
 #include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/mtl.h>
+#include "../core/number_internal.h"
 
 /**
  * The `-type` name for a reflection slot.
@@ -60,7 +61,7 @@ static const char * gmdl_mtl_refl_type_name(GMDL_Mtl_Refl_Type type) {
   }
 }
 
-GMDL_Result gmdl_mtl_dump(const GMDL_Mtl * mtl, FILE * fd) {
+static GMDL_Result mtl_dump_pinned(const GMDL_Mtl * mtl, FILE * fd) {
   if (!mtl || !fd) {
     return GMDL_ERR_INVALID;
   }
@@ -219,4 +220,14 @@ GMDL_Result gmdl_mtl_dump(const GMDL_Mtl * mtl, FILE * fd) {
     }
   }
   return GMDL_OK;
+}
+
+
+/** Write an MTL document with the numeric locale pinned (number_internal.h). */
+GMDL_Result gmdl_mtl_dump(const GMDL_Mtl * mtl, FILE * fd) {
+  GMDL_Numeric_Scope numeric;
+  gmdl_numeric_scope_begin(&numeric);
+  GMDL_Result result = mtl_dump_pinned(mtl, fd);
+  gmdl_numeric_scope_end(&numeric);
+  return result;
 }

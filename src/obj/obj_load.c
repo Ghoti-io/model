@@ -39,6 +39,7 @@
 #include <ghoti.io/model/obj.h>
 
 #include "obj_internal.h"
+#include "../core/number_internal.h"
 
 /**
  * The arrays an OBJ file builds up while it is being parsed.
@@ -277,8 +278,9 @@ static GMDL_Result obj_record_statement(const char * rest,
   return GMDL_OK;
 }
 
-GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
-    const GMDL_Allocator * allocator, GMDL_Obj ** out_obj) {
+static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
+    const GMDL_Limits * limits, const GMDL_Allocator * allocator,
+    GMDL_Obj ** out_obj) {
   if (!out_obj) {
     return GMDL_ERR_INVALID;
   }
@@ -753,6 +755,23 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
 cleanup:
   obj_builder_destroy(&builder);
   gcu_allocator_free(allocator, line);
+  return result;
+}
+
+/**
+ * Read an OBJ document with the numeric locale pinned.
+ *
+ * The pin is here, around the whole parse, rather than at each of the
+ * conversions inside it. See src/core/number_internal.h for why: the thing
+ * worth making impossible is a future directive whose author does not know
+ * this rule exists.
+ */
+GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
+    const GMDL_Allocator * allocator, GMDL_Obj ** out_obj) {
+  GMDL_Numeric_Scope numeric;
+  gmdl_numeric_scope_begin(&numeric);
+  GMDL_Result result = obj_load_pinned(stream, limits, allocator, out_obj);
+  gmdl_numeric_scope_end(&numeric);
   return result;
 }
 

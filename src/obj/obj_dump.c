@@ -29,6 +29,7 @@
 
 #include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/obj.h>
+#include "../core/number_internal.h"
 
 /** Print one "v", "v/vt", "v//vn" or "v/vt/vn" reference. */
 static int obj_dump_reference(
@@ -258,7 +259,7 @@ static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
   return 0;
 }
 
-GMDL_Result gmdl_obj_dump(const GMDL_Obj * obj, FILE * fd) {
+static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
   if (!obj || !fd) {
     return GMDL_ERR_INVALID;
   }
@@ -340,4 +341,20 @@ GMDL_Result gmdl_obj_dump(const GMDL_Obj * obj, FILE * fd) {
   }
 
   return GMDL_OK;
+}
+
+/**
+ * Write an OBJ document with the numeric locale pinned.
+ *
+ * Every coordinate this writes goes through printf("%.9g"), which consults
+ * LC_NUMERIC. Without the pin a caller in a comma locale gets
+ * "v 0,5 0,5 0,5" - a file no reader accepts, produced by a function that
+ * reported success. See src/core/number_internal.h.
+ */
+GMDL_Result gmdl_obj_dump(const GMDL_Obj * obj, FILE * fd) {
+  GMDL_Numeric_Scope numeric;
+  gmdl_numeric_scope_begin(&numeric);
+  GMDL_Result result = obj_dump_pinned(obj, fd);
+  gmdl_numeric_scope_end(&numeric);
+  return result;
 }
