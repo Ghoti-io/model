@@ -779,6 +779,18 @@ wrapping: `s 2147483648` arrived as `-2147483648`, and
 limit, and a limit is reported rather than resolved by storing something
 else.
 
+**A cap is measured by what it bounds, not by what it returns.** A parser
+that read a whole file into memory and then refused it answers
+`GMDL_ERR_LIMIT` exactly as one that stopped at the cap does - same status,
+opposite memory behaviour, and memory is what a caller setting these fields
+is bounding. Every test keyed on the result code is therefore measuring the
+half that does not differ. Two tests measure the other half with a recording
+allocator: the high-water mark does not move when the input quadruples under
+unchanged caps, and one enormous element does not build itself before being
+refused. The second was seen to fail against a version that answered
+`GMDL_ERR_LIMIT` for exactly the same files and allocated the whole face
+first; every status-keyed test passed against it.
+
 Section 1 promises a cap on every unbounded quantity, and `max_statements`
 was missing from this table until it was measured for: with every other field
 set, a file of nothing but `call` lines was still accepted without bound. The

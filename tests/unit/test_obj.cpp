@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <iterator>
 
 #include <string>
@@ -2099,6 +2100,142 @@ TEST(ObjLimits, APointStatementCostsOnePerIndex) {
   EXPECT_EQ(gmdl_obj_load(stream.get(), &limits, nullptr, &obj),
       GMDL_ERR_LIMIT);
   gmdl_obj_free(obj);
+}
+
+namespace {
+
+/** An allocator that remembers the high-water mark of live bytes. */
+struct Peak {
+  size_t live = 0;
+  size_t peak = 0;
+  std::map<void *, size_t> sizes;
+
+  void note(void * p, size_t n) {
+    if (!p) {
+      return;
+    }
+    sizes[p] = n;
+    live += n;
+    if (live > peak) {
+      peak = live;
+    }
+  }
+  void forget(void * p) {
+    auto it = sizes.find(p);
+    if (it != sizes.end()) {
+      live -= it->second;
+      sizes.erase(it);
+    }
+  }
+};
+
+void * peak_malloc(void * ctx, size_t n) {
+  Peak * s = (Peak *)ctx;
+  void * p = malloc(n ? n : 1);
+  s->note(p, n);
+  return p;
+}
+void * peak_calloc(void * ctx, size_t a, size_t b) {
+  Peak * s = (Peak *)ctx;
+  size_t total = a * b;
+  void * p = calloc(1, total ? total : 1);
+  s->note(p, total);
+  return p;
+}
+void * peak_realloc(void * ctx, void * q, size_t n) {
+  Peak * s = (Peak *)ctx;
+  s->forget(q);
+  void * p = realloc(q, n ? n : 1);
+  s->note(p, n);
+  return p;
+}
+void peak_free(void * ctx, void * q) {
+  Peak * s = (Peak *)ctx;
+  s->forget(q);
+  free(q);
+}
+
+/** Parse @p text under @p limits and report the high-water mark. */
+size_t peak_bytes_to_parse(const std::string & text, const GMDL_Limits & limits) {
+  Peak state;
+  GMDL_Allocator allocator{};
+  allocator.ctx = &state;
+  allocator.malloc_fn = peak_malloc;
+  allocator.calloc_fn = peak_calloc;
+  allocator.realloc_fn = peak_realloc;
+  allocator.free_fn = peak_free;
+
+  MemStream stream(text);
+  GMDL_Obj * obj = nullptr;
+  gmdl_obj_load(stream.get(), &limits, &allocator, &obj);
+  gmdl_obj_free(obj);
+  return state.peak;
+}
+
+} // namespace
+
+// A cap that stops parsing has to stop *allocating*, and a test keyed on the
+// return code cannot tell the two apart: a parser that read the whole file
+// into memory and then refused it answers GMDL_ERR_LIMIT exactly as one that
+// stopped at the cap does. Same status, opposite memory behaviour, and
+// memory is what a caller setting these fields is bounding.
+//
+// So this measures the bound rather than the status, and the property is not
+// an arbitrary byte count - it is that the high-water mark does not move when
+// the input grows. Four times the input, the same caps, the same peak.
+TEST(ObjLimits, PeakMemoryDoesNotFollowTheInputSize) {
+  GMDL_Limits limits;
+  memset(&limits, 0, sizeof(limits));
+  limits.max_line_length = 128;
+  limits.max_vertices = 16;
+  limits.max_faces = 16;
+  limits.max_statements = 4;
+
+  std::string small;
+  for (int i = 0; i < 20000; i++) {
+    small += "v 1 2 3\n";
+  }
+  std::string large;
+  for (int i = 0; i < 80000; i++) {
+    large += "v 1 2 3\n";
+  }
+  ASSERT_EQ(large.size(), small.size() * 4);
+
+  size_t small_peak = peak_bytes_to_parse(small, limits);
+  size_t large_peak = peak_bytes_to_parse(large, limits);
+  EXPECT_EQ(small_peak, large_peak)
+      << "the peak moved from " << small_peak << " to " << large_peak
+      << " bytes when the input quadrupled under unchanged caps";
+
+  // And the peak is on the order of the caps rather than of the file: the
+  // line buffer is the largest single allocation and it is the cap itself.
+  EXPECT_LT(large_peak, large.size() / 8)
+      << "peak " << large_peak << " against an input of " << large.size();
+}
+
+// The same for one enormous line, where the record cap - not the line cap -
+// is the thing that has to stop the allocation. A face naming a hundred
+// thousand vertices must not build a hundred thousand of anything first.
+TEST(ObjLimits, AnOverlongElementDoesNotAllocateBeforeItIsRefused) {
+  GMDL_Limits limits;
+  memset(&limits, 0, sizeof(limits));
+  limits.max_line_length = 1u << 20; // room for the line itself
+  limits.max_face_indices = 8;
+  limits.max_faces = 8;
+
+  std::string face = "v 1 2 3\nf";
+  for (int i = 0; i < 100000; i++) {
+    face += " 1";
+  }
+  face += "\n";
+
+  size_t peak = peak_bytes_to_parse(face, limits);
+  // The line buffer is max_line_length + 1 and is unavoidable; anything much
+  // beyond it means the face's own storage grew past the cap before the cap
+  // was consulted.
+  const size_t line_buffer = (1u << 20) + 1;
+  EXPECT_LT(peak, line_buffer + 65536u)
+      << "peak " << peak << " against a line buffer of " << line_buffer;
 }
 
 TEST(ObjLimits, StatementsUnderTheCapAreKept) {
