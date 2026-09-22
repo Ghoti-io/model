@@ -867,14 +867,57 @@ TEST(MtlMap, AnUnadornedMapCarriesTheDocumentedDefaults) {
   GMDL_Mtl * mtl = load_text("newmtl a\nmap_Kd tex.png\n");
   ASSERT_NE(mtl, nullptr);
   const GMDL_Mtl_Map * m = &mtl->materials[0].map_Kd;
+  // One row per row of 4.5's table, named individually so a failure says
+  // which default moved. This used to check seven of the twelve - `s[0]` but
+  // not `s[1]`, `mm[1]` but not `mm[0]`, and nothing at all for `boost`,
+  // `o`, `t` or `texres`.
   EXPECT_EQ(m->present, 0u);
   EXPECT_TRUE(m->blendu);
   EXPECT_TRUE(m->blendv);
   EXPECT_FALSE(m->clamp);
+  EXPECT_FLOAT_EQ(m->boost, 0.0f);
   EXPECT_FLOAT_EQ(m->bm, 1.0f);
-  EXPECT_FLOAT_EQ(m->s[0], 1.0f);
+  EXPECT_FLOAT_EQ(m->mm[0], 0.0f);
   EXPECT_FLOAT_EQ(m->mm[1], 1.0f);
+  for (int i = 0; i < 3; i++) {
+    EXPECT_FLOAT_EQ(m->o[i], 0.0f) << "o[" << i << "]";
+    EXPECT_FLOAT_EQ(m->s[i], 1.0f) << "s[" << i << "]";
+    EXPECT_FLOAT_EQ(m->t[i], 0.0f) << "t[" << i << "]";
+  }
+  EXPECT_EQ(m->texres, 0);
   EXPECT_EQ(m->imfchan, GMDL_MTL_IMFCHAN_L);
+  EXPECT_EQ(m->type, GMDL_MTL_REFL_UNTYPED);
+  gmdl_mtl_free(mtl);
+}
+
+// The list above is a list, so it goes stale the moment a field is added
+// without anybody thinking of it - which is how it came to cover seven of
+// twelve. This compares the whole struct instead, so a new field with a
+// wrong default fails here even though nothing named it.
+//
+// memcmp is sound only because both sides are built from a memset: the
+// parser's defaults start by zeroing the struct, and so does this, so the
+// padding bytes match and the comparison means what it looks like it means.
+// Without that discipline on both sides this test would be a coin toss.
+TEST(MtlMap, NoFieldEscapesTheDefaultsCheck) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nmap_Kd tex.png\n");
+  ASSERT_NE(mtl, nullptr);
+  const GMDL_Mtl_Map * m = &mtl->materials[0].map_Kd;
+
+  GMDL_Mtl_Map expected;
+  memset(&expected, 0, sizeof(expected));
+  expected.path = m->path; // the one field that is not a default
+  expected.blendu = true;
+  expected.blendv = true;
+  expected.mm[1] = 1.0f;
+  expected.s[0] = expected.s[1] = expected.s[2] = 1.0f;
+  expected.bm = 1.0f;
+  expected.imfchan = GMDL_MTL_IMFCHAN_L;
+
+  EXPECT_EQ(memcmp(&expected, m, sizeof(expected)), 0)
+      << "a map with no options differs from the documented defaults in some "
+         "field; the named checks above say which, unless the field is new "
+         "and has no check - in which case add one to both";
   gmdl_mtl_free(mtl);
 }
 
