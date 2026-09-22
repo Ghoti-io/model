@@ -44,10 +44,37 @@ using gmdltest::MemStream;
 // than in a shared suppressions file, and that is deliberate: it applies to
 // this one executable, it sits next to the reason, and it cannot quietly
 // widen to cover testObj or testMtl later. __argz_add_sep is reachable only
-// from glibc's locale-path parsing, which nothing in this library calls, and
-// and it was checked rather than assumed: with a deliberate 1234-byte leak
-// planted in this file, LeakSanitizer still reported it while suppressing the
-// glibc one, so the template narrows to what it names.
+// from glibc's locale-path parsing, which nothing in this library calls.
+//
+// **It was checked rather than assumed, and re-checking it is harder than it
+// looks.** Two natural ways to plant a leak are invisible to LeakSanitizer
+// for reasons that have nothing to do with any suppression, and both look
+// exactly like a suppression that is too wide:
+//
+//   volatile void * p = malloc(1234);                  // NOT reported:
+//   (void)p;                                           // the conservative
+//                                                      // stack scan finds it
+//
+//   void ** h = malloc(8); h[0] = malloc(1234);        // NOT reported: ASan's
+//   free(h);                                           // quarantine still
+//                                                      // holds the contents
+//
+//   void ** h = malloc(8); h[0] = malloc(1234);        // reported
+//   h[0] = nullptr; free(h);
+//
+// So the plant has to be genuinely unreachable, and the control is to run it
+// with the suppression turned OFF: if a plant is invisible either way, its
+// invisibility says nothing about the suppression. Measured both ways - the
+// third shape is reported with the suppression on and with it off, and the
+// first is invisible with it on and with it off - so the template narrows to
+// what it names.
+//
+// One more trap in the checking: do not grep the output for "detected memory
+// leaks". The glibc leak raises that banner too whenever the suppression is
+// off, so the test for whether the *planted* leak was seen has to name its
+// own size. Getting this wrong made the suppression look guilty.
+// Ghoti.io Image hit the same three shapes generating a locale for its own
+// LC_NUMERIC test.
 extern "C" const char * __lsan_default_suppressions(void) {
   return "leak:__argz_add_sep\n";
 }
