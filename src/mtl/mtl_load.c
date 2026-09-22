@@ -225,6 +225,7 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         result = parsed;
         goto cleanup;
       }
+      material->present |= GMDL_MTL_HAS_KA;
     }
     else if (gmdl_line_is(line_text, "Kd", &rest)) {
       GMDL_Result parsed = mtl_parse_color(rest, material->Kd);
@@ -232,6 +233,7 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         result = parsed;
         goto cleanup;
       }
+      material->present |= GMDL_MTL_HAS_KD;
     }
     else if (gmdl_line_is(line_text, "Ks", &rest)) {
       GMDL_Result parsed = mtl_parse_color(rest, material->Ks);
@@ -239,12 +241,14 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         result = parsed;
         goto cleanup;
       }
+      material->present |= GMDL_MTL_HAS_KS;
     }
     else if (gmdl_line_is(line_text, "Ns", &rest)) {
       if (sscanf(rest, "%f", &material->Ns) != 1) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
+      material->present |= GMDL_MTL_HAS_NS;
     }
     else if (gmdl_line_is(line_text, "d", &rest)) {
       GMDL_Result parsed = mtl_parse_dissolve(rest, &material->d);
@@ -252,6 +256,7 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         result = parsed;
         goto cleanup;
       }
+      material->present |= GMDL_MTL_HAS_D;
     }
     else if (gmdl_line_is(line_text, "illum", &rest)) {
       int value = 0;
@@ -260,6 +265,7 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         goto cleanup;
       }
       material->illum = (int32_t)value;
+      material->present |= GMDL_MTL_HAS_ILLUM;
     }
     // Everything else - map_Kd, Ni, Tr, and the rest - is ignored.
   }

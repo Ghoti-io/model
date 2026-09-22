@@ -542,28 +542,118 @@ TEST(MtlDissolve, AnExplicitZeroSurvivesTheRoundTrip) {
   gmdl_mtl_free(second);
 }
 
-TEST(MtlDissolve, TheDumpOfAnAbsentDissolveSaysOpaque) {
-  // This is the interop case: the dump used to write "d 0", which Blender
-  // and VTK both read as fully transparent for a source that said nothing.
-  GMDL_Mtl * mtl = load_text("newmtl body\nKd 0.8 0.1 0.1\n");
+namespace {
+
+/** The text gmdl_mtl_dump() produces for a document. */
+std::string dump_text(const GMDL_Mtl * mtl) {
+  TempFile out("");
+  EXPECT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  EXPECT_NE(sink, nullptr);
+  EXPECT_EQ(gmdl_mtl_dump(mtl, sink), GMDL_OK);
+  fclose(sink);
+  FILE * back = fopen(out.path(), "rb");
+  EXPECT_NE(back, nullptr);
+  std::string text;
+  char buf[256];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), back)) > 0) text.append(buf, n);
+  fclose(back);
+  return text;
+}
+
+} // namespace
+
+//
+// What a material states, and what the dump therefore says (4.2, 4.4).
+//
+
+TEST(MtlPresent, OnlyStatedPropertiesAreRecorded) {
+  GMDL_Mtl * mtl = load_text("newmtl body\nKd 0.8 0.1 0.1\nillum 2\n");
   ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  uint32_t p = mtl->materials[0].present;
+  EXPECT_TRUE(p & GMDL_MTL_HAS_KD);
+  EXPECT_TRUE(p & GMDL_MTL_HAS_ILLUM);
+  EXPECT_FALSE(p & GMDL_MTL_HAS_KA);
+  EXPECT_FALSE(p & GMDL_MTL_HAS_KS);
+  EXPECT_FALSE(p & GMDL_MTL_HAS_NS);
+  EXPECT_FALSE(p & GMDL_MTL_HAS_D);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlPresent, AnExplicitZeroCountsAsStated) {
+  // The whole point: "Kd 0 0 0" is black and must survive, while a material
+  // that never said Kd must not acquire one.
+  GMDL_Mtl * mtl = load_text("newmtl black\nKd 0 0 0\nd 0\nNs 0\nillum 0\n");
+  ASSERT_NE(mtl, nullptr);
+  uint32_t p = mtl->materials[0].present;
+  EXPECT_TRUE(p & GMDL_MTL_HAS_KD);
+  EXPECT_TRUE(p & GMDL_MTL_HAS_D);
+  EXPECT_TRUE(p & GMDL_MTL_HAS_NS);
+  EXPECT_TRUE(p & GMDL_MTL_HAS_ILLUM);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlPresent, TheDumpOmitsWhatWasNeverStated) {
+  // Writing "Kd 0 0 0" for a material with no Kd line made it black in both
+  // Blender and VTK, where an absent Kd is a light default. The dump must
+  // say nothing rather than say zero.
+  GMDL_Mtl * mtl = load_text("newmtl body\nKa 0.2 0.2 0.2\nKs 1 1 1\nNs 96\n");
+  ASSERT_NE(mtl, nullptr);
+  std::string text = dump_text(mtl);
+  EXPECT_EQ(text.find("\nKd "), std::string::npos)
+      << "no Kd was stated, so none may be written:\n" << text;
+  EXPECT_EQ(text.find("\nd "), std::string::npos) << text;
+  EXPECT_EQ(text.find("\nillum "), std::string::npos) << text;
+  EXPECT_NE(text.find("\nKa "), std::string::npos) << text;
+  EXPECT_NE(text.find("\nKs "), std::string::npos) << text;
+  EXPECT_NE(text.find("\nNs "), std::string::npos) << text;
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlPresent, TheDumpKeepsAnExplicitZero) {
+  GMDL_Mtl * mtl = load_text("newmtl black\nKd 0 0 0\n");
+  ASSERT_NE(mtl, nullptr);
+  std::string text = dump_text(mtl);
+  EXPECT_NE(text.find("\nKd 0 0 0\n"), std::string::npos) << text;
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlPresent, AMaterialStatingNothingDumpsAsABareNewmtl) {
+  GMDL_Mtl * mtl = load_text("newmtl empty\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_EQ(mtl->materials[0].present, 0u);
+  EXPECT_EQ(dump_text(mtl), "newmtl empty\n\n");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlPresent, PresenceSurvivesTheRoundTrip) {
+  GMDL_Mtl * first = load_text(
+      "newmtl a\nKd 0.5 0.5 0.5\n"
+      "newmtl b\nKa 1 1 1\nNs 3\nd 0\n"
+      "newmtl c\n");
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->material_count, 3u);
   TempFile out("");
   ASSERT_TRUE(out.valid());
   FILE * sink = fopen(out.path(), "wb");
   ASSERT_NE(sink, nullptr);
-  ASSERT_EQ(gmdl_mtl_dump(mtl, sink), GMDL_OK);
+  ASSERT_EQ(gmdl_mtl_dump(first, sink), GMDL_OK);
   fclose(sink);
-
-  FILE * check = fopen(out.path(), "rb");
-  ASSERT_NE(check, nullptr);
-  std::string text;
-  char buf[256];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof(buf), check)) > 0) text.append(buf, n);
-  fclose(check);
-  EXPECT_NE(text.find("\nd 1\n"), std::string::npos)
-      << "expected an opaque dissolve in:\n" << text;
-  gmdl_mtl_free(mtl);
+  GMDL_Mtl * second = nullptr;
+  ASSERT_EQ(gmdl_mtl_load_file(out.path(), nullptr, nullptr, &second),
+      GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->material_count, 3u);
+  for (size_t i = 0; i < 3; i++) {
+    EXPECT_EQ(first->materials[i].present, second->materials[i].present)
+        << "material " << i;
+    EXPECT_FLOAT_EQ(first->materials[i].d, second->materials[i].d)
+        << "material " << i;
+  }
+  gmdl_mtl_free(first);
+  gmdl_mtl_free(second);
 }
 
 int main(int argc, char ** argv) {

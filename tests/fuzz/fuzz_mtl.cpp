@@ -92,6 +92,10 @@ void check_round_trip(const GMDL_Mtl * mtl) {
     const GMDL_Mtl_Material * a = &mtl->materials[i];
     const GMDL_Mtl_Material * b = &again->materials[i];
     REQUIRE(strcmp(a->name, b->name) == 0, "material name");
+    // Which properties the source stated is part of the model, because the
+    // dump writes only those; without this the check cannot see a dumper
+    // that invents a property or drops one.
+    REQUIRE(a->present == b->present, "present");
     for (int c = 0; c < 3; c++) {
       REQUIRE(same_float(a->Ka[c], b->Ka[c]), "Ka");
       REQUIRE(same_float(a->Kd[c], b->Kd[c]), "Kd");

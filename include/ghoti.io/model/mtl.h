@@ -44,7 +44,35 @@ extern "C" {
 #define GMDL_MTL_MAX_NAME_LENGTH 128
 
 /**
+ * @brief Which properties a material's source actually stated.
+ *
+ * Every field of ::GMDL_Mtl_Material holds a value whether or not the file
+ * said anything, so the value alone cannot distinguish "black" from "not
+ * mentioned". For most properties that does not matter, because readers
+ * treat the two alike. For `Kd` it matters a great deal: an absent one is a
+ * light default - white in VTK, grey in Blender - and `Kd 0 0 0` is black.
+ *
+ * ::gmdl_mtl_dump() writes only the properties whose bit is set, so a
+ * material this library read and wrote back says exactly what it was given
+ * and no more. A consumer building a ::GMDL_Mtl_Material by hand sets the
+ * bits for the properties it filled in; leaving `present` at 0 means "this
+ * material states nothing", which dumps as a bare `newmtl`.
+ */
+typedef enum GMDL_Mtl_Present {
+  GMDL_MTL_HAS_KA = 1u << 0,    ///< `Ka` was stated.
+  GMDL_MTL_HAS_KD = 1u << 1,    ///< `Kd` was stated.
+  GMDL_MTL_HAS_KS = 1u << 2,    ///< `Ks` was stated.
+  GMDL_MTL_HAS_NS = 1u << 3,    ///< `Ns` was stated.
+  GMDL_MTL_HAS_D = 1u << 4,     ///< `d` was stated.
+  GMDL_MTL_HAS_ILLUM = 1u << 5, ///< `illum` was stated.
+} GMDL_Mtl_Present;
+
+/**
  * @brief A single material definition.
+ *
+ * Each property field holds a usable value whatever the file said; `present`
+ * says which of them the file actually stated. A renderer can ignore
+ * `present` and get sensible material; a writer must not.
  */
 typedef struct {
   char name[GMDL_MTL_MAX_NAME_LENGTH]; ///< Material name.
@@ -54,6 +82,7 @@ typedef struct {
   float Ns;    ///< Specular exponent.
   float d;     ///< Dissolve (opacity; 1.0 is opaque, and the default).
   int32_t illum; ///< Illumination model.
+  uint32_t present; ///< Bitwise OR of ::GMDL_Mtl_Present.
 } GMDL_Mtl_Material;
 
 /**

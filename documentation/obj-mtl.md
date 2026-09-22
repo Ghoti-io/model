@@ -254,10 +254,21 @@ values is ignored. Every property is optional; an absent one leaves zero,
 
 `d` is the exception because its zero is not a neutral starting value: it
 means the material is invisible, and a file says that by writing `d 0`, not
-by saying nothing. Leaving it at zero made an ordinary material disappear
-in any consumer that believed the field, and made `gmdl_mtl_dump()` write
-`d 0` and assert it to every other program. An explicit `d 0` is still zero
-and still round-trips.
+by saying nothing. Leaving it at zero made an ordinary material disappear in
+any consumer that believed the field. An explicit `d 0` is still zero.
+
+Those defaults exist so that a consumer can read a field without thinking.
+They are not what the writer uses. **`present` records which properties the
+source actually stated**, as a bitwise OR of ::GMDL_Mtl_Present, and
+`gmdl_mtl_dump()` writes only those - see 9. The two are separate questions
+and conflating them is what made the writer assert things no file said.
+
+`Kd` is the property where it shows. An absent `Kd` is a light default -
+white in VTK 9.3, 0.8 grey in Blender 4.3 - while `Kd 0 0 0` is black, so a
+dump that wrote every field turned a material that never mentioned `Kd` into
+a black one. `Ka`, `Ks` and `Ns` happen to read the same absent as zero in
+both, and neither honours `illum` at all, but the dumper does not rely on
+that: it writes what was stated and nothing else.
 
 | Property | Values | Field |
 | --- | --- | --- |
@@ -288,6 +299,10 @@ maps are the largest omission and the first thing a real renderer will want
 
 `GMDL_Mtl` holds `materials`, `material_count` and the allocator.
 `gmdl_mtl_find(mtl, name)` is a linear search by exact name.
+
+Each `GMDL_Mtl_Material` carries a usable value in every property field and
+a `present` mask saying which of them the file stated. A renderer may ignore
+`present`; anything that writes a material out must not.
 
 ---
 
@@ -391,11 +406,13 @@ the sources - the `%.9g` exponent forms, `1.00000001e-07` and
 `-3.40282347e+38` among them. That is a measured result rather than an
 intention; `notes/model/obj-differential.md` in the workspace has the method.
 
-**The MTL output is read correctly too**, measured the same way: a material
-with every property set, one that omits `d`, and one that is explicitly
-invisible all come back from both readers with the opacity the source had.
-That last pair is the interesting one, and is why 4.2 gives `d` a default
-rather than the dumper a special case.
+**The MTL output is read correctly too**, measured the same way. The dump
+writes a property only when the material's `present` mask says the source
+stated it, so a material that omitted `Kd` or `d` reads back from Blender
+and VTK exactly as the source did, and one that stated `Kd 0 0 0` or `d 0`
+keeps its black or its invisibility. Both halves of each pair were checked,
+because a fix that got either backwards would look correct from the other
+side.
 
 The dump writes `usemtl` when the material changes between consecutive faces,
 `g` for each group before its faces, and relative indices as absolute ones.
@@ -425,9 +442,12 @@ a small value, so the same corpus exercises every cap:
 
 The invariants the harnesses check: whatever the result, the parser neither
 crashes nor leaks; and a `GMDL_OK` model is dumped, parsed back, and compared
-against the original. The comparison covers every count, every coordinate
-value, every group name and span, the `mtllib` path, each face's material by
-name, and - with the exception below - every face index.
+against the original. For OBJ the comparison covers every count, every
+coordinate value, every group name and span, the `mtllib` path, each face's
+material by name, and - with the exception below - every face index. For MTL
+it covers every property value and the `present` mask, so a dumper that
+invents a property or drops one is caught as readily as one that gets a
+value wrong.
 
 That comparison used to be described here and not implemented: the harnesses
 dumped to `/dev/null` and read nothing back, which is why a dumper that
@@ -485,13 +505,6 @@ section 12 is where they are written down.
   points matter for CAD-style models.
 - **Texture maps in MTL.** `map_Kd` at minimum. Needs a path field and a
   decision on the `-o`, `-s`, `-clamp` options.
-- **An absent `Ns` or `illum`.** Both still default to zero, as 4.2 says.
-  `d` was given a real default because its zero means invisible; these two
-  have the same shape of problem - the dump asserts a value the source never
-  wrote - but nothing disappears when they are wrong, so they were left
-  alone rather than guessed at. Recording whether a property was present
-  would settle all three exactly, at the cost of a field in the public
-  struct.
 - **`Tr` as `1 - d`.** Some exporters write only `Tr`. Map it when `d` is
   absent?
 - **Extra face fields.** Reject `1/2/3/4`, or keep ignoring it?
