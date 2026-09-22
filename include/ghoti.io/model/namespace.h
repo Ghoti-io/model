@@ -50,6 +50,7 @@
 #define GMDL_Mtl GHOTIIO_MODEL(GMDL_Mtl)
 #define GMDL_Mtl_Material GHOTIIO_MODEL(GMDL_Mtl_Material)
 #define GMDL_Mtl_Present GHOTIIO_MODEL(GMDL_Mtl_Present)
+#define GMDL_Mtl_Refl_Type GHOTIIO_MODEL(GMDL_Mtl_Refl_Type)
 #define GMDL_Obj GHOTIIO_MODEL(GMDL_Obj)
 #define GMDL_Obj_Face GHOTIIO_MODEL(GMDL_Obj_Face)
 #define GMDL_Obj_Face_Overflow GHOTIIO_MODEL(GMDL_Obj_Face_Overflow)

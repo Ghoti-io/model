@@ -33,6 +33,7 @@
 #include <ghoti.io/model/core.h>
 #include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/stream.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -65,7 +66,40 @@ typedef enum GMDL_Mtl_Present {
   GMDL_MTL_HAS_NS = 1u << 3,    ///< `Ns` was stated.
   GMDL_MTL_HAS_D = 1u << 4,     ///< `d` was stated.
   GMDL_MTL_HAS_ILLUM = 1u << 5, ///< `illum` was stated.
+  GMDL_MTL_HAS_KE = 1u << 6,    ///< `Ke` was stated.
+  GMDL_MTL_HAS_TF = 1u << 7,    ///< `Tf` was stated.
+  GMDL_MTL_HAS_NI = 1u << 8,    ///< `Ni` was stated.
+  GMDL_MTL_HAS_TR = 1u << 9,    ///< `Tr` was stated.
+  GMDL_MTL_HAS_SHARPNESS = 1u << 10, ///< `sharpness` was stated.
+  GMDL_MTL_HAS_PR = 1u << 11,     ///< `Pr` was stated.
+  GMDL_MTL_HAS_PM = 1u << 12,     ///< `Pm` was stated.
+  GMDL_MTL_HAS_PS = 1u << 13,     ///< `Ps` was stated.
+  GMDL_MTL_HAS_PC = 1u << 14,     ///< `Pc` was stated.
+  GMDL_MTL_HAS_PCR = 1u << 15,    ///< `Pcr` was stated.
+  GMDL_MTL_HAS_ANISO = 1u << 16,  ///< `aniso` was stated.
+  GMDL_MTL_HAS_ANISOR = 1u << 17, ///< `anisor` was stated.
+  GMDL_MTL_HAS_MAP_AAT = 1u << 18, ///< `map_aat` was stated.
 } GMDL_Mtl_Present;
+
+/**
+ * @brief Which surface a `refl` reflection map covers.
+ *
+ * The format's `-type` names one of seven. A `refl` line that omits `-type`
+ * is kept as ::GMDL_MTL_REFL_UNTYPED rather than guessed at: the format says
+ * the option is required, real files omit it anyway, and which of the seven
+ * such a file meant is not something a parser can know.
+ */
+typedef enum GMDL_Mtl_Refl_Type {
+  GMDL_MTL_REFL_UNTYPED = 0,  ///< `refl path`, with no `-type`.
+  GMDL_MTL_REFL_SPHERE,       ///< `-type sphere`.
+  GMDL_MTL_REFL_CUBE_TOP,     ///< `-type cube_top`.
+  GMDL_MTL_REFL_CUBE_BOTTOM,  ///< `-type cube_bottom`.
+  GMDL_MTL_REFL_CUBE_FRONT,   ///< `-type cube_front`.
+  GMDL_MTL_REFL_CUBE_BACK,    ///< `-type cube_back`.
+  GMDL_MTL_REFL_CUBE_LEFT,    ///< `-type cube_left`.
+  GMDL_MTL_REFL_CUBE_RIGHT,   ///< `-type cube_right`.
+  GMDL_MTL_REFL_COUNT         ///< Number of slots; not a type.
+} GMDL_Mtl_Refl_Type;
 
 /**
  * @brief A single material definition.
@@ -90,6 +124,32 @@ typedef struct {
   float d;     ///< Dissolve (opacity; 1.0 is opaque, and the default).
   int32_t illum; ///< Illumination model.
   uint32_t present; ///< Bitwise OR of ::GMDL_Mtl_Present.
+
+  float Ke[3]; ///< Emissive colour (RGB).
+  float Tf[3]; ///< Transmission filter (RGB).
+  float Ni;    ///< Optical density, i.e. index of refraction.
+  /**
+   * Transparency, as the file stated it. **Not** folded into `d`.
+   *
+   * The format describes `Tr` as `1 - d`, and this library still keeps the
+   * two apart, because neither reference derives one from the other: Blender
+   * 4.3 ignores `Tr` outright and VTK 9.3 does too, and both take `d`
+   * whichever order the pair appears in. A consumer that wants the
+   * relationship can apply it, knowing from `present` which of the two its
+   * file actually said; one that cannot tell them apart is stuck with a
+   * value no file wrote.
+   */
+  float Tr;
+  int32_t sharpness; ///< Reflection sharpness.
+  float Pr;     ///< PBR roughness.
+  float Pm;     ///< PBR metallic.
+  float Ps;     ///< PBR sheen.
+  float Pc;     ///< PBR clearcoat thickness.
+  float Pcr;    ///< PBR clearcoat roughness.
+  float aniso;  ///< PBR anisotropy.
+  float anisor; ///< PBR anisotropy rotation.
+  bool map_aat; ///< `map_aat on` requests texture antialiasing.
+
   char * map_Ka; ///< `map_Ka` path, or NULL when the file stated none.
   char * map_Kd; ///< `map_Kd` path, or NULL when the file stated none.
   char * map_Ks; ///< `map_Ks` path, or NULL when the file stated none.
@@ -97,6 +157,21 @@ typedef struct {
   char * map_d;  ///< `map_d` path, or NULL when the file stated none.
   /** `map_bump` or `bump` path, or NULL. The two spell one property. */
   char * map_bump;
+  char * map_Ke; ///< `map_Ke` path, or NULL.
+  char * map_Pr; ///< `map_Pr` path, or NULL.
+  char * map_Pm; ///< `map_Pm` path, or NULL.
+  char * map_Ps; ///< `map_Ps` path, or NULL.
+  char * norm;   ///< `norm` path - a PBR normal map - or NULL.
+  char * disp;   ///< `disp` path - a displacement map - or NULL.
+  char * decal;  ///< `decal` path, or NULL.
+  /**
+   * `refl` paths, indexed by ::GMDL_Mtl_Refl_Type; each NULL when unstated.
+   *
+   * A cube map arrives as six separate `refl` lines, so this is an array
+   * rather than one path: they are one property of the material stated
+   * across several directives, which nothing else in MTL does.
+   */
+  char * refl[GMDL_MTL_REFL_COUNT];
 } GMDL_Mtl_Material;
 
 /**

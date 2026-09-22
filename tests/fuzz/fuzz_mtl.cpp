@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #include <ghoti.io/model/model.h>
 
@@ -53,14 +54,31 @@ bool ends_with_backslash(const char * text) {
  * the path "a\\", which is how such a library is reached at all. The format
  * has no escape for it.
  */
+/** Every path a material can hold, in one place, so nothing is forgotten. */
+void collect_paths(const GMDL_Mtl_Material * m, std::vector<const char *> & out) {
+  const char * const fixed[] = {m->map_Ka, m->map_Kd, m->map_Ks, m->map_Ns,
+      m->map_d, m->map_bump, m->map_Ke, m->map_Pr, m->map_Pm, m->map_Ps,
+      m->norm, m->disp, m->decal};
+  for (const char * p : fixed) {
+    out.push_back(p);
+  }
+  for (size_t i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
+    out.push_back(m->refl[i]);
+  }
+}
+
 bool is_representable(const GMDL_Mtl * mtl) {
   for (size_t i = 0; i < mtl->material_count; i++) {
     const GMDL_Mtl_Material * m = &mtl->materials[i];
-    if (ends_with_backslash(m->name) || ends_with_backslash(m->map_Ka)
-        || ends_with_backslash(m->map_Kd) || ends_with_backslash(m->map_Ks)
-        || ends_with_backslash(m->map_Ns) || ends_with_backslash(m->map_d)
-        || ends_with_backslash(m->map_bump)) {
+    if (ends_with_backslash(m->name)) {
       return false;
+    }
+    std::vector<const char *> paths;
+    collect_paths(m, paths);
+    for (const char * path : paths) {
+      if (ends_with_backslash(path)) {
+        return false;
+      }
     }
   }
   return true;
@@ -127,15 +145,35 @@ void check_round_trip(const GMDL_Mtl * mtl) {
     REQUIRE(same_float(a->Ns, b->Ns), "Ns");
     REQUIRE(same_float(a->d, b->d), "d");
     REQUIRE(a->illum == b->illum, "illum");
+    for (int c = 0; c < 3; c++) {
+      REQUIRE(same_float(a->Ke[c], b->Ke[c]), "Ke");
+      REQUIRE(same_float(a->Tf[c], b->Tf[c]), "Tf");
+    }
+    REQUIRE(same_float(a->Ni, b->Ni), "Ni");
+    REQUIRE(same_float(a->Tr, b->Tr), "Tr");
+    REQUIRE(a->sharpness == b->sharpness, "sharpness");
+    REQUIRE(same_float(a->Pr, b->Pr), "Pr");
+    REQUIRE(same_float(a->Pm, b->Pm), "Pm");
+    REQUIRE(same_float(a->Ps, b->Ps), "Ps");
+    REQUIRE(same_float(a->Pc, b->Pc), "Pc");
+    REQUIRE(same_float(a->Pcr, b->Pcr), "Pcr");
+    REQUIRE(same_float(a->aniso, b->aniso), "aniso");
+    REQUIRE(same_float(a->anisor, b->anisor), "anisor");
+    REQUIRE(a->map_aat == b->map_aat, "map_aat");
+
     // Including whether one was stated at all: a NULL that comes back as a
     // path, or the reverse, is exactly what a dumper keying on the wrong
-    // thing would produce.
-    REQUIRE(same_path(a->map_Ka, b->map_Ka), "map_Ka");
-    REQUIRE(same_path(a->map_Kd, b->map_Kd), "map_Kd");
-    REQUIRE(same_path(a->map_Ks, b->map_Ks), "map_Ks");
-    REQUIRE(same_path(a->map_Ns, b->map_Ns), "map_Ns");
-    REQUIRE(same_path(a->map_d, b->map_d), "map_d");
-    REQUIRE(same_path(a->map_bump, b->map_bump), "map_bump");
+    // thing would produce. Collected rather than listed, so a path added to
+    // the material cannot be left out of the comparison and quietly narrow
+    // what this harness checks.
+    std::vector<const char *> pa;
+    std::vector<const char *> pb;
+    collect_paths(a, pa);
+    collect_paths(b, pb);
+    REQUIRE(pa.size() == pb.size(), "path count");
+    for (size_t k = 0; k < pa.size(); k++) {
+      REQUIRE(same_path(pa[k], pb[k]), "map path");
+    }
   }
 
   gmdl_mtl_free(again);

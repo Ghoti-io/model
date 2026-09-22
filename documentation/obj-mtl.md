@@ -275,9 +275,30 @@ that: it writes what was stated and nothing else.
 | `Ka r g b` | ambient colour | `Ka` |
 | `Kd r g b` | diffuse colour | `Kd` |
 | `Ks r g b` | specular colour | `Ks` |
+| `Ke r g b` | emissive colour | `Ke` |
+| `Tf r g b` | transmission filter | `Tf` |
 | `Ns n` | specular exponent | `Ns` |
+| `Ni n` | optical density (index of refraction) | `Ni` |
 | `d n` | dissolve; 1 is opaque, and is the default | `d` |
+| `Tr n` | transparency; **not** folded into `d` - see below | `Tr` |
 | `illum n` | illumination model, integer | `illum` |
+| `sharpness n` | reflection sharpness, integer | `sharpness` |
+| `Pr n` | PBR roughness | `Pr` |
+| `Pm n` | PBR metallic | `Pm` |
+| `Ps n` | PBR sheen | `Ps` |
+| `Pc n` | PBR clearcoat thickness | `Pc` |
+| `Pcr n` | PBR clearcoat roughness | `Pcr` |
+| `aniso n` | PBR anisotropy | `aniso` |
+| `anisor n` | PBR anisotropy rotation | `anisor` |
+| `map_aat on\|off` | texture antialiasing hint | `map_aat` |
+
+**`Tr` is recorded and never folded into `d`.** The format describes it as
+`1 - d`, which makes deriving one from the other look obvious, and measurement
+says otherwise: Blender 4.3 ignores `Tr` outright, VTK 9.3 does too, and both
+take `d` whichever order the two appear in. A file stating `d 0.75` and
+`Tr 0.9` is stating two things that cannot both describe one surface, and it
+is not a parser's place to pick. Both are kept, `present` says which the file
+gave, and a consumer that wants the relationship can apply it knowing that.
 
 The colour properties have three documented forms. `K? r g b` is the
 ordinary one. `K? r` - one value, meaning `r r r` - is accepted and expanded.
@@ -289,11 +310,12 @@ A property whose values do not parse - `Kd 0.5 x`, `illum x` - is
 
 ### 4.3 Ignored
 
-`Ni`, `Tr`, `Ke`, `Tf`, `sharpness`, `disp`, `decal`, `refl`, and any PBR
-extension (`Pr`, `Pm`, `Ps`, `Pc`, `Pcr`, `aniso`, `anisor`, `norm`, `Ke`).
+Nothing the format defines. Every directive in the reference document is read
+into a field: the properties in 4.2, the texture maps in 4.5, the reflection
+maps in 4.6.
 
-`refl` is the one of those with a real shape of its own - it takes a `-type`
-and, for a cube map, six files - so it is not simply another entry in 4.5.
+A line whose directive is not one of them is skipped, which is how a file
+carrying a renderer's private extension still loads.
 
 ### 4.4 The result
 
@@ -306,8 +328,9 @@ a `present` mask saying which of them the file stated. A renderer may ignore
 
 The texture map paths need no bit in the mask, because a pointer answers the
 question by itself: NULL means the file stated none, and no file can ask for
-NULL. They belong to the `GMDL_Mtl` and are freed with it, so a path that has
-to outlive the library must be copied out.
+NULL. That covers the maps in 4.5 and every `refl` slot in 4.6. They belong to
+the `GMDL_Mtl` and are freed with it, so a path that has to outlive the
+library must be copied out.
 
 ### 4.5 Texture maps
 
@@ -316,9 +339,18 @@ to outlive the library must be copied out.
 | `map_Ka path` | `map_Ka` |
 | `map_Kd path` | `map_Kd` |
 | `map_Ks path` | `map_Ks` |
+| `map_Ke path` | `map_Ke` |
 | `map_Ns path` | `map_Ns` |
 | `map_d path` | `map_d` |
 | `map_bump path`, `bump path` | `map_bump` |
+| `map_Pr path` | `map_Pr` |
+| `map_Pm path` | `map_Pm` |
+| `map_Ps path` | `map_Ps` |
+| `norm path` | `norm` |
+| `disp path` | `disp` |
+| `decal path` | `decal` |
+
+`refl` is a map too, and has a shape of its own; it is 4.6.
 
 `bump` and `map_bump` are two spellings of one property and share a field.
 The dump writes `map_bump`, so the round trip is of the material rather than
@@ -353,6 +385,39 @@ a wrong picture rather than a missing one.
 A directive with no path at all is `GMDL_ERR_FORMAT`, for the same reason
 `Kd 0.5 x` is. Both references instead ignore the line; this is a place where
 the library is deliberately stricter than both.
+
+### 4.6 `refl` - reflection maps
+
+A reflection map names the surface it covers, so unlike every other map
+directive its argument may begin with an option:
+
+```
+refl -type sphere      chrome.png
+refl -type cube_top    top.png
+refl -type cube_bottom bottom.png
+refl -type cube_front  front.png
+refl -type cube_back   back.png
+refl -type cube_left   left.png
+refl -type cube_right  right.png
+```
+
+`material->refl[]` is indexed by ::GMDL_Mtl_Refl_Type, one slot per surface,
+each NULL until stated. A cube map is six separate lines, which is the reason
+for an array: it is the one property in MTL that a file states across several
+directives.
+
+`-type` is read where `-o` and `-s` are refused (4.5) because it is not the
+same kind of thing. It says which slot the path belongs in; dropping it would
+lose which of seven surfaces the file meant, where dropping a sampling option
+loses only how the image is sampled. **Any other option is still
+`GMDL_ERR_UNSUPPORTED`**, including one that follows a valid `-type`, so this
+is not a general opening of the option syntax. A `-type` naming none of the
+seven is `GMDL_ERR_FORMAT`.
+
+A `refl` with no `-type` at all goes to ::GMDL_MTL_REFL_UNTYPED and is written
+back without one. The format says the option is required; both references
+accept the line anyway, so refusing it would reject files that exist, and
+assuming a surface would record something the file never said.
 
 ---
 
@@ -483,7 +548,17 @@ side.
 **Texture map paths survive too**, measured the same way: a library holding
 `map_Kd my tex.png`, `map_Ka` and `map_bump` was dumped, and Blender read the
 dump exactly as it read the source - same files in the same slots, the space
-in the filename included, the bump map wired to the same normal input.
+in the filename included, the bump map wired to the same normal input. The
+rest of the vocabulary was measured the same way once it existed: a material
+carrying `Ke`, `Tf`, `Ni`, five PBR scalars, `map_Ke`, `map_Pr`, `map_Pm` and
+a `refl -type sphere` read identically from the source and from the dump,
+down to which socket each image landed on.
+
+VTK 9.3 is not a second opinion on any of that. It reads `Ka`, `Kd`, `Ks`,
+`Ns`, `d` and one texture, and ignores every directive added since - so for
+the newer half of 4.2 and 4.5 there is one reference rather than two, and the
+agreement recorded above is Blender's alone. An oracle that declines a whole
+category is not a second reading of it.
 
 VTK 9.3 agrees on the paths and disagrees about which one it uses, for a
 reason worth stating because it is not a defect on either side. VTK keeps
@@ -539,10 +614,13 @@ against the original. For OBJ the comparison covers every count, every
 coordinate value, every group name and span, the `mtllib` path, each face's
 material by name, and - with the exception below - every face index. For MTL
 it covers every property value, the `present` mask and every texture map
-path - including whether one was stated at all, since a NULL that comes back
-as a path is exactly what a dumper keying on the wrong thing produces. A
-dumper that invents a property or drops one is caught as readily as one that
-gets a value wrong.
+path - the `refl` slots included, and including whether one was stated at
+all, since a NULL that comes back as a path is exactly what a dumper keying
+on the wrong thing produces. The paths are gathered by a helper rather than
+listed at the comparison, so a path added to the material cannot be left out
+of the check and quietly narrow what the harness verifies. A dumper that
+invents a property or drops one is caught as readily as one that gets a value
+wrong.
 
 That comparison used to be described here and not implemented: the harnesses
 dumped to `/dev/null` and read nothing back, which is why a dumper that
@@ -604,13 +682,9 @@ section 12 is where they are written down.
   `GMDL_ERR_UNSUPPORTED` today (4.5). Implementing them means a place to put
   them and a decision about `-bm`, which Blender applies and VTK 9.3 does not
   parse at all.
-- **`refl`, `disp` and `decal`.** Still ignored. `refl` is the awkward one:
-  a `-type` and, for a cube map, six files, so it is not another row in 4.5.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is the one place 4.5 takes it
   further than either.
-- **`Tr` as `1 - d`.** Some exporters write only `Tr`. Map it when `d` is
-  absent?
 - **Extra face fields.** Reject `1/2/3/4`, or keep ignoring it?
 - **`nan` and `inf`.** Record faithfully (current) or reject at parse time?
   Section 1 argues for faithful; a stricter mode via `GMDL_Limits` is an

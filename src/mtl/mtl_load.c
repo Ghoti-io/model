@@ -135,6 +135,16 @@ static void mtl_material_free_paths(
   gcu_allocator_free(allocator, material->map_Ns);
   gcu_allocator_free(allocator, material->map_d);
   gcu_allocator_free(allocator, material->map_bump);
+  gcu_allocator_free(allocator, material->map_Ke);
+  gcu_allocator_free(allocator, material->map_Pr);
+  gcu_allocator_free(allocator, material->map_Pm);
+  gcu_allocator_free(allocator, material->map_Ps);
+  gcu_allocator_free(allocator, material->norm);
+  gcu_allocator_free(allocator, material->disp);
+  gcu_allocator_free(allocator, material->decal);
+  for (size_t i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
+    gcu_allocator_free(allocator, material->refl[i]);
+  }
 }
 
 /**
@@ -190,6 +200,98 @@ static GMDL_Result mtl_parse_map(
   gcu_allocator_free(allocator, *slot);
   *slot = copy;
   return GMDL_OK;
+}
+
+/**
+ * Read a `refl` directive, which is the one map that names its own slot.
+ *
+ * `refl -type sphere file` and the six `cube_*` spellings are a material's
+ * reflection maps; a cube map arrives as six separate lines. The leading
+ * `-type` is not a sampling option like `-s` - it says which of seven
+ * surfaces the file covers - so unlike every other map directive a leading
+ * `-` is read rather than refused here. Any *other* option is
+ * ::GMDL_ERR_UNSUPPORTED exactly as elsewhere (4.5).
+ *
+ * A `refl` with no `-type` is kept as ::GMDL_MTL_REFL_UNTYPED. The format
+ * says the option is required and both references accept the line anyway, so
+ * refusing it would reject files that exist; guessing which surface it meant
+ * would invent something the file did not say.
+ *
+ * @param rest The text after the directive.
+ * @param allocator The allocator for the copy.
+ * @param material The material to fill in.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT, ::GMDL_ERR_UNSUPPORTED or
+ *   ::GMDL_ERR_OOM.
+ */
+static GMDL_Result mtl_parse_refl(const char * rest,
+    const GMDL_Allocator * allocator, GMDL_Mtl_Material * material) {
+  static const struct {
+    const char * name;
+    GMDL_Mtl_Refl_Type type;
+  } types[] = {
+    {"sphere", GMDL_MTL_REFL_SPHERE},
+    {"cube_top", GMDL_MTL_REFL_CUBE_TOP},
+    {"cube_bottom", GMDL_MTL_REFL_CUBE_BOTTOM},
+    {"cube_front", GMDL_MTL_REFL_CUBE_FRONT},
+    {"cube_back", GMDL_MTL_REFL_CUBE_BACK},
+    {"cube_left", GMDL_MTL_REFL_CUBE_LEFT},
+    {"cube_right", GMDL_MTL_REFL_CUBE_RIGHT},
+  };
+
+  GMDL_Mtl_Refl_Type type = GMDL_MTL_REFL_UNTYPED;
+  if (*rest == '-') {
+    const char * after = NULL;
+    if (!gmdl_line_is(rest, "-type", &after)) {
+      return GMDL_ERR_UNSUPPORTED; // Some option other than -type.
+    }
+    char name[32];
+    if (gmdl_first_token(after, name, sizeof(name)) != GMDL_OK) {
+      // Absent, or too long to be any of the seven. Either way the line
+      // says -type and then does not name one.
+      return GMDL_ERR_FORMAT;
+    }
+    size_t index = 0;
+    for (; index < sizeof(types) / sizeof(types[0]); index++) {
+      if (strcmp(name, types[index].name) == 0) {
+        type = types[index].type;
+        break;
+      }
+    }
+    if (index == sizeof(types) / sizeof(types[0])) {
+      return GMDL_ERR_FORMAT; // A -type this format does not define.
+    }
+    rest = after + strlen(name);
+    while (*rest == ' ' || *rest == '\t') {
+      rest++;
+    }
+    if (*rest == '-') {
+      return GMDL_ERR_UNSUPPORTED; // -type, then a sampling option.
+    }
+  }
+  return mtl_parse_map(rest, allocator, &material->refl[type]);
+}
+
+/**
+ * Read a `map_aat on|off` toggle.
+ *
+ * @param rest The text after the directive.
+ * @param out Receives the value.
+ * @return ::GMDL_OK or ::GMDL_ERR_FORMAT.
+ */
+static GMDL_Result mtl_parse_toggle(const char * rest, bool * out) {
+  char token[8];
+  if (gmdl_first_token(rest, token, sizeof(token)) != GMDL_OK) {
+    return GMDL_ERR_FORMAT;
+  }
+  if (strcmp(token, "on") == 0) {
+    *out = true;
+    return GMDL_OK;
+  }
+  if (strcmp(token, "off") == 0) {
+    *out = false;
+    return GMDL_OK;
+  }
+  return GMDL_ERR_FORMAT;
 }
 
 GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
@@ -338,6 +440,102 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       material->illum = (int32_t)value;
       material->present |= GMDL_MTL_HAS_ILLUM;
     }
+    else if (gmdl_line_is(line_text, "Ke", &rest)) {
+      GMDL_Result parsed = mtl_parse_color(rest, material->Ke);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_KE;
+    }
+    else if (gmdl_line_is(line_text, "Tf", &rest)) {
+      GMDL_Result parsed = mtl_parse_color(rest, material->Tf);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_TF;
+    }
+    else if (gmdl_line_is(line_text, "Ni", &rest)) {
+      if (sscanf(rest, "%f", &material->Ni) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_NI;
+    }
+    else if (gmdl_line_is(line_text, "Tr", &rest)) {
+      if (sscanf(rest, "%f", &material->Tr) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_TR;
+    }
+    else if (gmdl_line_is(line_text, "Pr", &rest)) {
+      if (sscanf(rest, "%f", &material->Pr) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_PR;
+    }
+    else if (gmdl_line_is(line_text, "Pm", &rest)) {
+      if (sscanf(rest, "%f", &material->Pm) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_PM;
+    }
+    else if (gmdl_line_is(line_text, "Ps", &rest)) {
+      if (sscanf(rest, "%f", &material->Ps) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_PS;
+    }
+    else if (gmdl_line_is(line_text, "Pc", &rest)) {
+      if (sscanf(rest, "%f", &material->Pc) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_PC;
+    }
+    else if (gmdl_line_is(line_text, "Pcr", &rest)) {
+      if (sscanf(rest, "%f", &material->Pcr) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_PCR;
+    }
+    else if (gmdl_line_is(line_text, "aniso", &rest)) {
+      if (sscanf(rest, "%f", &material->aniso) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_ANISO;
+    }
+    else if (gmdl_line_is(line_text, "anisor", &rest)) {
+      if (sscanf(rest, "%f", &material->anisor) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_ANISOR;
+    }
+    else if (gmdl_line_is(line_text, "sharpness", &rest)) {
+      int value = 0;
+      if (sscanf(rest, "%d", &value) != 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      material->sharpness = (int32_t)value;
+      material->present |= GMDL_MTL_HAS_SHARPNESS;
+    }
+    else if (gmdl_line_is(line_text, "map_aat", &rest)) {
+      GMDL_Result parsed = mtl_parse_toggle(rest, &material->map_aat);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      material->present |= GMDL_MTL_HAS_MAP_AAT;
+    }
     else if (gmdl_line_is(line_text, "map_Ka", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ka);
       if (parsed != GMDL_OK) {
@@ -383,7 +581,63 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
         goto cleanup;
       }
     }
-    // Everything else - Ni, Tr, disp, refl, and the rest - is ignored.
+    else if (gmdl_line_is(line_text, "map_Ke", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ke);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "map_Pr", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pr);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "map_Pm", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pm);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "map_Ps", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ps);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "norm", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->norm);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "disp", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->disp);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "decal", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->decal);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "refl", &rest)) {
+      GMDL_Result parsed = mtl_parse_refl(rest, allocator, material);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    // Anything left is a directive this format does not define (4.3).
   }
 
   {

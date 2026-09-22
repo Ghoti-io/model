@@ -8,7 +8,11 @@
 
 #include "test_helpers.h"
 
+#include <cstddef>
+#include <functional>
 #include <string>
+#include <utility>
+#include <vector>
 
 using gmdltest::data;
 using gmdltest::FailingSink;
@@ -895,9 +899,18 @@ TEST(MtlDump, EveryWriteFailureIsReported) {
   // states almost nothing, so the sweep crosses a material boundary.
   GMDL_Mtl * mtl = load_text("newmtl full\n"
                              "Ka 0.1 0.2 0.3\nKd 0.4 0.5 0.6\n"
-                             "Ks 0.7 0.8 0.9\nNs 96\nd 0.5\nillum 2\n"
+                             "Ks 0.7 0.8 0.9\nKe 0.11 0.12 0.13\n"
+                             "Tf 0.21 0.22 0.23\n"
+                             "Ns 96\nNi 1.45\nd 0.5\nTr 0.25\nillum 2\n"
+                             "sharpness 60\nPr 0.4\nPm 0.6\nPs 0.7\n"
+                             "Pc 0.2\nPcr 0.3\naniso 0.1\nanisor 0.2\n"
+                             "map_aat on\n"
                              "map_Ka a.png\nmap_Kd d.png\nmap_Ks s.png\n"
                              "map_Ns n.png\nmap_d alpha.png\nmap_bump b.png\n"
+                             "map_Ke e.png\nmap_Pr pr.png\nmap_Pm pm.png\n"
+                             "map_Ps ps.png\nnorm nm.png\ndisp dp.png\n"
+                             "decal dc.png\nrefl sp.png\n"
+                             "refl -type cube_top ct.png\n"
                              "newmtl bare\n");
   ASSERT_NE(mtl, nullptr);
   ASSERT_EQ(mtl->material_count, 2u);
@@ -919,8 +932,376 @@ TEST(MtlDump, EveryWriteFailureIsReported) {
     failures++;
   }
   // One line per property and per map, two newmtl lines and two blanks.
-  EXPECT_GT(failures, 15u) << "the sweep stopped far too early";
+  // Every directive the material can carry is present, because a sweep over
+  // a partial material leaves the arms of whatever it omitted unexecuted -
+  // which is how this test silently stopped covering the writer when the
+  // vocabulary grew.
+  EXPECT_GT(failures, 35u) << "the sweep stopped far too early";
   gmdl_mtl_free(mtl);
+}
+
+//
+// The rest of the MTL vocabulary (4.2, 4.5, 4.6).
+//
+
+namespace {
+
+struct ScalarCase {
+  const char * line;
+  uint32_t bit;
+  std::function<bool(const GMDL_Mtl_Material &)> holds;
+};
+
+} // namespace
+
+TEST(MtlVocabulary, EachDirectiveSetsItsOwnFieldAndItsOwnBit) {
+  // The dispatch is twenty near-identical blocks, and the mistake such code
+  // invites is not a parse failure but a crossed wire: the right value in
+  // the wrong field, or the wrong bit beside a right value. Both survive a
+  // test that only checks the value it just wrote. Each case here states one
+  // directive alone and demands that `present` equals exactly its own bit,
+  // so a stray assignment to another property is a failure too.
+  const std::vector<ScalarCase> cases = {
+      {"Ka 0.1 0.2 0.3", GMDL_MTL_HAS_KA,
+          [](const GMDL_Mtl_Material & m) { return m.Ka[0] == 0.1f && m.Ka[2] == 0.3f; }},
+      {"Kd 0.1 0.2 0.3", GMDL_MTL_HAS_KD,
+          [](const GMDL_Mtl_Material & m) { return m.Kd[0] == 0.1f && m.Kd[2] == 0.3f; }},
+      {"Ks 0.1 0.2 0.3", GMDL_MTL_HAS_KS,
+          [](const GMDL_Mtl_Material & m) { return m.Ks[0] == 0.1f && m.Ks[2] == 0.3f; }},
+      {"Ke 0.1 0.2 0.3", GMDL_MTL_HAS_KE,
+          [](const GMDL_Mtl_Material & m) { return m.Ke[0] == 0.1f && m.Ke[2] == 0.3f; }},
+      {"Tf 0.1 0.2 0.3", GMDL_MTL_HAS_TF,
+          [](const GMDL_Mtl_Material & m) { return m.Tf[0] == 0.1f && m.Tf[2] == 0.3f; }},
+      {"Ns 96", GMDL_MTL_HAS_NS,
+          [](const GMDL_Mtl_Material & m) { return m.Ns == 96.0f; }},
+      {"Ni 1.45", GMDL_MTL_HAS_NI,
+          [](const GMDL_Mtl_Material & m) { return m.Ni == 1.45f; }},
+      {"d 0.5", GMDL_MTL_HAS_D,
+          [](const GMDL_Mtl_Material & m) { return m.d == 0.5f; }},
+      {"Tr 0.25", GMDL_MTL_HAS_TR,
+          [](const GMDL_Mtl_Material & m) { return m.Tr == 0.25f; }},
+      {"illum 2", GMDL_MTL_HAS_ILLUM,
+          [](const GMDL_Mtl_Material & m) { return m.illum == 2; }},
+      {"sharpness 60", GMDL_MTL_HAS_SHARPNESS,
+          [](const GMDL_Mtl_Material & m) { return m.sharpness == 60; }},
+      {"Pr 0.4", GMDL_MTL_HAS_PR,
+          [](const GMDL_Mtl_Material & m) { return m.Pr == 0.4f; }},
+      {"Pm 0.6", GMDL_MTL_HAS_PM,
+          [](const GMDL_Mtl_Material & m) { return m.Pm == 0.6f; }},
+      {"Ps 0.7", GMDL_MTL_HAS_PS,
+          [](const GMDL_Mtl_Material & m) { return m.Ps == 0.7f; }},
+      {"Pc 0.2", GMDL_MTL_HAS_PC,
+          [](const GMDL_Mtl_Material & m) { return m.Pc == 0.2f; }},
+      {"Pcr 0.3", GMDL_MTL_HAS_PCR,
+          [](const GMDL_Mtl_Material & m) { return m.Pcr == 0.3f; }},
+      {"aniso 0.1", GMDL_MTL_HAS_ANISO,
+          [](const GMDL_Mtl_Material & m) { return m.aniso == 0.1f; }},
+      {"anisor 0.2", GMDL_MTL_HAS_ANISOR,
+          [](const GMDL_Mtl_Material & m) { return m.anisor == 0.2f; }},
+      {"map_aat on", GMDL_MTL_HAS_MAP_AAT,
+          [](const GMDL_Mtl_Material & m) { return m.map_aat; }},
+      {"map_aat off", GMDL_MTL_HAS_MAP_AAT,
+          [](const GMDL_Mtl_Material & m) { return !m.map_aat; }},
+  };
+
+  for (const ScalarCase & c : cases) {
+    GMDL_Mtl * mtl = load_text(std::string("newmtl m\n") + c.line + "\n");
+    ASSERT_NE(mtl, nullptr) << c.line;
+    ASSERT_EQ(mtl->material_count, 1u) << c.line;
+    const GMDL_Mtl_Material & m = mtl->materials[0];
+    EXPECT_EQ(m.present, c.bit)
+        << c.line << " set " << m.present << ", expected only " << c.bit;
+    EXPECT_TRUE(c.holds(m)) << c.line << " did not reach its own field";
+    gmdl_mtl_free(mtl);
+  }
+}
+
+TEST(MtlVocabulary, EachMapDirectiveReachesItsOwnField) {
+  // The same crossed-wire risk on the path side, where NULL is the marker
+  // rather than a bit: exactly one path may be non-NULL.
+  const std::vector<std::pair<const char *, size_t>> cases = {
+      {"map_Ka", offsetof(GMDL_Mtl_Material, map_Ka)},
+      {"map_Kd", offsetof(GMDL_Mtl_Material, map_Kd)},
+      {"map_Ks", offsetof(GMDL_Mtl_Material, map_Ks)},
+      {"map_Ns", offsetof(GMDL_Mtl_Material, map_Ns)},
+      {"map_d", offsetof(GMDL_Mtl_Material, map_d)},
+      {"map_bump", offsetof(GMDL_Mtl_Material, map_bump)},
+      {"bump", offsetof(GMDL_Mtl_Material, map_bump)},
+      {"map_Ke", offsetof(GMDL_Mtl_Material, map_Ke)},
+      {"map_Pr", offsetof(GMDL_Mtl_Material, map_Pr)},
+      {"map_Pm", offsetof(GMDL_Mtl_Material, map_Pm)},
+      {"map_Ps", offsetof(GMDL_Mtl_Material, map_Ps)},
+      {"norm", offsetof(GMDL_Mtl_Material, norm)},
+      {"disp", offsetof(GMDL_Mtl_Material, disp)},
+      {"decal", offsetof(GMDL_Mtl_Material, decal)},
+  };
+
+  for (const auto & c : cases) {
+    GMDL_Mtl * mtl =
+        load_text(std::string("newmtl m\n") + c.first + " t.png\n");
+    ASSERT_NE(mtl, nullptr) << c.first;
+    const GMDL_Mtl_Material & m = mtl->materials[0];
+    const char * expected =
+        *reinterpret_cast<const char * const *>(
+            reinterpret_cast<const char *>(&m) + c.second);
+    ASSERT_NE(expected, nullptr) << c.first << " did not reach its field";
+    EXPECT_STREQ(expected, "t.png") << c.first;
+
+    // ...and nothing else moved.
+    size_t filled = 0;
+    for (const char * p : {m.map_Ka, m.map_Kd, m.map_Ks, m.map_Ns, m.map_d,
+             m.map_bump, m.map_Ke, m.map_Pr, m.map_Pm, m.map_Ps, m.norm,
+             m.disp, m.decal}) {
+      filled += p != nullptr;
+    }
+    for (size_t i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
+      filled += m.refl[i] != nullptr;
+    }
+    EXPECT_EQ(filled, 1u) << c.first << " filled in more than its own path";
+    EXPECT_EQ(m.present, 0u) << c.first << " set a scalar's bit";
+    gmdl_mtl_free(mtl);
+  }
+}
+
+TEST(MtlTr, IsRecordedAndNotFoldedIntoDissolve) {
+  // 4.2's open question, settled by measurement rather than by the format's
+  // "Tr is 1 - d": neither reference derives one from the other. Blender 4.3
+  // ignores Tr outright, VTK 9.3 likewise, and both take d whichever order
+  // the pair appears in. So both are recorded and neither is synthesised.
+  GMDL_Mtl * mtl = load_text("newmtl only_tr\nTr 0.25\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Tr, 0.25f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].d, 1.0f) << "d must keep its own default";
+  EXPECT_FALSE(mtl->materials[0].present & GMDL_MTL_HAS_D);
+  EXPECT_TRUE(mtl->materials[0].present & GMDL_MTL_HAS_TR);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlTr, AContradictoryPairIsKeptAsWritten) {
+  // d says three-quarters opaque, Tr says nine-tenths transparent. They
+  // cannot both be describing the same surface, and it is not the parser's
+  // place to pick; `present` says the file stated both.
+  GMDL_Mtl * mtl = load_text("newmtl both\nd 0.75\nTr 0.9\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_FLOAT_EQ(mtl->materials[0].d, 0.75f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Tr, 0.9f);
+  uint32_t p = mtl->materials[0].present;
+  EXPECT_TRUE(p & GMDL_MTL_HAS_D);
+  EXPECT_TRUE(p & GMDL_MTL_HAS_TR);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlRefl, EveryTypeReachesItsOwnSlot) {
+  GMDL_Mtl * mtl = load_text("newmtl m\n"
+                             "refl -type sphere s.png\n"
+                             "refl -type cube_top top.png\n"
+                             "refl -type cube_bottom bottom.png\n"
+                             "refl -type cube_front front.png\n"
+                             "refl -type cube_back back.png\n"
+                             "refl -type cube_left left.png\n"
+                             "refl -type cube_right right.png\n");
+  ASSERT_NE(mtl, nullptr);
+  const GMDL_Mtl_Material & m = mtl->materials[0];
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_SPHERE], "s.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_TOP], "top.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_BOTTOM], "bottom.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_FRONT], "front.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_BACK], "back.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_LEFT], "left.png");
+  EXPECT_STREQ(m.refl[GMDL_MTL_REFL_CUBE_RIGHT], "right.png");
+  EXPECT_EQ(m.refl[GMDL_MTL_REFL_UNTYPED], nullptr);
+
+  // And each comes back out under the same -type. Written as one comparison
+  // so that a slot dumped under the wrong name is a failure rather than a
+  // line nobody looks at.
+  EXPECT_EQ(dump_text(mtl),
+      "newmtl m\n"
+      "refl -type sphere s.png\n"
+      "refl -type cube_top top.png\n"
+      "refl -type cube_bottom bottom.png\n"
+      "refl -type cube_front front.png\n"
+      "refl -type cube_back back.png\n"
+      "refl -type cube_left left.png\n"
+      "refl -type cube_right right.png\n\n");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlRefl, ALineWithNoTypeKeepsItsOwnSlot) {
+  // The format wants -type. Both references accept the line without it, so
+  // refusing would reject files that exist; guessing a surface would invent
+  // one. It gets a slot of its own and comes back out the way it went in.
+  GMDL_Mtl * mtl = load_text("newmtl m\nrefl t.png\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_STREQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED], "t.png");
+  EXPECT_EQ(mtl->materials[0].refl[GMDL_MTL_REFL_SPHERE], nullptr);
+  EXPECT_EQ(dump_text(mtl), "newmtl m\nrefl t.png\n\n");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlRefl, TypedSlotsAreWrittenWithTheirType) {
+  GMDL_Mtl * mtl = load_text("newmtl m\nrefl -type cube_left l.png\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_EQ(dump_text(mtl), "newmtl m\nrefl -type cube_left l.png\n\n");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlRefl, AnUnknownTypeIsMalformed) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nrefl -type wedge t.png\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nrefl -type\n"), GMDL_ERR_FORMAT);
+}
+
+TEST(MtlRefl, AnyOtherOptionIsStillUnsupported) {
+  // -type is read because it names the slot rather than adjusting sampling.
+  // That is not a general opening of the option syntax.
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nrefl -s 2 2 2 t.png\n"),
+      GMDL_ERR_UNSUPPORTED);
+  EXPECT_EQ(load_text_expecting_failure(
+                "newmtl m\nrefl -type sphere -s 2 2 2 t.png\n"),
+      GMDL_ERR_UNSUPPORTED);
+}
+
+TEST(MtlRefl, ATypedLineWithNoPathIsMalformed) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nrefl -type sphere\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(MtlVocabulary, AToggleThatIsNeitherOnNorOffIsMalformed) {
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nmap_aat yes\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl m\nmap_aat\n"), GMDL_ERR_FORMAT);
+}
+
+TEST(MtlVocabulary, UnimplementedColourFormsStillApplyToTheNewColours) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nKe spectral f.rfl\n"),
+      GMDL_ERR_UNSUPPORTED);
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nTf xyz 1 2 3\n"),
+      GMDL_ERR_UNSUPPORTED);
+}
+
+TEST(MtlVocabulary, EveryDirectiveRefusesWhatItCannotRead) {
+  // The refusal arm of each directive, which is a separate branch per
+  // directive and therefore a separate way to get one wrong. A colour that
+  // names an unimplemented form is UNSUPPORTED; a value that is not a value
+  // at all is FORMAT; a map carrying options is UNSUPPORTED (4.5).
+  const std::vector<std::pair<const char *, GMDL_Result>> cases = {
+      {"Ka spectral f.rfl", GMDL_ERR_UNSUPPORTED},
+      {"Kd xyz 1 2 3", GMDL_ERR_UNSUPPORTED},
+      {"Ks spectral f.rfl", GMDL_ERR_UNSUPPORTED},
+      {"Ke xyz 1 2 3", GMDL_ERR_UNSUPPORTED},
+      {"Tf spectral f.rfl", GMDL_ERR_UNSUPPORTED},
+      {"Ka 0.5 x", GMDL_ERR_FORMAT},
+      {"Ke 0.5 x", GMDL_ERR_FORMAT},
+      {"Tf 0.5 x", GMDL_ERR_FORMAT},
+      {"Ns x", GMDL_ERR_FORMAT},
+      {"Ni x", GMDL_ERR_FORMAT},
+      {"d x", GMDL_ERR_FORMAT},
+      {"Tr x", GMDL_ERR_FORMAT},
+      {"illum x", GMDL_ERR_FORMAT},
+      {"sharpness x", GMDL_ERR_FORMAT},
+      {"Pr x", GMDL_ERR_FORMAT},
+      {"Pm x", GMDL_ERR_FORMAT},
+      {"Ps x", GMDL_ERR_FORMAT},
+      {"Pc x", GMDL_ERR_FORMAT},
+      {"Pcr x", GMDL_ERR_FORMAT},
+      {"aniso x", GMDL_ERR_FORMAT},
+      {"anisor x", GMDL_ERR_FORMAT},
+      {"map_aat maybe", GMDL_ERR_FORMAT},
+      {"map_Ka -o 1 a.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Kd -o 1 d.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ks -o 1 s.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ns -o 1 n.png", GMDL_ERR_UNSUPPORTED},
+      {"map_d -o 1 a.png", GMDL_ERR_UNSUPPORTED},
+      {"map_bump -bm 1 b.png", GMDL_ERR_UNSUPPORTED},
+      {"bump -bm 1 b.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ke -o 1 e.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Pr -o 1 p.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Pm -o 1 p.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ps -o 1 p.png", GMDL_ERR_UNSUPPORTED},
+      {"norm -o 1 n.png", GMDL_ERR_UNSUPPORTED},
+      {"disp -o 1 d.png", GMDL_ERR_UNSUPPORTED},
+      {"decal -o 1 d.png", GMDL_ERR_UNSUPPORTED},
+      {"refl -s 2 2 2 r.png", GMDL_ERR_UNSUPPORTED},
+      {"map_Ka", GMDL_ERR_FORMAT},
+      {"norm", GMDL_ERR_FORMAT},
+      {"decal   ", GMDL_ERR_FORMAT},
+  };
+
+  for (const auto & c : cases) {
+    EXPECT_EQ(load_text_expecting_failure(
+                  std::string("newmtl m\n") + c.first + "\n"),
+        c.second)
+        << c.first;
+  }
+}
+
+TEST(MtlVocabulary, TheWholeVocabularySurvivesTheRoundTrip) {
+  GMDL_Mtl * first = load_text("newmtl everything\n"
+                               "Ka 0.1 0.2 0.3\nKd 0.4 0.5 0.6\n"
+                               "Ks 0.7 0.8 0.9\nKe 0.11 0.12 0.13\n"
+                               "Tf 0.21 0.22 0.23\n"
+                               "Ns 96\nNi 1.45\nd 0.5\nTr 0.25\nillum 2\n"
+                               "sharpness 60\n"
+                               "Pr 0.4\nPm 0.6\nPs 0.7\nPc 0.2\nPcr 0.3\n"
+                               "aniso 0.1\nanisor 0.2\nmap_aat on\n"
+                               "map_Ka a.png\nmap_Kd d.png\nmap_Ks s.png\n"
+                               "map_Ns n.png\nmap_d alpha.png\n"
+                               "map_bump b.png\nmap_Ke e.png\nmap_Pr pr.png\n"
+                               "map_Pm pm.png\nmap_Ps ps.png\nnorm nm.png\n"
+                               "disp dp.png\ndecal dc.png\n"
+                               "refl -type sphere sp.png\n"
+                               "refl -type cube_back cb.png\n");
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->material_count, 1u);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_mtl_dump(first, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Mtl * second = nullptr;
+  ASSERT_EQ(
+      gmdl_mtl_load_file(out.path(), nullptr, nullptr, &second), GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->material_count, 1u);
+  const GMDL_Mtl_Material & a = first->materials[0];
+  const GMDL_Mtl_Material & b = second->materials[0];
+
+  EXPECT_EQ(a.present, b.present);
+  for (int c = 0; c < 3; c++) {
+    EXPECT_FLOAT_EQ(a.Ke[c], b.Ke[c]) << "Ke " << c;
+    EXPECT_FLOAT_EQ(a.Tf[c], b.Tf[c]) << "Tf " << c;
+  }
+  EXPECT_FLOAT_EQ(a.Ni, b.Ni);
+  EXPECT_FLOAT_EQ(a.Tr, b.Tr);
+  EXPECT_EQ(a.sharpness, b.sharpness);
+  EXPECT_FLOAT_EQ(a.Pr, b.Pr);
+  EXPECT_FLOAT_EQ(a.Pm, b.Pm);
+  EXPECT_FLOAT_EQ(a.Ps, b.Ps);
+  EXPECT_FLOAT_EQ(a.Pc, b.Pc);
+  EXPECT_FLOAT_EQ(a.Pcr, b.Pcr);
+  EXPECT_FLOAT_EQ(a.aniso, b.aniso);
+  EXPECT_FLOAT_EQ(a.anisor, b.anisor);
+  EXPECT_EQ(a.map_aat, b.map_aat);
+  EXPECT_STREQ(a.map_Ke, b.map_Ke);
+  EXPECT_STREQ(a.map_Pr, b.map_Pr);
+  EXPECT_STREQ(a.map_Pm, b.map_Pm);
+  EXPECT_STREQ(a.map_Ps, b.map_Ps);
+  EXPECT_STREQ(a.norm, b.norm);
+  EXPECT_STREQ(a.disp, b.disp);
+  EXPECT_STREQ(a.decal, b.decal);
+  for (size_t i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
+    ASSERT_EQ(a.refl[i] == nullptr, b.refl[i] == nullptr) << "refl slot " << i;
+    if (a.refl[i]) {
+      EXPECT_STREQ(a.refl[i], b.refl[i]) << "refl slot " << i;
+    }
+  }
+  gmdl_mtl_free(first);
+  gmdl_mtl_free(second);
 }
 
 int main(int argc, char ** argv) {
