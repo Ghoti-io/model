@@ -109,6 +109,12 @@ The first token on a line is the directive. Matching is exact and
 case-sensitive, and the directive must be followed by whitespace or the end
 of the line: `V` is not `v`, and `vertex` is not `v` followed by `ertex`.
 
+A directive this library does not implement is ignored with its whole line.
+**3.14 is the list**, and this section deliberately does not repeat it: the
+set was written out in both places, the copy here fell behind, and for three
+commits it described `s`, `l` and `p` as ignored while the parser was reading
+them. One list, in the section whose subject it is.
+
 **Numbers do not depend on the caller's locale.** A decimal point is `.` in
 every OBJ and MTL file, whatever `LC_NUMERIC` says in the program that linked
 this library. `strtof`, `sscanf` and `printf` all consult it, so the parser
@@ -124,14 +130,6 @@ the alternative was stubs that silently did nothing, which is a correctness
 bug shipped quietly on a platform we cannot test. Defining
 `GMDL_ALLOW_LOCALE_DEPENDENT_NUMBERS` restores that behaviour for anyone who
 wants it, and puts the trade in their build system rather than in ours.
-
-A directive this library does not implement is ignored with its whole line.
-The full set of ignored OBJ directives is: `vp`, `cstype`, `deg`, `bmat`,
-`step`, `p`, `l`, `curv`, `curv2`, `surf`, `parm`, `trim`, `hole`, `scrv`,
-`sp`, `end`, `con`, `s`, `mg`, `bevel`, `c_interp`, `d_interp`, `lod`,
-`shadow_obj`, `trace_obj`, `ctech`, `stech`, and anything else not listed in
-section 3. Free-form geometry is out of scope permanently; smoothing groups
-(`s`), lines (`l`) and points (`p`) are open questions (section 12).
 
 ---
 
@@ -850,6 +848,17 @@ All three exemptions were measured rather than assumed: over the accumulated
 corpus they account for every disagreement, and the invariant as stated
 holds on all of it.
 
+**What the fuzzers structurally cannot find.** They drive the caps that
+exist, so a quantity with no field in `GMDL_Limits` is invisible to them -
+`call` and `csh` allocated without bound for as long as `max_statements` was
+missing, and no amount of fuzzing would have said so. They compare a load
+against a reload, so a defect that is symmetric across both survives the
+comparison: a face index that wrapped on the way in wrapped identically on
+the way back and the invariant held while the value was wrong. And an input
+large enough to show an unbounded allocation is far past the sizes libFuzzer
+generates. These are jobs for unit tests that assert the property directly
+(section 5), not for more fuzzing time.
+
 ---
 
 ## 11. Implementation status
@@ -888,3 +897,10 @@ section 12 is where they are written down.
   option that changes no default.
 - **Vertex colours.** `v x y z r g b` is a common extension; the three extra
   numbers are currently discarded under 3.1.
+- **Which exporters' spellings are still missing.** `map_Bump` and `map_refl`
+  were found by asking Blender about 27 candidate spellings, not by reading
+  the reference - the reference does not list them. Blender is one exporter;
+  Maya, 3ds Max and Substance have their own habits, and the only honest way
+  to know is to survey files they produce rather than to reason about what
+  they ought to write. Until then the accepted set is "what was measured",
+  which is a smaller claim than "what exists".
