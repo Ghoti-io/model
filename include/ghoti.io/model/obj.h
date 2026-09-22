@@ -112,8 +112,42 @@ typedef struct {
   int32_t normal[4];   ///< Normal indices, or -1 if absent.
   size_t count;        ///< Number of vertices in the face.
   int32_t material_index; ///< Index into the material mappings, or -1.
+  /**
+   * Smoothing group in force for this face, or 0 for none.
+   *
+   * `s` is state, like `usemtl`: it applies to every face after it until the
+   * next one. It is recorded per face rather than as a run, because that is
+   * the question a consumer generating normals actually asks - whether these
+   * two faces share one - and a run would make it compute the answer.
+   * `s off` and `s 0` both mean 0, which is the format's own default.
+   */
+  int32_t smoothing_group;
   GMDL_Obj_Face_Overflow * overflow; ///< Vertices past the fourth, or NULL.
 } GMDL_Obj_Face;
+
+/**
+ * @brief One vertex reference of a polyline (`l`).
+ *
+ * A line carries no normals - the format gives it `v` and an optional `vt`.
+ */
+typedef struct {
+  int32_t vertex;   ///< Vertex index (0-based).
+  int32_t texcoord; ///< Texture coordinate index (0-based), or -1 if absent.
+} GMDL_Obj_Line_Vertex;
+
+/**
+ * @brief A polyline (`l`), as a range of `line_vertices`.
+ *
+ * One `l` statement is one polyline of any length, so the references live in
+ * a flat array and each line names its span - the same shape `GMDL_Obj_Group`
+ * uses over faces. A face hides its first four in the element itself because
+ * nearly every face is a triangle or a quad; a polyline has no such typical
+ * length, so there is nothing to special-case.
+ */
+typedef struct {
+  size_t start; ///< Index of this line's first entry in `line_vertices`.
+  size_t count; ///< Number of entries.
+} GMDL_Obj_Line;
 
 /**
  * @brief A group (`g`) or object (`o`), naming a run of faces.
@@ -147,6 +181,22 @@ typedef struct {
 
   GMDL_Obj_Face * faces; ///< Faces, or NULL.
   size_t face_count;     ///< Number of faces.
+
+  GMDL_Obj_Line * lines; ///< Polylines (`l`), or NULL.
+  size_t line_count;     ///< Number of polylines.
+
+  GMDL_Obj_Line_Vertex * line_vertices; ///< Every polyline's references.
+  size_t line_vertex_count;             ///< Number of those references.
+
+  /**
+   * Point elements (`p`), as vertex indices, or NULL.
+   *
+   * One `p` statement declares one point per index it names, so unlike `l`
+   * there is nothing to group: the statement boundary carries no meaning
+   * that survives parsing.
+   */
+  int32_t * points;
+  size_t point_count; ///< Number of points.
 
   GMDL_Obj_Group * groups; ///< Groups and objects, or NULL.
   size_t group_count;      ///< Number of groups.

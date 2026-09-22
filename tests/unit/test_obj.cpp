@@ -967,8 +967,12 @@ namespace {
 
 /** A model reaching every kind of line and every reference shape the dumper
  *  writes: an mtllib, all three coordinate kinds, a face before the first
- *  group, two groups, a material change, all four reference spellings, and a
- *  face long enough to spill into the overflow array. */
+ *  group, two groups, a material change, all four reference spellings, a
+ *  face long enough to spill into the overflow array, a smoothing group that
+ *  is set and then turned off, polylines with and without texture
+ *  references, and points. A directive the model does not carry has its
+ *  failure arm go unexecuted, which is how this sweep quietly stops covering
+ *  the writer whenever the format grows. */
 const char * kRichModel = "mtllib m.mtl\n"
                           "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
                           "v 2 0 0\nv 2 1 0\n"
@@ -982,16 +986,25 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "f 1//1 2//1 3//1\n"
                           "f 1/1/1 2/2/1 3/1/1\n"
                           "g second\n"
-                          "f 1 2 3 4 5 6\n";
+                          "s 4\n"
+                          "f 1 2 3 4 5 6\n"
+                          "s off\n"
+                          "f 1 2 3\n"
+                          "l 1 2 3\n"
+                          "l 1/1 2/2\n"
+                          "p 1 2\n";
 
 /** The same lines with no group, so the dumper writes every face in one
  *  range rather than walking groups. */
 const char * kGrouplessModel = "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
                                "vt 0 0\n"
                                "usemtl red\n"
+                               "s 2\n"
                                "f 1/1 2/1 3/1\n"
                                "usemtl blue\n"
-                               "f 1 2 3\n";
+                               "f 1 2 3\n"
+                               "l 1 2\n"
+                               "p 1\n";
 
 } // namespace
 
@@ -1060,6 +1073,196 @@ TEST(ObjDump, AFaceNamingAMaterialWithNoMappingWritesWhite) {
   EXPECT_STREQ(reloaded->material_mappings[0].name, "white");
   gmdl_obj_free(reloaded);
   gmdl_obj_free(obj);
+}
+
+//
+// Smoothing groups, polylines and points (3.11, 3.12).
+//
+
+TEST(ObjSmoothing, AppliesToTheFacesAfterIt) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "f 1 1 1\n"
+                             "s 3\n"
+                             "f 1 1 1\n"
+                             "f 1 1 1\n"
+                             "s off\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 4u);
+  EXPECT_EQ(obj->faces[0].smoothing_group, 0) << "no s yet, so none";
+  EXPECT_EQ(obj->faces[1].smoothing_group, 3);
+  EXPECT_EQ(obj->faces[2].smoothing_group, 3);
+  EXPECT_EQ(obj->faces[3].smoothing_group, 0) << "s off is zero";
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjSmoothing, ZeroAndOffMeanTheSame) {
+  GMDL_Obj * obj = load_text("v 0 0 0\ns 1\nf 1 1 1\ns 0\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->faces[0].smoothing_group, 1);
+  EXPECT_EQ(obj->faces[1].smoothing_group, 0);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjSmoothing, AValueThatIsNeitherOffNorANumberIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ns wobble\nf 1 1 1\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(ObjSmoothing, AModelWithNoSmoothingWritesNone) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+  std::string text;
+  FILE * back = fopen(out.path(), "rb");
+  ASSERT_NE(back, nullptr);
+  char buf[256];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), back)) > 0) text.append(buf, n);
+  fclose(back);
+  EXPECT_EQ(text.find("\ns "), std::string::npos)
+      << "zero is the parser's starting state, so it needs no line:\n" << text;
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjSmoothing, SurvivesAcrossGroupBoundaries) {
+  // The dumper writes faces in several runs - the orphans, then one per
+  // group - and the smoothing group in force carries across them. Deriving
+  // it per run instead would reset to zero at each "g", so the second
+  // group's faces would come back unsmoothed with nothing to show for it.
+  // The value has to *fall* across the boundary for this to bite. A group
+  // that merely continues the previous one is written correctly either way -
+  // a re-derived state emits a redundant "s 7" and reparses the same, which
+  // is why the first version of this test passed against the bug.
+  GMDL_Obj * first = load_text("v 0 0 0\n"
+                               "s 7\n"
+                               "f 1 1 1\n"
+                               "g a\n"
+                               "s 0\n"
+                               "f 1 1 1\n"
+                               "g b\n"
+                               "s 7\n"
+                               "f 1 1 1\n");
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->face_count, 3u);
+  ASSERT_EQ(first->faces[1].smoothing_group, 0) << "the fixture itself";
+  GMDL_Obj * second = dump_and_reload(first);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->face_count, 3u);
+  EXPECT_EQ(second->faces[0].smoothing_group, 7);
+  EXPECT_EQ(second->faces[1].smoothing_group, 0)
+      << "a group that turns smoothing off must say so";
+  EXPECT_EQ(second->faces[2].smoothing_group, 7);
+  gmdl_obj_free(first);
+  gmdl_obj_free(second);
+}
+
+TEST(ObjLine, ReadsVertexAndTextureReferences) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nv 2 0 0\n"
+                             "vt 0 0\nvt 1 0\n"
+                             "l 1 2 3\n"
+                             "l 1/1 2/2\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->line_count, 2u);
+  ASSERT_EQ(obj->line_vertex_count, 5u);
+
+  EXPECT_EQ(obj->lines[0].start, 0u);
+  EXPECT_EQ(obj->lines[0].count, 3u);
+  EXPECT_EQ(obj->line_vertices[0].vertex, 0);
+  EXPECT_EQ(obj->line_vertices[0].texcoord, -1);
+  EXPECT_EQ(obj->line_vertices[2].vertex, 2);
+
+  EXPECT_EQ(obj->lines[1].start, 3u);
+  EXPECT_EQ(obj->lines[1].count, 2u);
+  EXPECT_EQ(obj->line_vertices[3].vertex, 0);
+  EXPECT_EQ(obj->line_vertices[3].texcoord, 0);
+  EXPECT_EQ(obj->line_vertices[4].texcoord, 1);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, ResolvesRelativeIndices) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nl -2 -1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->line_vertex_count, 2u);
+  EXPECT_EQ(obj->line_vertices[0].vertex, 0);
+  EXPECT_EQ(obj->line_vertices[1].vertex, 1);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, NamingNothingIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nl\n"), GMDL_ERR_FORMAT);
+}
+
+TEST(ObjLine, ARubbishReferenceIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nl 1 x\n"), GMDL_ERR_FORMAT);
+}
+
+TEST(ObjPoint, OneStatementDeclaresOnePointPerIndex) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nv 2 0 0\np 1 2\np 3\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->point_count, 3u);
+  EXPECT_EQ(obj->points[0], 0);
+  EXPECT_EQ(obj->points[1], 1);
+  EXPECT_EQ(obj->points[2], 2);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjPoint, ASlashFormIsRefused) {
+  // A point is a vertex index and nothing else.
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nvt 0 0\np 1/1\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\np\n"), GMDL_ERR_FORMAT);
+}
+
+TEST(ObjLine, LinesAndPointsSurviveTheRoundTrip) {
+  GMDL_Obj * first = load_text("v 0 0 0\nv 1 0 0\nv 2 0 0\n"
+                               "vt 0 0\nvt 1 0\n"
+                               "f 1 2 3\n"
+                               "l 1 2 3\n"
+                               "l 1/1 2/2\n"
+                               "p 1 2\n"
+                               "p 3\n");
+  ASSERT_NE(first, nullptr);
+  GMDL_Obj * second = dump_and_reload(first);
+  ASSERT_NE(second, nullptr);
+
+  ASSERT_EQ(second->line_count, first->line_count);
+  ASSERT_EQ(second->line_vertex_count, first->line_vertex_count);
+  ASSERT_EQ(second->point_count, first->point_count);
+  for (size_t i = 0; i < first->line_count; i++) {
+    EXPECT_EQ(second->lines[i].start, first->lines[i].start) << "line " << i;
+    EXPECT_EQ(second->lines[i].count, first->lines[i].count) << "line " << i;
+  }
+  for (size_t i = 0; i < first->line_vertex_count; i++) {
+    EXPECT_EQ(second->line_vertices[i].vertex, first->line_vertices[i].vertex)
+        << "entry " << i;
+    EXPECT_EQ(
+        second->line_vertices[i].texcoord, first->line_vertices[i].texcoord)
+        << "entry " << i;
+  }
+  for (size_t i = 0; i < first->point_count; i++) {
+    EXPECT_EQ(second->points[i], first->points[i]) << "point " << i;
+  }
+  EXPECT_EQ(second->face_count, first->face_count);
+  gmdl_obj_free(first);
+  gmdl_obj_free(second);
+}
+
+TEST(ObjLine, TheElementCapsCoverLinesAndPoints) {
+  GMDL_Limits limits;
+  gmdl_limits_default(&limits);
+  limits.max_faces = 2;
+  EXPECT_EQ(load_text_expecting_failure(
+                "v 0 0 0\nl 1 1\nl 1 1\nl 1 1\n", &limits),
+      GMDL_ERR_LIMIT);
+  EXPECT_EQ(
+      load_text_expecting_failure("v 0 0 0\np 1 1 1\n", &limits),
+      GMDL_ERR_LIMIT);
 }
 
 int main(int argc, char ** argv) {

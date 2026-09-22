@@ -78,6 +78,20 @@ bool indices_are_representable(const GMDL_Obj * obj) {
       }
     }
   }
+  // Polylines and points resolve their indices exactly as faces do, so the
+  // same exemption reaches them: a relative index pointing past the start of
+  // the file has no OBJ spelling either way.
+  for (size_t i = 0; i < obj->line_vertex_count; i++) {
+    if (obj->line_vertices[i].vertex < -1
+        || obj->line_vertices[i].texcoord < -1) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < obj->point_count; i++) {
+    if (obj->points[i] < -1) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -187,6 +201,10 @@ void check_round_trip(const GMDL_Obj * obj) {
   REQUIRE(obj->normal_count == again->normal_count, "normal_count");
   REQUIRE(obj->face_count == again->face_count, "face_count");
   REQUIRE(obj->group_count == again->group_count, "group_count");
+  REQUIRE(obj->line_count == again->line_count, "line_count");
+  REQUIRE(obj->line_vertex_count == again->line_vertex_count,
+      "line_vertex_count");
+  REQUIRE(obj->point_count == again->point_count, "point_count");
   REQUIRE(strcmp(obj->mtllib, again->mtllib) == 0, "mtllib");
 
   for (size_t i = 0; i < obj->vertex_count; i++) {
@@ -218,9 +236,26 @@ void check_round_trip(const GMDL_Obj * obj) {
                 material_name(again, again->faces[i].material_index))
             == 0,
         "face material");
+    // "s" is state written between faces, so a dumper that re-derived it per
+    // group rather than carrying it would drift exactly here.
+    REQUIRE(obj->faces[i].smoothing_group == again->faces[i].smoothing_group,
+        "face smoothing group");
+  }
+  for (size_t i = 0; i < obj->line_count; i++) {
+    REQUIRE(obj->lines[i].count == again->lines[i].count, "line span");
   }
 
   if (indices_are_representable(obj)) {
+    for (size_t i = 0; i < obj->line_vertex_count; i++) {
+      REQUIRE(obj->line_vertices[i].vertex == again->line_vertices[i].vertex,
+          "line vertex index");
+      REQUIRE(obj->line_vertices[i].texcoord
+              == again->line_vertices[i].texcoord,
+          "line texcoord index");
+    }
+    for (size_t i = 0; i < obj->point_count; i++) {
+      REQUIRE(obj->points[i] == again->points[i], "point index");
+    }
     for (size_t i = 0; i < obj->face_count; i++) {
       const GMDL_Obj_Face * a = &obj->faces[i];
       const GMDL_Obj_Face * b = &again->faces[i];

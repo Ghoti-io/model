@@ -220,19 +220,88 @@ A longer one is `GMDL_ERR_LIMIT`.
 
 ### 3.10 The result
 
-`GMDL_Obj` holds six arrays, each `NULL` when its count is zero:
+`GMDL_Obj` holds nine arrays, each `NULL` when its count is zero:
 
 | Array | Element | Notes |
 | --- | --- | --- |
 | `vertices` | `x y z` floats | in file order |
 | `texcoords` | `u v` | |
 | `normals` | `x y z` | |
-| `faces` | `GMDL_Obj_Face` | 0-based indices, `-1` for absent; `overflow` past four; `material_index` |
+| `faces` | `GMDL_Obj_Face` | 0-based indices, `-1` for absent; `overflow` past four; `material_index`; `smoothing_group` |
+| `lines` | `start`, `count` into `line_vertices` | one entry per `l` statement |
+| `line_vertices` | vertex and texcoord index | every polyline's references, in file order |
+| `points` | vertex index | one entry per index any `p` named |
 | `groups` | name, `start_face`, `face_count` | in file order; ranges are contiguous and do not overlap |
 | `material_mappings` | name, `index` | `index` equals position |
 
 plus `mtllib` and the allocator that owns it all. Everything is freed by
 `gmdl_obj_free()`, including every face's `overflow`.
+
+Groups cover faces only. A polyline or a point is not in any group, because
+`g` in this model names a contiguous run of faces and nothing else.
+
+### 3.11 `s` - smoothing groups
+
+`s n` sets the smoothing group; `s 0` and `s off` both clear it, and zero is
+the state a file starts in. Like `usemtl` it is state, applying to every face
+after it until the next one, and it is recorded per face in
+`GMDL_Obj_Face.smoothing_group`.
+
+Per face rather than as a run of faces, because "do these two faces share a
+smoothing group" is the question a consumer generating normals actually asks,
+and a run would make it work that out for itself. A value that is neither
+`off` nor a number is `GMDL_ERR_FORMAT`.
+
+The dump writes `s` only where the value changes, so a model that never
+mentions smoothing writes none. The group in force carries across the runs
+the dumper emits - the faces before the first `g`, then each group - which it
+has to: a group whose faces turn smoothing *off* after one that had it on
+says nothing at all if the writer assumes each run starts at zero, and the
+reload then smooths faces the source did not.
+
+### 3.12 `l` and `p` - polylines and points
+
+`l v1 v2 ...` is one polyline of any length; each reference is `v` or `v/vt`.
+The references live in one flat `line_vertices` array and each `GMDL_Obj_Line`
+names its span, the same shape `groups` uses over faces. A face keeps its
+first four vertices inside the element because nearly every face is a
+triangle or a quad; a polyline has no typical length, so there is nothing to
+special-case.
+
+The token grammar is the face grammar of 3.5, so `1//2` on an `l` line
+parses - the format does not give a line a normal, but files write one and
+every other reader accepts it. The normal is read and dropped.
+
+`p v1 v2 ...` declares one point per index. The statement boundary carries
+no meaning that survives parsing, so `points` is a flat array of vertex
+indices and the dump writes one `p` per point. A `p` reference is a bare
+index: `p 1/1` is `GMDL_ERR_FORMAT`, because a point has no texture
+coordinate to give.
+
+Both resolve negative and relative indices exactly as faces do (3.5), and an
+`l` or `p` naming nothing is `GMDL_ERR_FORMAT`.
+
+### 3.13 Not read
+
+Two groups of directives, both deliberate.
+
+**The free-form geometry sub-language**: `vp`, `cstype`, `deg`, `bmat`,
+`step`, `curv`, `curv2`, `surf`, `parm`, `trim`, `hole`, `scrv`, `sp`, `end`
+and `con`. These describe curves and surfaces - NURBS and their trimming -
+which is a different kind of geometry from the polygon mesh this library
+holds, not another record to append to it. Supporting them means a second
+data model, not a field.
+
+**Render attributes**: `bevel`, `c_interp`, `d_interp`, `lod`, `shadow_obj`,
+`trace_obj`, `ctech`, `stech` and `mg`. These are state for a renderer and
+change no geometry. They could be recorded, and the reason not to is that
+there is nowhere honest to put them: they are per-state like `usemtl`, so
+each would become a field on every face, describing something no consumer of
+this library asks about. `shadow_obj` and `trace_obj` are the two carrying
+real data - paths - and section 12 keeps the question open.
+
+A line whose directive is none of the above and none of 3.1-3.12 is skipped,
+which is how a file carrying an exporter's private extension still loads.
 
 ---
 
@@ -431,8 +500,8 @@ assuming a surface would record something the file never said.
 | `max_vertices` | 0 (unlimited) | `v` records |
 | `max_texcoords` | 0 | `vt` |
 | `max_normals` | 0 | `vn` |
-| `max_faces` | 0 | `f` |
-| `max_face_indices` | 0 | vertices in one face |
+| `max_faces` | 0 | `f`, and `l` and `p` records |
+| `max_face_indices` | 0 | vertices in one face, or in one `l` |
 | `max_groups` | 0 | `g` and `o` together |
 | `max_materials` | 0 | distinct `usemtl` names in OBJ; `newmtl` in MTL |
 
@@ -574,7 +643,9 @@ it lands on the one a single-texture renderer wants. A test pins the order
 so it stays deliberate.
 
 The dump writes `usemtl` when the material changes between consecutive faces,
-`g` for each group before its faces, and relative indices as absolute ones.
+`s` when the smoothing group does, `g` for each group before its faces, and
+relative indices as absolute ones. Polylines and points follow the faces,
+since no group covers them.
 
 **Every write is checked, and every one of those checks is exercised.** Both
 dumpers are mostly error handling by line count, and none of it had ever run:
@@ -612,7 +683,8 @@ The invariants the harnesses check: whatever the result, the parser neither
 crashes nor leaks; and a `GMDL_OK` model is dumped, parsed back, and compared
 against the original. For OBJ the comparison covers every count, every
 coordinate value, every group name and span, the `mtllib` path, each face's
-material by name, and - with the exception below - every face index. For MTL
+material by name and smoothing group, each polyline's span, and - with the
+exception below - every face, polyline and point index. For MTL
 it covers every property value, the `present` mask and every texture map
 path - the `refl` slots included, and including whether one was stated at
 all, since a NULL that comes back as a path is exactly what a dumper keying
@@ -644,13 +716,14 @@ them rather than because the dumper is wrong.
   Such a name or path reaches the parser only from a line ending in two
   backslashes, which no real file contains - the fuzzer finds it because it
   writes bytes rather than files. A model holding one is skipped entirely.
-- **A face index below -1.** An index of `k >= 0` is written as `k + 1` and
+- **An index below -1.** An index of `k >= 0` is written as `k + 1` and
   an absent one as `0`, both of which read back as themselves. An index of
   `-2` or lower - which only a relative index reaching past the beginning of
   the file produces, and which 3.5 records rather than rejects - is written
   as a negative number, and OBJ reads a negative index as relative. There is
   no OBJ spelling for such an index, so a model containing one is exempt
-  from the index comparison and from nothing else.
+  from the index comparison and from nothing else. Polylines and points
+  resolve their indices the same way, so the exemption reaches them too.
 
 All three exemptions were measured rather than assumed: over the accumulated
 corpus they account for every disagreement, and the invariant as stated
@@ -675,9 +748,12 @@ section 12 is where they are written down.
   range model cannot express.
 - **`o` versus `g`.** Currently identical. A flag on `GMDL_Obj_Group` would
   preserve the distinction at no cost.
-- **Smoothing groups (`s`), lines (`l`) and points (`p`).** Ignored today.
-  Smoothing groups matter for normal generation, which cjelly does; lines and
-  points matter for CAD-style models.
+- **Free-form geometry.** `curv`, `surf` and the rest of the sub-language in
+  3.13. A second data model rather than more fields, so it is a decision
+  about what this library is for.
+- **`shadow_obj` and `trace_obj`.** The two render attributes carrying real
+  data - a path each. Recording them means deciding where per-state
+  attributes live, which 3.13 explains is the blocker for all nine.
 - **Texture map options.** `-o`, `-s`, `-clamp`, `-bm` and the rest are
   `GMDL_ERR_UNSUPPORTED` today (4.5). Implementing them means a place to put
   them and a decision about `-bm`, which Blender applies and VTK 9.3 does not

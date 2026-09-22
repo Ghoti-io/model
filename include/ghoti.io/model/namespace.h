@@ -55,6 +55,8 @@
 #define GMDL_Obj_Face GHOTIIO_MODEL(GMDL_Obj_Face)
 #define GMDL_Obj_Face_Overflow GHOTIIO_MODEL(GMDL_Obj_Face_Overflow)
 #define GMDL_Obj_Group GHOTIIO_MODEL(GMDL_Obj_Group)
+#define GMDL_Obj_Line GHOTIIO_MODEL(GMDL_Obj_Line)
+#define GMDL_Obj_Line_Vertex GHOTIIO_MODEL(GMDL_Obj_Line_Vertex)
 #define GMDL_Obj_Material_Mapping GHOTIIO_MODEL(GMDL_Obj_Material_Mapping)
 #define GMDL_Obj_Normal GHOTIIO_MODEL(GMDL_Obj_Normal)
 #define GMDL_Obj_TexCoord GHOTIIO_MODEL(GMDL_Obj_TexCoord)

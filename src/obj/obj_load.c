@@ -53,6 +53,9 @@ typedef struct {
   GCU_Array texcoords;
   GCU_Array normals;
   GCU_Array faces;
+  GCU_Array lines;
+  GCU_Array line_vertices;
+  GCU_Array points;
   GCU_Array groups;
   GCU_Array material_mappings;
   const GMDL_Allocator * allocator;
@@ -70,6 +73,11 @@ static bool obj_builder_init(
           &b->normals, sizeof(GMDL_Obj_Normal), 128, allocator)
       && gcu_array_create_in_place(
           &b->faces, sizeof(GMDL_Obj_Face), 128, allocator)
+      && gcu_array_create_in_place(
+          &b->lines, sizeof(GMDL_Obj_Line), 16, allocator)
+      && gcu_array_create_in_place(
+          &b->line_vertices, sizeof(GMDL_Obj_Line_Vertex), 32, allocator)
+      && gcu_array_create_in_place(&b->points, sizeof(int32_t), 16, allocator)
       && gcu_array_create_in_place(
           &b->groups, sizeof(GMDL_Obj_Group), 16, allocator)
       && gcu_array_create_in_place(&b->material_mappings,
@@ -90,6 +98,9 @@ static void obj_builder_destroy(obj_builder_t * b) {
   gcu_array_destroy_in_place(&b->texcoords);
   gcu_array_destroy_in_place(&b->normals);
   gcu_array_destroy_in_place(&b->faces);
+  gcu_array_destroy_in_place(&b->lines);
+  gcu_array_destroy_in_place(&b->line_vertices);
+  gcu_array_destroy_in_place(&b->points);
   gcu_array_destroy_in_place(&b->groups);
   gcu_array_destroy_in_place(&b->material_mappings);
 }
@@ -250,6 +261,9 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
 
   long current_group = -1;          // Index of the active group.
   int32_t current_material = -1;    // Material set by the last "usemtl".
+  // Smoothing group set by the last "s"; 0 is the format's own default, so a
+  // file with no "s" line leaves every face at 0 and writes none back.
+  int32_t current_smoothing = 0;
 
   GMDL_Line_Reader reader;
   gmdl_line_reader_init(&reader, stream, line, line_size);
@@ -331,6 +345,7 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       memset(&face, 0, sizeof(face));
       face.count = 0;
       face.material_index = current_material;
+      face.smoothing_group = current_smoothing;
       face.overflow = NULL;
 
       // Vertices past the fourth go into an overflow array, which is handed to
@@ -441,6 +456,133 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       group->face_count = 0;
       current_group = (long)gcu_array_count(&builder.groups) - 1;
     }
+    else if (gmdl_line_is(line_text, "l", &rest)) {
+      if (gmdl_limit_reached(
+              gcu_array_count(&builder.lines), limits->max_faces)) {
+        result = GMDL_ERR_LIMIT;
+        goto cleanup;
+      }
+
+      size_t vertex_count = gcu_array_count(&builder.vertices);
+      size_t texcoord_count = gcu_array_count(&builder.texcoords);
+
+      GMDL_Obj_Line element;
+      element.start = gcu_array_count(&builder.line_vertices);
+      element.count = 0;
+
+      const char * cursor = rest;
+      while (*cursor) {
+        while (*cursor == ' ' || *cursor == '\t') {
+          cursor++;
+        }
+        if (!*cursor) {
+          break;
+        }
+        const char * token = cursor;
+        while (*cursor && *cursor != ' ' && *cursor != '\t') {
+          cursor++;
+        }
+
+        long v = 0;
+        long vt = 0;
+        long vn = 0;
+        // The same token grammar as a face, and for the same reason: a file
+        // that writes "1//2" on an l line is using a spelling the format
+        // does not give lines, and refusing it would reject a file every
+        // other reader accepts. The normal is read and dropped - a polyline
+        // has nothing to do with one.
+        if (!obj_parse_face_token(token, cursor, &v, &vt, &vn)) {
+          result = GMDL_ERR_FORMAT;
+          goto cleanup;
+        }
+        if (gmdl_limit_reached(element.count, limits->max_face_indices)) {
+          result = GMDL_ERR_LIMIT;
+          goto cleanup;
+        }
+
+        GMDL_Obj_Line_Vertex * entry =
+            (GMDL_Obj_Line_Vertex *)gcu_array_emplace(&builder.line_vertices);
+        if (!entry) {
+          result = GMDL_ERR_OOM;
+          goto cleanup;
+        }
+        entry->vertex = obj_index(v, vertex_count);
+        entry->texcoord = obj_index(vt, texcoord_count);
+        element.count++;
+      }
+
+      if (element.count == 0) {
+        result = GMDL_ERR_FORMAT; // "l" naming nothing is not a polyline.
+        goto cleanup;
+      }
+      GMDL_Obj_Line * stored =
+          (GMDL_Obj_Line *)gcu_array_emplace(&builder.lines);
+      if (!stored) {
+        result = GMDL_ERR_OOM;
+        goto cleanup;
+      }
+      *stored = element;
+    }
+    else if (gmdl_line_is(line_text, "p", &rest)) {
+      size_t vertex_count = gcu_array_count(&builder.vertices);
+      size_t declared = 0;
+
+      const char * cursor = rest;
+      while (*cursor) {
+        while (*cursor == ' ' || *cursor == '\t') {
+          cursor++;
+        }
+        if (!*cursor) {
+          break;
+        }
+        char * end = NULL;
+        long v = strtol(cursor, &end, 10);
+        if (end == cursor) {
+          result = GMDL_ERR_FORMAT;
+          goto cleanup;
+        }
+        // A point is a vertex index and nothing else, so unlike a face or a
+        // line there is no '/' form to accept.
+        if (*end && *end != ' ' && *end != '\t') {
+          result = GMDL_ERR_FORMAT;
+          goto cleanup;
+        }
+        cursor = end;
+
+        if (gmdl_limit_reached(
+                gcu_array_count(&builder.points), limits->max_faces)) {
+          result = GMDL_ERR_LIMIT;
+          goto cleanup;
+        }
+        int32_t * stored = (int32_t *)gcu_array_emplace(&builder.points);
+        if (!stored) {
+          result = GMDL_ERR_OOM;
+          goto cleanup;
+        }
+        *stored = obj_index(v, vertex_count);
+        declared++;
+      }
+
+      if (declared == 0) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "s", &rest)) {
+      // "s off" is the format's own spelling of zero, and "s 0" means the
+      // same. Anything else must be a group number.
+      if (gmdl_line_is(rest, "off", NULL)) {
+        current_smoothing = 0;
+      }
+      else {
+        int value = 0;
+        if (sscanf(rest, "%d", &value) != 1) {
+          result = GMDL_ERR_FORMAT;
+          goto cleanup;
+        }
+        current_smoothing = (int32_t)value;
+      }
+    }
     else if (gmdl_line_is(line_text, "usemtl", &rest)) {
       // A bare "usemtl" is GMDL_ERR_FORMAT (3.7); an over-long one is
       // GMDL_ERR_LIMIT (3.9). gmdl_first_token() distinguishes them.
@@ -515,6 +657,10 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
     obj_steal_into(&builder.normals, (void **)&obj->normals,
         &obj->normal_count);
     obj_steal_into(&builder.faces, (void **)&obj->faces, &obj->face_count);
+    obj_steal_into(&builder.lines, (void **)&obj->lines, &obj->line_count);
+    obj_steal_into(&builder.line_vertices, (void **)&obj->line_vertices,
+        &obj->line_vertex_count);
+    obj_steal_into(&builder.points, (void **)&obj->points, &obj->point_count);
     obj_steal_into(&builder.groups, (void **)&obj->groups, &obj->group_count);
     obj_steal_into(&builder.material_mappings,
         (void **)&obj->material_mappings, &obj->material_mapping_count);
@@ -567,6 +713,9 @@ void gmdl_obj_free(GMDL_Obj * obj) {
     }
     gcu_allocator_free(allocator, obj->faces);
   }
+  gcu_allocator_free(allocator, obj->lines);
+  gcu_allocator_free(allocator, obj->line_vertices);
+  gcu_allocator_free(allocator, obj->points);
   gcu_allocator_free(allocator, obj->groups);
   gcu_allocator_free(allocator, obj->material_mappings);
   gcu_allocator_free(allocator, obj);
