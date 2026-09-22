@@ -69,7 +69,9 @@ is accepted.
 ### 2.4 Comments
 
 `#` begins a comment that runs to the end of the line, anywhere on the line.
-A line that is blank, or only a comment, is ignored.
+A line that is blank, or only a comment, is ignored. The comment is removed
+before the continuation in 2.6 is looked for; that ordering is a decision the
+format does not make for us, and 2.6 says why it was made this way.
 
 ### 2.5 Whitespace
 
@@ -81,6 +83,25 @@ not separators: `v 1,2,3` is malformed.
 
 A `\` as the last non-blank character joins the next line to this one.
 The joined line is subject to `max_line_length` as a whole.
+
+**The comment is cut first.** A `\` that ends a comment therefore does not
+continue anything, and a comment on a continued line still disappears. The
+format does not settle this: the Wavefront specification uses the
+continuation in its `bmat` and `surf` examples but never states the rule -
+the words "continuation" and "joined" do not appear in it - and says only
+that comments "can appear anywhere ... they are not processed". Neither
+document mentions the two meeting.
+
+Implementations split on it, so this is a choice and not a reading. Blender
+4.3 joins first, so `# note \` swallows the line after it and the geometry
+there is lost. VTK 9.3 does not join at all outside a few statement parsers,
+so it keeps that line - and agrees with us here. We cut the comment first
+because the alternative loses data over a backslash someone typed in prose,
+and because a comment is by definition not processed.
+
+The same split decides what happens after a name, where the two oracles
+swap sides; `notes/model/obj-differential.md` in the workspace has the
+measurements.
 
 ### 2.7 Directives
 
