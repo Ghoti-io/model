@@ -352,7 +352,7 @@ $(LIBVER_GEN): force-libver
 		'#endif // GHOTI_IO_GMDL_LIBVER_GEN_H' > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
 
-$(OBJ_DIR)/%.o: src/%.c | $(LIBVER_GEN)
+$(OBJ_DIR)/%.o: src/%.c Makefile | $(LIBVER_GEN)
 	@printf "\n### Compiling $@ ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(LIB_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -394,12 +394,12 @@ endif
 
 # Test sources live in tests/ and tests/unit/; the object name comes from the
 # basename either way, so the executable name matches.
-$(OBJ_DIR)/tests/%.o: tests/%.cpp
+$(OBJ_DIR)/tests/%.o: tests/%.cpp Makefile
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGMDL_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
-$(OBJ_DIR)/tests/%.o: tests/unit/%.cpp
+$(OBJ_DIR)/tests/%.o: tests/unit/%.cpp Makefile
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGMDL_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -742,7 +742,7 @@ ifeq ($(UNAME_S), Linux)
 	ASAN_CFLAGS += -fPIC
 endif
 
-$(ASAN_OBJ_DIR)/%.o: src/%.c
+$(ASAN_OBJ_DIR)/%.o: src/%.c Makefile
 	@printf "\n### Compiling (ASan+UBSan): $< ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -o $@
@@ -752,12 +752,12 @@ $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) -shared -o $@ $^ $(ASAN_LDFLAGS) $(CUTIL_LIBS)
 
-$(ASAN_OBJ_DIR)/tests/%.o: tests/%.cpp
+$(ASAN_OBJ_DIR)/tests/%.o: tests/%.cpp Makefile
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGMDL_TEST_DATA=\"$(TEST_DATA)\" -c $< -o $@
 
-$(ASAN_OBJ_DIR)/tests/%.o: tests/unit/%.cpp
+$(ASAN_OBJ_DIR)/tests/%.o: tests/unit/%.cpp Makefile
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGMDL_TEST_DATA=\"$(TEST_DATA)\" -c $< -o $@
@@ -817,7 +817,7 @@ FUZZ_CORPUS := tests/fuzz/corpus
 # A smoke-test length by default; for a real campaign: make fuzz FUZZ_TIME=3600
 FUZZ_TIME ?= 60
 
-$(FUZZ_OBJ_DIR)/%.o: src/%.c
+$(FUZZ_OBJ_DIR)/%.o: src/%.c Makefile
 	@mkdir -p $(@D)
 	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -o $@
 
