@@ -147,7 +147,19 @@ typedef struct {
 typedef struct {
   size_t start; ///< Index of this line's first entry in `line_vertices`.
   size_t count; ///< Number of entries.
+  int32_t material_index; ///< Index into the material mappings, or -1.
 } GMDL_Obj_Line;
+
+/**
+ * @brief A point element (`p`).
+ *
+ * A vertex and the material in force when it was declared. `usemtl` applies
+ * to `p` and `l` exactly as it does to `f`, so all three carry one.
+ */
+typedef struct {
+  int32_t vertex;         ///< Vertex index (0-based).
+  int32_t material_index; ///< Index into the material mappings, or -1.
+} GMDL_Obj_Point;
 
 /**
  * @brief A group (`g`) or object (`o`), naming a run of faces.
@@ -189,13 +201,13 @@ typedef struct {
   size_t line_vertex_count;             ///< Number of those references.
 
   /**
-   * Point elements (`p`), as vertex indices, or NULL.
+   * Point elements (`p`), or NULL.
    *
    * One `p` statement declares one point per index it names, so unlike `l`
    * there is nothing to group: the statement boundary carries no meaning
    * that survives parsing.
    */
-  int32_t * points;
+  GMDL_Obj_Point * points;
   size_t point_count; ///< Number of points.
 
   GMDL_Obj_Group * groups; ///< Groups and objects, or NULL.

@@ -24,6 +24,7 @@
  * Writing a parsed model back out as OBJ text.
  */
 
+#include <stdbool.h>
 #include <stdio.h>
 
 #include <ghoti.io/model/macros.h>
@@ -78,16 +79,38 @@ static int obj_dump_face(FILE * fd, const GMDL_Obj_Face * face) {
 }
 
 /**
- * Print a "usemtl" line when the material changes.
+ * The state the dump carries from one element to the next.
  *
- * Per https://paulbourke.net/dataformats/obj/ a material cannot be turned off,
- * only changed, and an unnamed material renders white.
+ * `usemtl` and `s` are both state in the file, and the dump emits elements in
+ * several runs - the faces before the first `g`, then each group, then the
+ * polylines, then the points. The two need carrying for different reasons,
+ * and only one of them is a correctness question.
+ *
+ * **Smoothing must be carried.** Zero is a real value and also the state a
+ * file starts in, so a run that begins afresh writes nothing for a face at
+ * zero - and if the run before it left `s 7` in force, the reload smooths
+ * faces the source did not. Measured: a mutation that re-derives it per run
+ * fails ObjSmoothing.SurvivesAcrossGroupBoundaries.
+ *
+ * **Material is carried for the output's sake.** Beginning afresh is still
+ * *correct*, because -1 means "none" and is never written either way, so any
+ * real material differs from the fresh state and gets its `usemtl`. What it
+ * produces is a redundant line at every run boundary. Carrying it means the
+ * file says what the model says and no more.
+ */
+typedef struct {
+  int32_t material;  ///< Material index the file currently names.
+  int32_t smoothing; ///< Smoothing group currently in force.
+} obj_dump_state_t;
+
+/**
+ * Print a "usemtl" line naming a material.
+ *
+ * Per https://paulbourke.net/dataformats/obj/ an unnamed material renders
+ * white, which is what a `material_index` naming no mapping becomes.
  */
 static int obj_dump_material(
     FILE * fd, const GMDL_Obj * obj, int32_t material_index) {
-  if (material_index == -1) {
-    return 0;
-  }
   for (size_t j = 0; j < obj->material_mapping_count; j++) {
     if (obj->material_mappings[j].index == material_index) {
       return fprintf(fd, "usemtl %s\n", obj->material_mappings[j].name) < 0
@@ -99,36 +122,60 @@ static int obj_dump_material(
 }
 
 /**
+ * Move the file's material to @p wanted, writing a `usemtl` if that changes
+ * it.
+ *
+ * A material cannot be turned off, only changed, so an element that names
+ * none while one is in force has no OBJ spelling: nothing is written and the
+ * reload reads the previous material. Section 9 records that; it is not a
+ * state a parse produces, since `material_index` only ever moves from -1 to a
+ * mapping and never back.
+ *
+ * @param fd Destination.
+ * @param obj The model.
+ * @param wanted The material the element names.
+ * @param state Carried state, updated.
+ * @return 0, or -1 on a write failure.
+ */
+static int obj_dump_material_change(
+    FILE * fd, const GMDL_Obj * obj, int32_t wanted, obj_dump_state_t * state) {
+  if (wanted == state->material) {
+    return 0;
+  }
+  state->material = wanted;
+  if (wanted == -1) {
+    return 0;
+  }
+  return obj_dump_material(fd, obj, wanted);
+}
+
+/**
  * Print a run of faces, emitting "usemtl" and "s" whenever they change.
  *
  * @param fd Destination.
  * @param obj The model.
  * @param start First face.
  * @param count How many.
- * @param smoothing The smoothing group currently in force, carried across
- *   calls and updated. A range cannot assume it starts at zero: the group
- *   before it may have left one set, and re-deriving it per range is how a
- *   dump that reads back with different smoothing gets written.
+ * @param state The material and smoothing group the file currently names,
+ *   carried across calls and updated. A range cannot assume either starts
+ *   fresh: the run before it may have left one set, and re-deriving them per
+ *   range is how a dump that reads back differently gets written.
  * @return 0, or -1 on a write failure.
  */
 static int obj_dump_face_range(FILE * fd, const GMDL_Obj * obj, size_t start,
-    size_t count, int32_t * smoothing) {
-  // -2 cannot be a material index, so the first face always prints its
-  // material.
-  int32_t last_material = -2;
+    size_t count, obj_dump_state_t * state) {
   for (size_t i = start; i < start + count && i < obj->face_count; i++) {
-    if (obj->faces[i].material_index != last_material) {
-      if (obj_dump_material(fd, obj, obj->faces[i].material_index) < 0) {
-        return -1;
-      }
-      last_material = obj->faces[i].material_index;
+    if (obj_dump_material_change(fd, obj, obj->faces[i].material_index, state)
+        < 0) {
+      return -1;
     }
-    if (obj->faces[i].smoothing_group != *smoothing) {
-      *smoothing = obj->faces[i].smoothing_group;
+    if (obj->faces[i].smoothing_group != state->smoothing) {
+      state->smoothing = obj->faces[i].smoothing_group;
       // "off" rather than "0": both parse to zero, and it is the spelling
       // the format leads with.
-      int written = *smoothing == 0 ? fprintf(fd, "s off\n")
-                                    : fprintf(fd, "s %d\n", *smoothing);
+      int written = state->smoothing == 0
+          ? fprintf(fd, "s off\n")
+          : fprintf(fd, "s %d\n", state->smoothing);
       if (written < 0) {
         return -1;
       }
@@ -140,9 +187,41 @@ static int obj_dump_face_range(FILE * fd, const GMDL_Obj * obj, size_t start,
   return 0;
 }
 
-/** Print the polylines and the points, which no group covers. */
-static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj) {
+/**
+ * Print the polylines and the points, which no group covers.
+ *
+ * Called twice, because OBJ cannot turn a material off. An element declared
+ * before the file's first `usemtl` carries -1, and once anything has set a
+ * material there is no way to write that element and have it read back the
+ * same. The elements holding -1 therefore go out **before** the faces, while
+ * nothing is in force yet, and the rest after.
+ *
+ * That split preserves the arrays' own order rather than disturbing it:
+ * within one parse `material_index` moves from -1 to a mapping and never
+ * back, so the -1 entries are a prefix of each array and the two passes
+ * emit the prefix and then the remainder.
+ *
+ * Found by the fuzzer within ninety seconds of the material being added to
+ * these elements: "l 1 2" before any usemtl, then a usemtl and a face, and
+ * the polyline came back carrying the face's material.
+ *
+ * @param fd Destination.
+ * @param obj The model.
+ * @param state Carried material and smoothing state.
+ * @param unmaterialed true for the elements naming no material, false for
+ *   the rest.
+ * @return 0, or -1 on a write failure.
+ */
+static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
+    obj_dump_state_t * state, bool unmaterialed) {
   for (size_t i = 0; i < obj->line_count; i++) {
+    if ((obj->lines[i].material_index == -1) != unmaterialed) {
+      continue;
+    }
+    if (obj_dump_material_change(fd, obj, obj->lines[i].material_index, state)
+        < 0) {
+      return -1;
+    }
     if (fprintf(fd, "l") < 0) {
       return -1;
     }
@@ -165,7 +244,14 @@ static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj) {
   // One statement per point. The format allows several on a line and the
   // grouping means nothing once parsed, so there is nothing to preserve.
   for (size_t i = 0; i < obj->point_count; i++) {
-    if (fprintf(fd, "p %d\n", obj->points[i] + 1) < 0) {
+    if ((obj->points[i].material_index == -1) != unmaterialed) {
+      continue;
+    }
+    if (obj_dump_material_change(fd, obj, obj->points[i].material_index, state)
+        < 0) {
+      return -1;
+    }
+    if (fprintf(fd, "p %d\n", obj->points[i].vertex + 1) < 0) {
       return -1;
     }
   }
@@ -201,9 +287,15 @@ GMDL_Result gmdl_obj_dump(const GMDL_Obj * obj, FILE * fd) {
     }
   }
 
-  // The parser starts with no smoothing group in force, so the dump does
-  // too; a model whose faces all say zero therefore writes no "s" at all.
-  int32_t smoothing = 0;
+  // The parser starts with no material and no smoothing group in force, so
+  // the dump does too; a model whose faces all say zero writes no "s" at all.
+  obj_dump_state_t state = {-1, 0};
+
+  // Everything naming no material first, while none is in force. See
+  // obj_dump_lines_and_points().
+  if (obj_dump_lines_and_points(fd, obj, &state, true) < 0) {
+    return GMDL_ERR_IO;
+  }
 
   if (obj->group_count > 0) {
     // Faces declared before the first "g" belong to no group (3.6). The
@@ -212,7 +304,7 @@ GMDL_Result gmdl_obj_dump(const GMDL_Obj * obj, FILE * fd) {
     // the reload succeeded and simply had fewer faces.
     if (obj->groups[0].start_face > 0
         && obj_dump_face_range(
-               fd, obj, 0, obj->groups[0].start_face, &smoothing)
+               fd, obj, 0, obj->groups[0].start_face, &state)
             < 0) {
       return GMDL_ERR_IO;
     }
@@ -221,17 +313,17 @@ GMDL_Result gmdl_obj_dump(const GMDL_Obj * obj, FILE * fd) {
         return GMDL_ERR_IO;
       }
       if (obj_dump_face_range(fd, obj, obj->groups[g].start_face,
-              obj->groups[g].face_count, &smoothing)
+              obj->groups[g].face_count, &state)
           < 0) {
         return GMDL_ERR_IO;
       }
     }
   }
-  else if (obj_dump_face_range(fd, obj, 0, obj->face_count, &smoothing) < 0) {
+  else if (obj_dump_face_range(fd, obj, 0, obj->face_count, &state) < 0) {
     return GMDL_ERR_IO;
   }
 
-  if (obj_dump_lines_and_points(fd, obj) < 0) {
+  if (obj_dump_lines_and_points(fd, obj, &state, false) < 0) {
     return GMDL_ERR_IO;
   }
 

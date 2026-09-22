@@ -77,7 +77,8 @@ static bool obj_builder_init(
           &b->lines, sizeof(GMDL_Obj_Line), 16, allocator)
       && gcu_array_create_in_place(
           &b->line_vertices, sizeof(GMDL_Obj_Line_Vertex), 32, allocator)
-      && gcu_array_create_in_place(&b->points, sizeof(int32_t), 16, allocator)
+      && gcu_array_create_in_place(
+          &b->points, sizeof(GMDL_Obj_Point), 16, allocator)
       && gcu_array_create_in_place(
           &b->groups, sizeof(GMDL_Obj_Group), 16, allocator)
       && gcu_array_create_in_place(&b->material_mappings,
@@ -469,6 +470,7 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       GMDL_Obj_Line element;
       element.start = gcu_array_count(&builder.line_vertices);
       element.count = 0;
+      element.material_index = current_material;
 
       const char * cursor = rest;
       while (*cursor) {
@@ -554,12 +556,14 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
           result = GMDL_ERR_LIMIT;
           goto cleanup;
         }
-        int32_t * stored = (int32_t *)gcu_array_emplace(&builder.points);
+        GMDL_Obj_Point * stored =
+            (GMDL_Obj_Point *)gcu_array_emplace(&builder.points);
         if (!stored) {
           result = GMDL_ERR_OOM;
           goto cleanup;
         }
-        *stored = obj_index(v, vertex_count);
+        stored->vertex = obj_index(v, vertex_count);
+        stored->material_index = current_material;
         declared++;
       }
 

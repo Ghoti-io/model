@@ -228,9 +228,9 @@ A longer one is `GMDL_ERR_LIMIT`.
 | `texcoords` | `u v` | |
 | `normals` | `x y z` | |
 | `faces` | `GMDL_Obj_Face` | 0-based indices, `-1` for absent; `overflow` past four; `material_index`; `smoothing_group` |
-| `lines` | `start`, `count` into `line_vertices` | one entry per `l` statement |
+| `lines` | `start`, `count`, `material_index` | one entry per `l` statement |
 | `line_vertices` | vertex and texcoord index | every polyline's references, in file order |
-| `points` | vertex index | one entry per index any `p` named |
+| `points` | vertex and `material_index` | one entry per index any `p` named |
 | `groups` | name, `start_face`, `face_count` | in file order; ranges are contiguous and do not overlap |
 | `material_mappings` | name, `index` | `index` equals position |
 
@@ -281,13 +281,12 @@ coordinate to give.
 Both resolve negative and relative indices exactly as faces do (3.5), and an
 `l` or `p` naming nothing is `GMDL_ERR_FORMAT`.
 
-**A material named before an `l` or a `p` is not recorded.** `usemtl` sets
-the material for faces, and neither `GMDL_Obj_Line` nor `points` carries one,
-so a file that colours its polylines loses that. The parse still succeeds -
-the `usemtl` is read and applies to any face after it - and a test pins the
-behaviour so it stays deliberate rather than becoming a surprise. Section 12
-holds the question, because recording it means a material on three element
-kinds and a writer that re-emits `usemtl` in the line and point runs too.
+`usemtl` reaches all three element kinds, so `GMDL_Obj_Line` and
+`GMDL_Obj_Point` carry a `material_index` exactly as a face does, `-1` when
+none was named. The dump writes the polylines and the points after the faces
+and emits `usemtl` wherever the material changes, carrying what the faces
+left rather than starting again - which is what keeps a material stated
+between the faces and the polylines from being written twice.
 
 ### 3.13 Not read
 
@@ -665,10 +664,18 @@ wrong; it cannot preserve an order it does not keep, and of the two answers
 it lands on the one a single-texture renderer wants. A test pins the order
 so it stays deliberate.
 
-The dump writes `usemtl` when the material changes between consecutive faces,
-`s` when the smoothing group does, `g` for each group before its faces, and
-relative indices as absolute ones. Polylines and points follow the faces,
-since no group covers them.
+The dump writes `usemtl` when the material changes, `s` when the smoothing
+group does, `g` for each group before its faces, and relative indices as
+absolute ones.
+
+Polylines and points are written in two passes, before the faces and after,
+split on whether they name a material. OBJ can change the material in force
+but cannot turn it off, so an element carrying none has to be written while
+none is in force - and the faces, which come in between, may set one. A
+polyline declared before a file's first `usemtl` otherwise came back carrying
+the material of a face that followed it. Within one parse `material_index`
+moves from -1 to a mapping and never back, so the elements naming none are a
+prefix of each array and the split preserves each array's own order.
 
 **Every write is checked, and every one of those checks is exercised.** Both
 dumpers are mostly error handling by line count, and none of it had ever run:
@@ -679,11 +686,17 @@ walks through the whole of a dump one position at a time. A model with groups
 and one without are both swept, because they leave by different branches.
 `GMDL_ERR_IO` is the only answer any position may give.
 
-Three things a `GMDL_OK` model may hold cannot be written back, because the
+Four things a `GMDL_OK` model may hold cannot be written back, because the
 format has no spelling for them rather than because the dumper is wrong: a
-material no face uses, a face index below -1, and a name - or a texture map
-path - ending in a backslash. Section 10 says what each one is and how the
-fuzzers account for it.
+material no element uses, an index below -1, a name - or a texture map path -
+ending in a backslash, and an element that names **no** material while one is
+in force. Section 10 says what each one is and how the fuzzers account for
+it.
+
+That last one is not a state a parse can reach: `material_index` moves from
+-1 to a mapping and never back, because OBJ can change the material in force
+but cannot turn it off. A model built by hand can hold it, and the dump then
+writes nothing, so the reload gives the element the previous material.
 
 ---
 
@@ -706,8 +719,9 @@ The invariants the harnesses check: whatever the result, the parser neither
 crashes nor leaks; and a `GMDL_OK` model is dumped, parsed back, and compared
 against the original. For OBJ the comparison covers every count, every
 coordinate value, every group name and span, the `mtllib` path, each face's
-material by name and smoothing group, each polyline's span, and - with the
-exception below - every face, polyline and point index. For MTL
+material by name and smoothing group, each polyline's span and material,
+each point's material, and - with the exception below - every face, polyline
+and point index. For MTL
 it covers every property value, the `present` mask and every texture map
 path - the `refl` slots included, and including whether one was stated at
 all, since a NULL that comes back as a path is exactly what a dumper keying
@@ -722,13 +736,18 @@ dumped to `/dev/null` and read nothing back, which is why a dumper that
 dropped every face preceding the first group survived millions of
 executions.
 
-Three things are outside the comparison, because the format cannot express
+Four things are outside the comparison, because the format cannot express
 them rather than because the dumper is wrong.
 
-- **A material no face uses.** The dumper writes `usemtl` only where the
-  material changes between faces, so a mapping created by a `usemtl` line
-  that no face follows is never written. `material_mapping_count` is
-  therefore not stable; each face's material *is*, and is compared by name.
+- **A material no element uses.** The dumper writes `usemtl` only where the
+  material changes, so a mapping created by a `usemtl` line that no face,
+  polyline or point follows is never written. `material_mapping_count` is
+  therefore not stable; each element's material *is*, and is compared by
+  name.
+- **An element naming no material while one is in force.** No OBJ spelling
+  exists, so nothing is written and the reload reads the previous material.
+  A parse never produces it (section 9), so the fuzzers cannot reach it; it
+  is listed because a hand-built model can.
 - **A name, or a texture map path, ending in a backslash.** A name is
   written last on its line, so one ending in `\` lands exactly where 2.6
   reads a continuation: re-reading `newmtl a\` joins the `Ka` line after it
@@ -777,10 +796,6 @@ section 12 is where they are written down.
 - **`shadow_obj` and `trace_obj`.** The two render attributes carrying real
   data - a path each. Recording them means deciding where per-state
   attributes live, which 3.13 explains is the blocker for all nine.
-- **A material on a polyline or a point.** `usemtl` applies to `l` and `p`
-  as it does to `f`, and only faces record it (3.12). Fixing it means a
-  `material_index` on three element kinds and a writer that re-emits
-  `usemtl` in the line and point runs.
 - **Texture map options.** `-o`, `-s`, `-clamp`, `-bm` and the rest are
   `GMDL_ERR_UNSUPPORTED` today (4.5). Implementing them means a place to put
   them and a decision about `-bm`, which Blender applies and VTK 9.3 does not

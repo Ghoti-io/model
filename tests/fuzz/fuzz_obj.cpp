@@ -88,7 +88,7 @@ bool indices_are_representable(const GMDL_Obj * obj) {
     }
   }
   for (size_t i = 0; i < obj->point_count; i++) {
-    if (obj->points[i] < -1) {
+    if (obj->points[i].vertex < -1) {
       return false;
     }
   }
@@ -243,6 +243,16 @@ void check_round_trip(const GMDL_Obj * obj) {
   }
   for (size_t i = 0; i < obj->line_count; i++) {
     REQUIRE(obj->lines[i].count == again->lines[i].count, "line span");
+    REQUIRE(strcmp(material_name(obj, obj->lines[i].material_index),
+                material_name(again, again->lines[i].material_index))
+            == 0,
+        "line material");
+  }
+  for (size_t i = 0; i < obj->point_count; i++) {
+    REQUIRE(strcmp(material_name(obj, obj->points[i].material_index),
+                material_name(again, again->points[i].material_index))
+            == 0,
+        "point material");
   }
 
   if (indices_are_representable(obj)) {
@@ -254,7 +264,7 @@ void check_round_trip(const GMDL_Obj * obj) {
           "line texcoord index");
     }
     for (size_t i = 0; i < obj->point_count; i++) {
-      REQUIRE(obj->points[i] == again->points[i], "point index");
+      REQUIRE(obj->points[i].vertex == again->points[i].vertex, "point index");
     }
     for (size_t i = 0; i < obj->face_count; i++) {
       const GMDL_Obj_Face * a = &obj->faces[i];

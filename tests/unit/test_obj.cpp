@@ -970,7 +970,8 @@ namespace {
  *  group, two groups, a material change, all four reference spellings, a
  *  face long enough to spill into the overflow array, a smoothing group that
  *  is set and then turned off, polylines with and without texture
- *  references, and points. A directive the model does not carry has its
+ *  references, points, and a material change at the polylines and again
+ *  at the points. A directive the model does not carry has its
  *  failure arm go unexecuted, which is how this sweep quietly stops covering
  *  the writer whenever the format grows. */
 const char * kRichModel = "mtllib m.mtl\n"
@@ -990,8 +991,10 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "f 1 2 3 4 5 6\n"
                           "s off\n"
                           "f 1 2 3\n"
+                          "usemtl green\n"
                           "l 1 2 3\n"
                           "l 1/1 2/2\n"
+                          "usemtl red\n"
                           "p 1 2\n";
 
 /** The same lines with no group, so the dumper writes every face in one
@@ -1003,7 +1006,9 @@ const char * kGrouplessModel = "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
                                "f 1/1 2/1 3/1\n"
                                "usemtl blue\n"
                                "f 1 2 3\n"
+                               "usemtl green\n"
                                "l 1 2\n"
+                               "usemtl red\n"
                                "p 1\n";
 
 } // namespace
@@ -1206,9 +1211,9 @@ TEST(ObjPoint, OneStatementDeclaresOnePointPerIndex) {
   GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nv 2 0 0\np 1 2\np 3\n");
   ASSERT_NE(obj, nullptr);
   ASSERT_EQ(obj->point_count, 3u);
-  EXPECT_EQ(obj->points[0], 0);
-  EXPECT_EQ(obj->points[1], 1);
-  EXPECT_EQ(obj->points[2], 2);
+  EXPECT_EQ(obj->points[0].vertex, 0);
+  EXPECT_EQ(obj->points[1].vertex, 1);
+  EXPECT_EQ(obj->points[2].vertex, 2);
   gmdl_obj_free(obj);
 }
 
@@ -1246,28 +1251,165 @@ TEST(ObjLine, LinesAndPointsSurviveTheRoundTrip) {
         << "entry " << i;
   }
   for (size_t i = 0; i < first->point_count; i++) {
-    EXPECT_EQ(second->points[i], first->points[i]) << "point " << i;
+    EXPECT_EQ(second->points[i].vertex, first->points[i].vertex)
+        << "point " << i;
   }
   EXPECT_EQ(second->face_count, first->face_count);
   gmdl_obj_free(first);
   gmdl_obj_free(second);
 }
 
-TEST(ObjLine, AMaterialNamedBeforeALineIsNotRecorded) {
-  // Pinned rather than assumed. usemtl applies to l and p as it does to f,
-  // and neither carries a material, so a file colouring its polylines loses
-  // that - see 3.12 and section 12. The parse still succeeds and the
-  // material still reaches the faces.
+TEST(ObjLine, AMaterialNamedBeforeALineIsRecorded) {
+  // usemtl applies to l and p as it does to f, so all three carry one.
   GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\n"
                              "usemtl red\n"
                              "l 1 2\n"
+                             "p 1\n"
                              "f 1 2 1\n");
   ASSERT_NE(obj, nullptr);
   ASSERT_EQ(obj->line_count, 1u);
+  ASSERT_EQ(obj->point_count, 1u);
   ASSERT_EQ(obj->face_count, 1u);
   ASSERT_EQ(obj->material_mapping_count, 1u);
-  EXPECT_EQ(obj->faces[0].material_index, obj->material_mappings[0].index)
-      << "the face still gets it";
+  int32_t red = obj->material_mappings[0].index;
+  EXPECT_EQ(obj->lines[0].material_index, red);
+  EXPECT_EQ(obj->points[0].material_index, red);
+  EXPECT_EQ(obj->faces[0].material_index, red);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, AnElementBeforeAnyMaterialHasNone) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nl 1 2\np 1\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->lines[0].material_index, -1);
+  EXPECT_EQ(obj->points[0].material_index, -1);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, AMaterialThatChangesAfterTheFacesReachesTheLines) {
+  // A material stated after the faces has to reach the polylines and the
+  // points, which the dumper writes last. This does not need the carried
+  // state to pass - a run starting afresh would also write "usemtl blue",
+  // since blue differs from "none" too - so it is the plain statement that
+  // the material arrives, and AMaterialAlreadyInForceIsNotRepeated is the
+  // one the carrying is for.
+  GMDL_Obj * first = load_text("v 0 0 0\nv 1 0 0\n"
+                               "usemtl red\n"
+                               "f 1 2 1\n"
+                               "usemtl blue\n"
+                               "l 1 2\n"
+                               "p 2\n");
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->material_mapping_count, 2u);
+  GMDL_Obj * second = dump_and_reload(first);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->line_count, 1u);
+  ASSERT_EQ(second->point_count, 1u);
+
+  auto name_of = [](const GMDL_Obj * o, int32_t index) -> const char * {
+    for (size_t i = 0; i < o->material_mapping_count; i++) {
+      if (o->material_mappings[i].index == index) {
+        return o->material_mappings[i].name;
+      }
+    }
+    return "<none>";
+  };
+  EXPECT_STREQ(name_of(second, second->faces[0].material_index), "red");
+  EXPECT_STREQ(name_of(second, second->lines[0].material_index), "blue");
+  EXPECT_STREQ(name_of(second, second->points[0].material_index), "blue");
+  gmdl_obj_free(first);
+  gmdl_obj_free(second);
+}
+
+TEST(ObjLine, AnElementDeclaredBeforeAnyMaterialKeepsHavingNone) {
+  // The fuzzer found this within ninety seconds of l and p gaining a
+  // material. The dumper writes the faces first, so a polyline declared
+  // before the file's only usemtl was emitted after it and reloaded
+  // carrying the face's material - and OBJ cannot turn a material off, so
+  // there was no way to write it in that position at all. The elements
+  // holding no material now go out before the faces, while none is in
+  // force.
+  GMDL_Obj * first = load_text("v 0 0 0\nv 1 0 0\n"
+                               "l 1 2\n"
+                               "p 1\n"
+                               "usemtl a\n"
+                               "f 1 1 1\n"
+                               "l 1 2\n"
+                               "p 2\n");
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->line_count, 2u);
+  ASSERT_EQ(first->point_count, 2u);
+  ASSERT_EQ(first->lines[0].material_index, -1) << "the fixture itself";
+  ASSERT_NE(first->lines[1].material_index, -1);
+
+  GMDL_Obj * second = dump_and_reload(first);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->line_count, 2u);
+  ASSERT_EQ(second->point_count, 2u);
+  EXPECT_EQ(second->lines[0].material_index, -1)
+      << "a polyline before any usemtl still names no material";
+  EXPECT_EQ(second->points[0].material_index, -1);
+  EXPECT_NE(second->lines[1].material_index, -1);
+  EXPECT_NE(second->points[1].material_index, -1);
+
+  // And the arrays keep their own order across the split.
+  EXPECT_EQ(second->line_vertices[second->lines[0].start].vertex, 0);
+  gmdl_obj_free(first);
+  gmdl_obj_free(second);
+}
+
+TEST(ObjDump, AnElementNamingNoMaterialKeepsThePreviousOne) {
+  // The fourth thing section 9 says cannot be written back. OBJ can change
+  // the material in force but not turn it off, so an element holding -1
+  // after one is set has no spelling: nothing is written, and the reload
+  // gives it the previous material. A parse never reaches this state -
+  // material_index goes from -1 to a mapping and never back - so the model
+  // is built by hand, which is the only way the arm executes at all.
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "usemtl red\n"
+                             "f 1 1 1\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 2u);
+  ASSERT_NE(obj->faces[1].material_index, -1);
+  obj->faces[1].material_index = -1;
+
+  GMDL_Obj * reloaded = dump_and_reload(obj);
+  ASSERT_NE(reloaded, nullptr);
+  ASSERT_EQ(reloaded->face_count, 2u);
+  EXPECT_EQ(reloaded->faces[1].material_index, reloaded->faces[0].material_index)
+      << "with no way to say 'none', the file keeps saying the previous one";
+  gmdl_obj_free(reloaded);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, AMaterialAlreadyInForceIsNotRepeated) {
+  // This is the test the carried material is for. A run that began afresh
+  // would write "usemtl red" again at the polylines, which reloads
+  // correctly and says something the model does not. Confirmed by mutation:
+  // re-deriving the state per run fails here and nowhere else.
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\n"
+                             "usemtl red\n"
+                             "f 1 2 1\n"
+                             "l 1 2\n");
+  ASSERT_NE(obj, nullptr);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+  std::string text;
+  FILE * back = fopen(out.path(), "rb");
+  ASSERT_NE(back, nullptr);
+  char buf[256];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), back)) > 0) text.append(buf, n);
+  fclose(back);
+  size_t first = text.find("usemtl red");
+  ASSERT_NE(first, std::string::npos) << text;
+  EXPECT_EQ(text.find("usemtl red", first + 1), std::string::npos)
+      << "the material was already in force:\n" << text;
   gmdl_obj_free(obj);
 }
 
