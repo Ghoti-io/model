@@ -358,6 +358,12 @@ written with `%.9g`, which round-trips every float exactly.
 The dump writes `usemtl` when the material changes between consecutive faces,
 `g` for each group before its faces, and relative indices as absolute ones.
 
+Three things a `GMDL_OK` model may hold cannot be written back, because the
+format has no spelling for them rather than because the dumper is wrong: a
+material no face uses, a face index below -1, and a name ending in a
+backslash. Section 10 says what each one is and how the fuzzers account for
+it.
+
 ---
 
 ## 10. Fuzzing
@@ -375,8 +381,43 @@ a small value, so the same corpus exercises every cap:
 | `0x10` | `max_groups` | 4 |
 | `0x20` | `max_materials` | 4 |
 
-The invariant the harness checks: whatever the result, the parser neither
-crashes nor leaks, and a `GMDL_OK` model survives a dump and reload.
+The invariants the harnesses check: whatever the result, the parser neither
+crashes nor leaks; and a `GMDL_OK` model is dumped, parsed back, and compared
+against the original. The comparison covers every count, every coordinate
+value, every group name and span, the `mtllib` path, each face's material by
+name, and - with the exception below - every face index.
+
+That comparison used to be described here and not implemented: the harnesses
+dumped to `/dev/null` and read nothing back, which is why a dumper that
+dropped every face preceding the first group survived millions of
+executions.
+
+Two things are outside the comparison, because OBJ cannot express them
+rather than because the dumper is wrong.
+
+- **A material no face uses.** The dumper writes `usemtl` only where the
+  material changes between faces, so a mapping created by a `usemtl` line
+  that no face follows is never written. `material_mapping_count` is
+  therefore not stable; each face's material *is*, and is compared by name.
+- **A name ending in a backslash.** A name is written last on its line, so
+  one ending in `\` lands exactly where 2.6 reads a continuation: re-reading
+  `newmtl a\` joins the `Ka` line after it and yields the material `aKa`,
+  and `g \` at end of file loses the backslash and becomes `default`.
+  Doubling the backslash only moves the continuation, so the format has no
+  way to say it. Such a name reaches the parser only from a line ending in
+  two backslashes, which no real file contains - the fuzzer finds it because
+  it writes bytes rather than files. A model holding one is skipped entirely.
+- **A face index below -1.** An index of `k >= 0` is written as `k + 1` and
+  an absent one as `0`, both of which read back as themselves. An index of
+  `-2` or lower - which only a relative index reaching past the beginning of
+  the file produces, and which 3.5 records rather than rejects - is written
+  as a negative number, and OBJ reads a negative index as relative. There is
+  no OBJ spelling for such an index, so a model containing one is exempt
+  from the index comparison and from nothing else.
+
+Both exemptions were measured rather than assumed: over the accumulated
+corpus they account for every disagreement, and the invariant as stated
+holds on all of it.
 
 ---
 

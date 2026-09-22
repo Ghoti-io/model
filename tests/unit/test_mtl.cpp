@@ -467,6 +467,33 @@ TEST(MtlDump, FloatsSurviveTheRoundTrip) {
   gmdl_mtl_free(second);
 }
 
+TEST(MtlLine, ATrailingDoubleBackslashLeavesTheNameEndingInOne) {
+  // The continuation takes exactly one backslash and joins what follows, so
+  // the blank line here is what stops "Ka" being swallowed into the name.
+  // The material is then called "a\", which is the one thing a dump cannot
+  // write back: it lands last on its line, where a backslash continues.
+  // The fuzz harness skips such a model, and this test is what keeps that
+  // exemption from quietly covering a real defect.
+  GMDL_Mtl * mtl = load_text("newmtl a\\\\\n\nKa 1 1 1\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_STREQ(mtl->materials[0].name, "a\\");
+  EXPECT_FLOAT_EQ(mtl->materials[0].Ka[0], 1.0f);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlLine, WithoutTheBlankLineTheNextLineJoinsTheName) {
+  // Same input without the blank line: "Ka 1 1 1" is joined onto the name's
+  // line, so the name is "a\Ka" and nothing sets Ka. Pinned because it is
+  // surprising, and because it is what the continuation rule says.
+  GMDL_Mtl * mtl = load_text("newmtl a\\\\\nKa 1 1 1\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_STREQ(mtl->materials[0].name, "a\\Ka");
+  EXPECT_FLOAT_EQ(mtl->materials[0].Ka[0], 0.0f);
+  gmdl_mtl_free(mtl);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

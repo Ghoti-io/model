@@ -909,6 +909,34 @@ TEST(ObjDump, AModelWithNoLeadingOrphansIsUnchanged) {
   gmdl_obj_free(second);
 }
 
+TEST(ObjLine, ATrailingDoubleBackslashLeavesTheNameEndingInOne) {
+  // The continuation rule takes exactly one backslash, so "g \\" names the
+  // group "\". Pinned because it is the one thing a dump cannot write back:
+  // the name lands last on its line, where a backslash reads as a
+  // continuation. The fuzz harness skips such a model, and this test is
+  // what stops that exemption from quietly covering a real defect.
+  GMDL_Obj * obj = load_text("g \\\\\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->group_count, 1u);
+  EXPECT_STREQ(obj->groups[0].name, "\\");
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjLine, ABackslashInsideANameIsJustACharacter) {
+  // Only a trailing one continues, so an interior backslash survives and
+  // round-trips like any other byte.
+  GMDL_Obj * obj = load_text("g a\\b\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->group_count, 1u);
+  EXPECT_STREQ(obj->groups[0].name, "a\\b");
+  GMDL_Obj * again = dump_and_reload(obj);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->group_count, 1u);
+  EXPECT_STREQ(again->groups[0].name, "a\\b");
+  gmdl_obj_free(obj);
+  gmdl_obj_free(again);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
