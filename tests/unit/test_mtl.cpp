@@ -656,6 +656,227 @@ TEST(MtlPresent, PresenceSurvivesTheRoundTrip) {
   gmdl_mtl_free(second);
 }
 
+//
+// Texture maps (4.5).
+//
+
+TEST(MtlMap, APlainPathIsRead) {
+  GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd brick.png\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  ASSERT_NE(mtl->materials[0].map_Kd, nullptr);
+  EXPECT_STREQ(mtl->materials[0].map_Kd, "brick.png");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, AMapNobodyStatedIsNull) {
+  // A pointer says this for itself, which is why the maps need no bit in
+  // `present`: no file can ask for NULL.
+  GMDL_Mtl * mtl = load_text("newmtl body\nKd 1 1 1\n");
+  ASSERT_NE(mtl, nullptr);
+  const GMDL_Mtl_Material & m = mtl->materials[0];
+  EXPECT_EQ(m.map_Ka, nullptr);
+  EXPECT_EQ(m.map_Kd, nullptr);
+  EXPECT_EQ(m.map_Ks, nullptr);
+  EXPECT_EQ(m.map_Ns, nullptr);
+  EXPECT_EQ(m.map_d, nullptr);
+  EXPECT_EQ(m.map_bump, nullptr);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, EveryKindIsRead) {
+  GMDL_Mtl * mtl = load_text("newmtl all\n"
+                             "map_Ka a.png\n"
+                             "map_Kd d.png\n"
+                             "map_Ks s.png\n"
+                             "map_Ns n.png\n"
+                             "map_d alpha.png\n"
+                             "map_bump b.png\n");
+  ASSERT_NE(mtl, nullptr);
+  const GMDL_Mtl_Material & m = mtl->materials[0];
+  EXPECT_STREQ(m.map_Ka, "a.png");
+  EXPECT_STREQ(m.map_Kd, "d.png");
+  EXPECT_STREQ(m.map_Ks, "s.png");
+  EXPECT_STREQ(m.map_Ns, "n.png");
+  EXPECT_STREQ(m.map_d, "alpha.png");
+  EXPECT_STREQ(m.map_bump, "b.png");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, APathMayContainSpaces) {
+  // Measured rather than assumed: Blender 4.3 and VTK 9.3 both take the whole
+  // of the rest of the line, so "my tex.png" is one file and not two tokens.
+  GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd my tex.png\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_STREQ(mtl->materials[0].map_Kd, "my tex.png");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, TrailingBlanksAreNotPartOfThePath) {
+  // Blender strips them; VTK 9.3 keeps them and then cannot find the file it
+  // just named, which is the behaviour of the two worth not copying.
+  GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd tex.png \t \n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_STREQ(mtl->materials[0].map_Kd, "tex.png");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, SeparatorsAreNotTranslated) {
+  // A path is kept as written. Both references keep the backslash too, and
+  // only the caller knows what platform the path was written for.
+  GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd sub\\tex.png\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_STREQ(mtl->materials[0].map_Kd, "sub\\tex.png");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, OptionsAreUnsupportedNotMalformed) {
+  // The file is well-formed; this library is the one falling short. The two
+  // references do not even agree on what the options are - Blender consumes
+  // -clamp, VTK 9.3 folds it into the filename - so guessing would be taking
+  // a side the caller cannot see.
+  for (const char * line : {"map_Kd -o 1 1 1 tex.png\n",
+           "map_Kd -s 2 2 2 tex.png\n", "map_Kd -clamp on tex.png\n",
+           "map_bump -bm 0.5 b.png\n"}) {
+    EXPECT_EQ(load_text_expecting_failure(std::string("newmtl a\n") + line),
+        GMDL_ERR_UNSUPPORTED)
+        << line;
+  }
+}
+
+TEST(MtlMap, ADirectiveWithNoPathIsMalformed) {
+  // Both references ignore the line instead; 4.5 records that divergence.
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nmap_Kd\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(
+      load_text_expecting_failure("newmtl a\nmap_Kd   \n"), GMDL_ERR_FORMAT);
+}
+
+TEST(MtlMap, BumpAndMapBumpAreOneProperty) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nbump b.png\nnewmtl b\nmap_bump c.png\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 2u);
+  EXPECT_STREQ(mtl->materials[0].map_bump, "b.png");
+  EXPECT_STREQ(mtl->materials[1].map_bump, "c.png");
+  // One property, so one spelling comes back out.
+  EXPECT_NE(dump_text(mtl).find("map_bump b.png"), std::string::npos);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, ARepeatedDirectiveKeepsTheLast) {
+  // The format cannot say two maps of one kind, so the first is released
+  // rather than leaked.
+  GMDL_Mtl * mtl = load_text("newmtl a\nmap_Kd first.png\nmap_Kd second.png\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_STREQ(mtl->materials[0].map_Kd, "second.png");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, ADirectiveBeginningWithAMapKeywordIsNotTheKeyword) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nmap_Kdx tex.png\nbumpy tex.png\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_EQ(mtl->materials[0].map_Kd, nullptr);
+  EXPECT_EQ(mtl->materials[0].map_bump, nullptr);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, TheDumpWritesOnlyTheMapsStated) {
+  GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd d.png\n");
+  ASSERT_NE(mtl, nullptr);
+  std::string text = dump_text(mtl);
+  EXPECT_NE(text.find("map_Kd d.png\n"), std::string::npos) << text;
+  EXPECT_EQ(text.find("map_Ka"), std::string::npos) << text;
+  EXPECT_EQ(text.find("map_Ks"), std::string::npos) << text;
+  EXPECT_EQ(text.find("map_bump"), std::string::npos) << text;
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, AMaterialWithOnlyAMapIsNotABareNewmtl) {
+  // `present` stays 0 - no scalar property was stated - and the map must
+  // still be written, which is what would break if the dump keyed on it.
+  GMDL_Mtl * mtl = load_text("newmtl body\nmap_Kd d.png\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_EQ(mtl->materials[0].present, 0u);
+  EXPECT_EQ(dump_text(mtl), "newmtl body\nmap_Kd d.png\n\n");
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, PathsSurviveTheRoundTrip) {
+  GMDL_Mtl * first = load_text("newmtl a\nmap_Kd my tex.png\nmap_bump b.png\n"
+                               "newmtl b\nmap_Ka sub\\a.png\nKd 1 0 0\n"
+                               "newmtl c\n");
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->material_count, 3u);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_mtl_dump(first, sink), GMDL_OK);
+  fclose(sink);
+  GMDL_Mtl * second = nullptr;
+  ASSERT_EQ(
+      gmdl_mtl_load_file(out.path(), nullptr, nullptr, &second), GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->material_count, 3u);
+  for (size_t i = 0; i < 3; i++) {
+    const GMDL_Mtl_Material & a = first->materials[i];
+    const GMDL_Mtl_Material & b = second->materials[i];
+    ASSERT_EQ(a.map_Kd == nullptr, b.map_Kd == nullptr) << "material " << i;
+    if (a.map_Kd) {
+      EXPECT_STREQ(a.map_Kd, b.map_Kd) << "material " << i;
+    }
+    ASSERT_EQ(a.map_Ka == nullptr, b.map_Ka == nullptr) << "material " << i;
+    if (a.map_Ka) {
+      EXPECT_STREQ(a.map_Ka, b.map_Ka) << "material " << i;
+    }
+    ASSERT_EQ(a.map_bump == nullptr, b.map_bump == nullptr) << "material " << i;
+    if (a.map_bump) {
+      EXPECT_STREQ(a.map_bump, b.map_bump) << "material " << i;
+    }
+  }
+  gmdl_mtl_free(first);
+  gmdl_mtl_free(second);
+}
+
+TEST(MtlMap, TheDumpWritesKdAfterKa) {
+  // Not cosmetic, and not to be tidied into alphabetical order. VTK 9.3
+  // keeps one texture per material, which map_Ka and map_Kd both fill and
+  // the last one wins; writing Kd second makes it settle on the diffuse
+  // map, which is what a single-texture renderer wants. Measured, and
+  // recorded in section 9.
+  GMDL_Mtl * mtl = load_text("newmtl m\nmap_Kd d.png\nmap_Ka a.png\n");
+  ASSERT_NE(mtl, nullptr);
+  std::string text = dump_text(mtl);
+  size_t ka = text.find("map_Ka ");
+  size_t kd = text.find("map_Kd ");
+  ASSERT_NE(ka, std::string::npos) << text;
+  ASSERT_NE(kd, std::string::npos) << text;
+  EXPECT_LT(ka, kd) << "map_Kd must be written after map_Ka:\n" << text;
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, ATrailingDoubleBackslashLeavesThePathEndingInOne) {
+  // The same hole the material name has, reached the same way: the
+  // continuation takes one backslash and the blank line stops the join, so
+  // the path is "a\" - which a dump writes last on its line, where a
+  // backslash continues. The fuzz harness skips such a library, and this is
+  // the test that stops that exemption from covering a real defect.
+  GMDL_Mtl * mtl = load_text("newmtl m\nmap_Kd a\\\\\n\nKa 1 1 1\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_STREQ(mtl->materials[0].map_Kd, "a\\");
+  EXPECT_FLOAT_EQ(mtl->materials[0].Ka[0], 1.0f);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlMap, AFailedLoadReleasesThePathsItHadAlreadyRead) {
+  // Nothing is handed back, so the paths read before the bad line are the
+  // library's to release. ASan and valgrind are what actually check this.
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nmap_Kd one.png\n"
+                                        "newmtl b\nmap_Ka two.png\n"
+                                        "map_Kd -o 1 tex.png\n"),
+      GMDL_ERR_UNSUPPORTED);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

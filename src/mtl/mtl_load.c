@@ -121,6 +121,77 @@ static GMDL_Result mtl_parse_dissolve(const char * rest, float * out) {
   return GMDL_OK;
 }
 
+/**
+ * Release the texture map paths a material owns.
+ *
+ * @param allocator The allocator they were taken from.
+ * @param material The material.
+ */
+static void mtl_material_free_paths(
+    const GMDL_Allocator * allocator, GMDL_Mtl_Material * material) {
+  gcu_allocator_free(allocator, material->map_Ka);
+  gcu_allocator_free(allocator, material->map_Kd);
+  gcu_allocator_free(allocator, material->map_Ks);
+  gcu_allocator_free(allocator, material->map_Ns);
+  gcu_allocator_free(allocator, material->map_d);
+  gcu_allocator_free(allocator, material->map_bump);
+}
+
+/**
+ * Read a texture map directive's filename.
+ *
+ * The filename is the whole of the rest of the line, trailing blanks
+ * removed, so a path containing spaces is one path (4.5). Both Blender 4.3
+ * and VTK 9.3 read it that way, which is the only reason to prefer it over
+ * the first token - the format's own description says nothing either way.
+ *
+ * A line whose argument begins with `-` carries texture options, which this
+ * library does not implement, and that is ::GMDL_ERR_UNSUPPORTED rather than
+ * a silent guess. The two references disagree about what the options even
+ * are: Blender knows `-clamp` and consumes it, VTK 9.3 does not and folds it
+ * into the filename, so `map_Kd -clamp on t.png` names `t.png` in one and
+ * `-clamp on t.png` in the other. Picking either would be picking a side in
+ * a disagreement the caller cannot see, and dropping the options silently is
+ * worse than refusing: `-s 2 2 2` is a scale a renderer would then not
+ * apply, which is a wrong picture rather than a missing one.
+ *
+ * @param rest The text after the directive, already past leading blanks.
+ * @param allocator The allocator for the copy.
+ * @param slot The material field to fill in, freed first if already set.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT for no filename,
+ *   ::GMDL_ERR_UNSUPPORTED for options, or ::GMDL_ERR_OOM.
+ */
+static GMDL_Result mtl_parse_map(
+    const char * rest, const GMDL_Allocator * allocator, char ** slot) {
+  if (*rest == '-') {
+    return GMDL_ERR_UNSUPPORTED;
+  }
+
+  size_t length = strlen(rest);
+  while (length > 0 && (rest[length - 1] == ' ' || rest[length - 1] == '\t')) {
+    length--;
+  }
+  if (length == 0) {
+    // "map_Kd" with nothing after it. Both references ignore the line; this
+    // library calls it FORMAT for the same reason 4.2 calls "Kd 0.5 x"
+    // FORMAT, and 4.5 records the divergence.
+    return GMDL_ERR_FORMAT;
+  }
+
+  char * copy = gcu_allocator_malloc(allocator, length + 1);
+  if (!copy) {
+    return GMDL_ERR_OOM;
+  }
+  memcpy(copy, rest, length);
+  copy[length] = '\0';
+
+  // A repeated directive means the later one: the format has no way to say
+  // two maps of one kind, so the alternative is leaking the first.
+  gcu_allocator_free(allocator, *slot);
+  *slot = copy;
+  return GMDL_OK;
+}
+
 GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
     const GMDL_Allocator * allocator, GMDL_Mtl ** out_mtl) {
   if (!out_mtl) {
@@ -267,7 +338,52 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
       material->illum = (int32_t)value;
       material->present |= GMDL_MTL_HAS_ILLUM;
     }
-    // Everything else - map_Kd, Ni, Tr, and the rest - is ignored.
+    else if (gmdl_line_is(line_text, "map_Ka", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ka);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "map_Kd", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Kd);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "map_Ks", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ks);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "map_Ns", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ns);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "map_d", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_d);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    // "bump" and "map_bump" are two spellings of one property, and exporters
+    // write both. They share a field; the dump writes "map_bump".
+    else if (gmdl_line_is(line_text, "map_bump", &rest)
+        || gmdl_line_is(line_text, "bump", &rest)) {
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_bump);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    // Everything else - Ni, Tr, disp, refl, and the rest - is ignored.
   }
 
   {
@@ -289,6 +405,11 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
   }
 
 cleanup:
+  // The materials are about to be thrown away, and each may own paths.
+  for (size_t i = 0; i < gcu_array_count(&materials); i++) {
+    mtl_material_free_paths(
+        allocator, (GMDL_Mtl_Material *)gcu_array_at(&materials, i));
+  }
   gcu_array_destroy_in_place(&materials);
   gcu_allocator_free(allocator, line);
   return result;
@@ -317,6 +438,9 @@ void gmdl_mtl_free(GMDL_Mtl * mtl) {
     return;
   }
   const GMDL_Allocator * allocator = mtl->allocator;
+  for (size_t i = 0; i < mtl->material_count; i++) {
+    mtl_material_free_paths(allocator, &mtl->materials[i]);
+  }
   gcu_allocator_free(allocator, mtl->materials);
   gcu_allocator_free(allocator, mtl);
 }

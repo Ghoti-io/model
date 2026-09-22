@@ -73,6 +73,13 @@ typedef enum GMDL_Mtl_Present {
  * Each property field holds a usable value whatever the file said; `present`
  * says which of them the file actually stated. A renderer can ignore
  * `present` and get sensible material; a writer must not.
+ *
+ * The texture map paths are the exception, and need no bit in `present`: a
+ * pointer says for itself whether the file stated one, because NULL is not a
+ * value any file can ask for. They are stored exactly as the file wrote
+ * them - relative paths stay relative, and no separator is translated - so
+ * resolving one against the directory the `.mtl` came from is the caller's
+ * job, and the caller is the only one that knows that directory.
  */
 typedef struct {
   char name[GMDL_MTL_MAX_NAME_LENGTH]; ///< Material name.
@@ -83,6 +90,13 @@ typedef struct {
   float d;     ///< Dissolve (opacity; 1.0 is opaque, and the default).
   int32_t illum; ///< Illumination model.
   uint32_t present; ///< Bitwise OR of ::GMDL_Mtl_Present.
+  char * map_Ka; ///< `map_Ka` path, or NULL when the file stated none.
+  char * map_Kd; ///< `map_Kd` path, or NULL when the file stated none.
+  char * map_Ks; ///< `map_Ks` path, or NULL when the file stated none.
+  char * map_Ns; ///< `map_Ns` path, or NULL when the file stated none.
+  char * map_d;  ///< `map_d` path, or NULL when the file stated none.
+  /** `map_bump` or `bump` path, or NULL. The two spell one property. */
+  char * map_bump;
 } GMDL_Mtl_Material;
 
 /**
@@ -101,8 +115,8 @@ typedef struct {
  * @param limits Parsing caps, or NULL for gmdl_limits_default().
  * @param allocator Allocator for the result, or NULL for the default.
  * @param out_mtl Receives the parsed material library on success.
- * @return GMDL_OK, or GMDL_ERR_FORMAT, GMDL_ERR_LIMIT, GMDL_ERR_OOM, or
- *   GMDL_ERR_INVALID.
+ * @return GMDL_OK, or GMDL_ERR_FORMAT, GMDL_ERR_LIMIT, GMDL_ERR_OOM,
+ *   GMDL_ERR_UNSUPPORTED, or GMDL_ERR_INVALID.
  */
 GMDL_API GMDL_Result gmdl_mtl_load(GMDL_Stream * stream,
     const GMDL_Limits * limits, const GMDL_Allocator * allocator,
@@ -124,6 +138,9 @@ GMDL_API GMDL_Result gmdl_mtl_load_file(const char * path,
 
 /**
  * @brief Free a material library returned by gmdl_mtl_load(). NULL is ignored.
+ *
+ * The texture map paths belong to the library too, and are freed with it, so
+ * a path that must outlive the ::GMDL_Mtl has to be copied out first.
  *
  * @param mtl The material library.
  */

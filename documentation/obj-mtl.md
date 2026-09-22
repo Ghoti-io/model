@@ -289,11 +289,11 @@ A property whose values do not parse - `Kd 0.5 x`, `illum x` - is
 
 ### 4.3 Ignored
 
-`Ni`, `Tr`, `Ke`, `Tf`, `sharpness`, `map_Ka`, `map_Kd`, `map_Ks`, `map_Ns`,
-`map_d`, `map_bump`, `bump`, `disp`, `decal`, `refl`, and any PBR extension
-(`Pr`, `Pm`, `Ps`, `Pc`, `Pcr`, `aniso`, `anisor`, `norm`, `Ke`). Texture
-maps are the largest omission and the first thing a real renderer will want
-(section 12).
+`Ni`, `Tr`, `Ke`, `Tf`, `sharpness`, `disp`, `decal`, `refl`, and any PBR
+extension (`Pr`, `Pm`, `Ps`, `Pc`, `Pcr`, `aniso`, `anisor`, `norm`, `Ke`).
+
+`refl` is the one of those with a real shape of its own - it takes a `-type`
+and, for a cube map, six files - so it is not simply another entry in 4.5.
 
 ### 4.4 The result
 
@@ -303,6 +303,53 @@ maps are the largest omission and the first thing a real renderer will want
 Each `GMDL_Mtl_Material` carries a usable value in every property field and
 a `present` mask saying which of them the file stated. A renderer may ignore
 `present`; anything that writes a material out must not.
+
+The texture map paths need no bit in the mask, because a pointer answers the
+question by itself: NULL means the file stated none, and no file can ask for
+NULL. They belong to the `GMDL_Mtl` and are freed with it, so a path that has
+to outlive the library must be copied out.
+
+### 4.5 Texture maps
+
+| Directive | Field |
+| --- | --- |
+| `map_Ka path` | `map_Ka` |
+| `map_Kd path` | `map_Kd` |
+| `map_Ks path` | `map_Ks` |
+| `map_Ns path` | `map_Ns` |
+| `map_d path` | `map_d` |
+| `map_bump path`, `bump path` | `map_bump` |
+
+`bump` and `map_bump` are two spellings of one property and share a field.
+The dump writes `map_bump`, so the round trip is of the material rather than
+of the keyword that set it.
+
+**The path is the whole of the rest of the line**, with trailing blanks
+removed, so `map_Kd my tex.png` names one file called `my tex.png`. The
+format's own description does not say; both Blender 4.3 and VTK 9.3 read it
+this way, and that agreement is the only reason to prefer it over taking the
+first token. Trailing blanks are dropped because Blender drops them and VTK
+keeps them and then cannot find the file it just named.
+
+The path is stored exactly as written. No separator is translated and
+nothing is resolved against the `.mtl`'s own directory, because only the
+caller knows where the file it handed over came from. A repeated directive
+keeps the last one; the format has no way to say two maps of one kind.
+
+**A line whose argument begins with `-` carries texture options** -
+`-o`, `-s`, `-clamp`, `-bm` and the rest - and is `GMDL_ERR_UNSUPPORTED`.
+The file is well-formed and this library is the one falling short, which is
+the distinction section 1 draws. Refusing rather than guessing is deliberate,
+and measured: the two references do not agree on what the options are.
+Blender knows `-clamp` and consumes it; VTK 9.3 does not, and folds it into
+the filename, so `map_Kd -clamp on t.png` names `t.png` in one and
+`-clamp on t.png` in the other. Silently dropping the options would be worse
+than either, because `-s 2 2 2` is a scale a renderer would then not apply:
+a wrong picture rather than a missing one.
+
+A directive with no path at all is `GMDL_ERR_FORMAT`, for the same reason
+`Kd 0.5 x` is. Both references instead ignore the line; this is a place where
+the library is deliberately stricter than both.
 
 ---
 
@@ -420,14 +467,32 @@ keeps its black or its invisibility. Both halves of each pair were checked,
 because a fix that got either backwards would look correct from the other
 side.
 
+**Texture map paths survive too**, measured the same way: a library holding
+`map_Kd my tex.png`, `map_Ka` and `map_bump` was dumped, and Blender read the
+dump exactly as it read the source - same files in the same slots, the space
+in the filename included, the bump map wired to the same normal input.
+
+VTK 9.3 agrees on the paths and disagrees about which one it uses, for a
+reason worth stating because it is not a defect on either side. VTK keeps
+**one** texture per material, which `map_Ka` and `map_Kd` both fill and the
+**last** of them wins (`map_Ns` does not compete; a material with only one is
+unaffected). This library stores a material rather than a list of
+directives, so the dump writes the maps in a fixed order - and that order is
+chosen so `map_Kd` is written after `map_Ka`, which makes VTK settle on the
+diffuse map. A source that wrote them the other way round is therefore read
+by VTK one way from the source and another from the dump. The dump is not
+wrong; it cannot preserve an order it does not keep, and of the two answers
+it lands on the one a single-texture renderer wants. A test pins the order
+so it stays deliberate.
+
 The dump writes `usemtl` when the material changes between consecutive faces,
 `g` for each group before its faces, and relative indices as absolute ones.
 
 Three things a `GMDL_OK` model may hold cannot be written back, because the
 format has no spelling for them rather than because the dumper is wrong: a
-material no face uses, a face index below -1, and a name ending in a
-backslash. Section 10 says what each one is and how the fuzzers account for
-it.
+material no face uses, a face index below -1, and a name - or a texture map
+path - ending in a backslash. Section 10 says what each one is and how the
+fuzzers account for it.
 
 ---
 
@@ -451,30 +516,34 @@ crashes nor leaks; and a `GMDL_OK` model is dumped, parsed back, and compared
 against the original. For OBJ the comparison covers every count, every
 coordinate value, every group name and span, the `mtllib` path, each face's
 material by name, and - with the exception below - every face index. For MTL
-it covers every property value and the `present` mask, so a dumper that
-invents a property or drops one is caught as readily as one that gets a
-value wrong.
+it covers every property value, the `present` mask and every texture map
+path - including whether one was stated at all, since a NULL that comes back
+as a path is exactly what a dumper keying on the wrong thing produces. A
+dumper that invents a property or drops one is caught as readily as one that
+gets a value wrong.
 
 That comparison used to be described here and not implemented: the harnesses
 dumped to `/dev/null` and read nothing back, which is why a dumper that
 dropped every face preceding the first group survived millions of
 executions.
 
-Two things are outside the comparison, because OBJ cannot express them
-rather than because the dumper is wrong.
+Three things are outside the comparison, because the format cannot express
+them rather than because the dumper is wrong.
 
 - **A material no face uses.** The dumper writes `usemtl` only where the
   material changes between faces, so a mapping created by a `usemtl` line
   that no face follows is never written. `material_mapping_count` is
   therefore not stable; each face's material *is*, and is compared by name.
-- **A name ending in a backslash.** A name is written last on its line, so
-  one ending in `\` lands exactly where 2.6 reads a continuation: re-reading
-  `newmtl a\` joins the `Ka` line after it and yields the material `aKa`,
-  and `g \` at end of file loses the backslash and becomes `default`.
-  Doubling the backslash only moves the continuation, so the format has no
-  way to say it. Such a name reaches the parser only from a line ending in
-  two backslashes, which no real file contains - the fuzzer finds it because
-  it writes bytes rather than files. A model holding one is skipped entirely.
+- **A name, or a texture map path, ending in a backslash.** A name is
+  written last on its line, so one ending in `\` lands exactly where 2.6
+  reads a continuation: re-reading `newmtl a\` joins the `Ka` line after it
+  and yields the material `aKa`, and `g \` at end of file loses the
+  backslash and becomes `default`. A map path is last on its line too, so
+  `map_Kd a\` swallows whatever follows in the same way. Doubling the
+  backslash only moves the continuation, so the format has no way to say it.
+  Such a name or path reaches the parser only from a line ending in two
+  backslashes, which no real file contains - the fuzzer finds it because it
+  writes bytes rather than files. A model holding one is skipped entirely.
 - **A face index below -1.** An index of `k >= 0` is written as `k + 1` and
   an absent one as `0`, both of which read back as themselves. An index of
   `-2` or lower - which only a relative index reaching past the beginning of
@@ -483,7 +552,7 @@ rather than because the dumper is wrong.
   no OBJ spelling for such an index, so a model containing one is exempt
   from the index comparison and from nothing else.
 
-Both exemptions were measured rather than assumed: over the accumulated
+All three exemptions were measured rather than assumed: over the accumulated
 corpus they account for every disagreement, and the invariant as stated
 holds on all of it.
 
@@ -509,8 +578,15 @@ section 12 is where they are written down.
 - **Smoothing groups (`s`), lines (`l`) and points (`p`).** Ignored today.
   Smoothing groups matter for normal generation, which cjelly does; lines and
   points matter for CAD-style models.
-- **Texture maps in MTL.** `map_Kd` at minimum. Needs a path field and a
-  decision on the `-o`, `-s`, `-clamp` options.
+- **Texture map options.** `-o`, `-s`, `-clamp`, `-bm` and the rest are
+  `GMDL_ERR_UNSUPPORTED` today (4.5). Implementing them means a place to put
+  them and a decision about `-bm`, which Blender applies and VTK 9.3 does not
+  parse at all.
+- **`refl`, `disp` and `decal`.** Still ignored. `refl` is the awkward one:
+  a `-type` and, for a cube map, six files, so it is not another row in 4.5.
+- **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
+  references. Strictness is defensible and this is the one place 4.5 takes it
+  further than either.
 - **`Tr` as `1 - d`.** Some exporters write only `Tr`. Map it when `d` is
   absent?
 - **Extra face fields.** Reject `1/2/3/4`, or keep ignoring it?

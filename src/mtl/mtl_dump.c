@@ -69,6 +69,29 @@ GMDL_Result gmdl_mtl_dump(const GMDL_Mtl * mtl, FILE * fd) {
         && fprintf(fd, "illum %d\n", m->illum) < 0) {
       return GMDL_ERR_IO;
     }
+    // A map path needs no bit in `present`: NULL already says the file
+    // stated none, and no file can ask for NULL. "bump" comes back out as
+    // "map_bump", the spelling the format's own description leads with -
+    // the two are one property here, so the round trip is of the material
+    // and not of the keyword that set it.
+    if (m->map_Ka && fprintf(fd, "map_Ka %s\n", m->map_Ka) < 0) {
+      return GMDL_ERR_IO;
+    }
+    if (m->map_Kd && fprintf(fd, "map_Kd %s\n", m->map_Kd) < 0) {
+      return GMDL_ERR_IO;
+    }
+    if (m->map_Ks && fprintf(fd, "map_Ks %s\n", m->map_Ks) < 0) {
+      return GMDL_ERR_IO;
+    }
+    if (m->map_Ns && fprintf(fd, "map_Ns %s\n", m->map_Ns) < 0) {
+      return GMDL_ERR_IO;
+    }
+    if (m->map_d && fprintf(fd, "map_d %s\n", m->map_d) < 0) {
+      return GMDL_ERR_IO;
+    }
+    if (m->map_bump && fprintf(fd, "map_bump %s\n", m->map_bump) < 0) {
+      return GMDL_ERR_IO;
+    }
     if (fprintf(fd, "\n") < 0) {
       return GMDL_ERR_IO;
     }

@@ -38,28 +38,51 @@ bool same_float(float a, float b) {
   return (std::isnan(a) && std::isnan(b)) || a == b;
 }
 
-/** Whether a name would be the last thing on its line and end in a backslash. */
-bool ends_with_backslash(const char * name) {
-  size_t length = strlen(name);
-  return length > 0 && name[length - 1] == '\\';
+/** Whether a text would be the last thing on its line and end in a backslash. */
+bool ends_with_backslash(const char * text) {
+  return text && *text && text[strlen(text) - 1] == '\\';
+}
+
+/**
+ * Whether every name and path in the library can be written and read back.
+ *
+ * The one exemption, and it applies to a map path for the same reason it
+ * applies to a name: written last on its line, a trailing backslash is a
+ * continuation under 2.6, so "map_Kd a\\" swallows the line after it and
+ * comes back as something else. "map_Kd a\\\\" at the end of a file parses to
+ * the path "a\\", which is how such a library is reached at all. The format
+ * has no escape for it.
+ */
+bool is_representable(const GMDL_Mtl * mtl) {
+  for (size_t i = 0; i < mtl->material_count; i++) {
+    const GMDL_Mtl_Material * m = &mtl->materials[i];
+    if (ends_with_backslash(m->name) || ends_with_backslash(m->map_Ka)
+        || ends_with_backslash(m->map_Kd) || ends_with_backslash(m->map_Ks)
+        || ends_with_backslash(m->map_Ns) || ends_with_backslash(m->map_d)
+        || ends_with_backslash(m->map_bump)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Whether two map paths say the same thing, NULL meaning "none stated". */
+bool same_path(const char * a, const char * b) {
+  if (!a || !b) {
+    return a == b;
+  }
+  return strcmp(a, b) == 0;
 }
 
 /**
  * Dump the library, parse the dump, and check the two agree.
  *
- * Unlike the OBJ side this needs no exemptions: every field of every
- * material is written unconditionally, and every one of them has an MTL
- * spelling that reads back as itself.
+ * Every other field has an MTL spelling that reads back as itself, so the
+ * backslash above is the only thing excluded.
  */
 void check_round_trip(const GMDL_Mtl * mtl) {
-  // A name ending in a backslash is written last on its line, where 2.6
-  // reads a continuation: "newmtl a\\" comes back as the material "aKa",
-  // having swallowed the Ka line after it. The format has no escape for
-  // that, so such a library is outside the round trip.
-  for (size_t i = 0; i < mtl->material_count; i++) {
-    if (ends_with_backslash(mtl->materials[i].name)) {
-      return;
-    }
+  if (!is_representable(mtl)) {
+    return;
   }
 
   char * text = nullptr;
@@ -104,6 +127,15 @@ void check_round_trip(const GMDL_Mtl * mtl) {
     REQUIRE(same_float(a->Ns, b->Ns), "Ns");
     REQUIRE(same_float(a->d, b->d), "d");
     REQUIRE(a->illum == b->illum, "illum");
+    // Including whether one was stated at all: a NULL that comes back as a
+    // path, or the reverse, is exactly what a dumper keying on the wrong
+    // thing would produce.
+    REQUIRE(same_path(a->map_Ka, b->map_Ka), "map_Ka");
+    REQUIRE(same_path(a->map_Kd, b->map_Kd), "map_Kd");
+    REQUIRE(same_path(a->map_Ks, b->map_Ks), "map_Ks");
+    REQUIRE(same_path(a->map_Ns, b->map_Ns), "map_Ns");
+    REQUIRE(same_path(a->map_d, b->map_d), "map_d");
+    REQUIRE(same_path(a->map_bump, b->map_bump), "map_bump");
   }
 
   gmdl_mtl_free(again);
