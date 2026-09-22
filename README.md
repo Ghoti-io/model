@@ -113,11 +113,12 @@ of its own - a face line cut in half becomes a second, shorter face.
 
 ## Status
 
-190 tests, clean under Valgrind and under ASan+UBSan, 95.2% line coverage.
-Both fuzzers run clean; the last campaign was five minutes each, 3.0M and
-1.4M executions against a corpus of 7696 and 6826 entries, and each run dumps
-every model it parses and reads the dump back rather than only checking that
-parsing does not crash.
+195 tests, clean under Valgrind and under ASan+UBSan, 95.1% line coverage.
+Both fuzzers run clean; the last campaign was three minutes each, 2.0M and
+0.7M executions, and each run dumps every model it parses and reads the dump
+back rather than only checking that parsing does not crash - which is how the
+polyline material defect was found, ninety seconds after the field that
+caused it was added.
 
 Both writers are at 100%, which took handing them a stream that fails on
 demand: every `fprintf` is checked and none of those arms can be reached by
