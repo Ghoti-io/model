@@ -19,6 +19,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <vector>
 #include <iterator>
 
 #include <string>
@@ -1983,30 +1984,46 @@ TEST(ObjStatement, TheySurviveTheRoundTrip) {
 
 namespace {
 
-/** One field of GMDL_Limits, and a document that should exceed it at 2. */
+/**
+ * One field of GMDL_Limits, and every document shape that must exceed it.
+ *
+ * A list rather than a single document, because a field is not one gate: it
+ * is read wherever the parser counts the thing it caps, and each of those is
+ * a separate `if` that can be wrong on its own. `max_face_indices` guards a
+ * face and a polyline; `max_statements` guards `call` and `csh`; `max_faces`
+ * guards three element kinds. One document per field proved each *field*
+ * refused something and said nothing about the other sites - and coverage
+ * showed exactly which arms that left unexecuted.
+ */
 struct LimitCase {
-  size_t offset;         ///< offsetof() of the field.
-  const char * field;    ///< Its name, for the failure message.
-  const char * document; ///< Contains three of whatever it counts.
+  size_t offset;      ///< offsetof() of the field.
+  const char * field; ///< Its name, for the failure message.
+  std::vector<const char *> documents; ///< One per site that reads the field.
 };
 
 const LimitCase kLimitCases[] = {
-    {offsetof(GMDL_Limits, max_line_length), "max_line_length", "v 0 0 0\n"},
+    {offsetof(GMDL_Limits, max_line_length), "max_line_length",
+        {"v 0 0 0\n"}},
     {offsetof(GMDL_Limits, max_vertices), "max_vertices",
-        "v 0 0 0\nv 1 0 0\nv 2 0 0\n"},
+        {"v 0 0 0\nv 1 0 0\nv 2 0 0\n"}},
     {offsetof(GMDL_Limits, max_texcoords), "max_texcoords",
-        "vt 0 0\nvt 1 0\nvt 2 0\n"},
+        {"vt 0 0\nvt 1 0\nvt 2 0\n"}},
     {offsetof(GMDL_Limits, max_normals), "max_normals",
-        "vn 0 0 1\nvn 0 1 0\nvn 1 0 0\n"},
+        {"vn 0 0 1\nvn 0 1 0\nvn 1 0 0\n"}},
+    // Three element kinds, and the one written last is the one that decides.
     {offsetof(GMDL_Limits, max_faces), "max_faces",
-        "v 0 0 0\nf 1 1 1\nf 1 1 1\nf 1 1 1\n"},
+        {"v 0 0 0\nf 1 1 1\nf 1 1 1\nf 1 1 1\n",
+            "v 0 0 0\nv 1 0 0\nl 1 2\nl 1 2\nl 1 2\n",
+            "v 0 0 0\np 1\np 1\np 1\n"}},
+    // Read once for a face and once for a polyline; only the face was driven.
     {offsetof(GMDL_Limits, max_face_indices), "max_face_indices",
-        "v 0 0 0\nf 1 1 1\n"},
-    {offsetof(GMDL_Limits, max_groups), "max_groups", "g a\ng b\ng c\n"},
+        {"v 0 0 0\nf 1 1 1\n", "v 0 0 0\nv 1 0 0\nl 1 2 1 2\n"}},
+    {offsetof(GMDL_Limits, max_groups), "max_groups", {"g a\ng b\ng c\n"}},
     {offsetof(GMDL_Limits, max_materials), "max_materials",
-        "usemtl a\nusemtl b\nusemtl c\n"},
+        {"usemtl a\nusemtl b\nusemtl c\n"}},
+    // Read once for `call` and once for `csh`; only `call` was driven.
     {offsetof(GMDL_Limits, max_statements), "max_statements",
-        "call a\ncall b\ncall c\n"},
+        {"call a\ncall b\ncall c\n", "csh a\ncsh b\ncsh c\n"}},
 };
 
 } // namespace
@@ -2026,17 +2043,21 @@ TEST(ObjLimits, EveryFieldRefusesSomething) {
       << "GMDL_Limits has a field this table does not cover";
 
   for (const LimitCase & c : kLimitCases) {
-    GMDL_Limits limits;
-    memset(&limits, 0, sizeof(limits)); // 0 == unlimited, for every field.
-    *reinterpret_cast<size_t *>(reinterpret_cast<char *>(&limits) + c.offset) =
-        2;
+    ASSERT_FALSE(c.documents.empty()) << c.field << " has no document";
+    for (const char * document : c.documents) {
+      GMDL_Limits limits;
+      memset(&limits, 0, sizeof(limits)); // 0 == unlimited, for every field.
+      *reinterpret_cast<size_t *>(
+          reinterpret_cast<char *>(&limits) + c.offset) = 2;
 
-    MemStream stream(c.document);
-    GMDL_Obj * obj = nullptr;
-    EXPECT_EQ(gmdl_obj_load(stream.get(), &limits, nullptr, &obj),
-        GMDL_ERR_LIMIT)
-        << c.field << " did not refuse";
-    gmdl_obj_free(obj);
+      MemStream stream(document);
+      GMDL_Obj * obj = nullptr;
+      EXPECT_EQ(gmdl_obj_load(stream.get(), &limits, nullptr, &obj),
+          GMDL_ERR_LIMIT)
+          << c.field << " did not refuse:\n"
+          << document;
+      gmdl_obj_free(obj);
+    }
   }
 }
 
@@ -2252,6 +2273,41 @@ TEST(ObjLimits, AnOverlongElementDoesNotAllocateBeforeItIsRefused) {
       << "refusing a 10,000-index face peaked at " << few
       << " bytes and a 100,000-index one at " << many
       << ", against a cap of 8 that did not move";
+}
+
+// Four arms that no test reached, found by reading the uncovered lines
+// rather than by suspecting anything. Each is ordinary input: blanks after
+// the last token of an `l` or a `p`, blanks after a recorded statement, and
+// a `p` naming something that is not a number.
+TEST(ObjParse, TrailingBlanksAfterTheLastIndexAreNotAnIndex) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+      "l 1 2   \n"
+      "p 1 2   \t\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->line_count, 1u);
+  EXPECT_EQ(obj->lines[0].count, 2u) << "a blank run became a third vertex";
+  EXPECT_EQ(obj->point_count, 2u) << "a blank run became a third point";
+  gmdl_obj_free(obj);
+}
+
+// `p` takes bare integers and nothing else, so a word is a format error -
+// the arm that says so had never run.
+TEST(ObjParse, APointNamingSomethingThatIsNotANumberIsRefused) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\np one\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\np 1 two\n"), GMDL_ERR_FORMAT);
+}
+
+// A recorded statement's text has its trailing blanks removed, which the
+// header promises and nothing checked. It matters because the text is handed
+// to a caller as a filename or a command.
+TEST(ObjParse, ARecordedStatementLosesItsTrailingBlanks) {
+  GMDL_Obj * obj = load_text("call parts.obj   \t\ncsh -date  \n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->statement_count, 2u);
+  EXPECT_STREQ(obj->statements[0].text, "parts.obj");
+  EXPECT_STREQ(obj->statements[1].text, "-date");
+  gmdl_obj_free(obj);
 }
 
 TEST(ObjLimits, StatementsUnderTheCapAreKept) {

@@ -809,6 +809,15 @@ catches the next one is a test that walks `GMDL_Limits` field by field and
 requires each to refuse something, which fails if a field is added without
 enforcement.
 
+**A field is not one gate, and that table only covered fields.** A limit is
+read wherever the parser counts the thing it caps, and each of those is a
+separate branch that can be wrong on its own: `max_face_indices` guards a
+face and a polyline, `max_statements` guards `call` and `csh`, `max_faces`
+guards three element kinds. One document per field proved each *field*
+refused something and said nothing about the other sites - measured by
+deleting the polyline and `csh` checks outright, which the suite did not
+notice. The table lists one document per site now.
+
 ---
 
 ## 6. Results
