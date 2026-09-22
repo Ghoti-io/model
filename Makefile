@@ -711,6 +711,11 @@ endif
 # does not extend to float-divide-by-zero, which IEEE defines.
 UBSAN_CHECKS := undefined,float-cast-overflow
 ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) -fno-sanitize-recover=$(UBSAN_CHECKS) -fno-omit-frame-pointer -g
+# The instrumented-coverage tree, kept apart from the release objects for the
+# same reason the sanitizer ones are: a plain `make` must never be able to
+# find an object built with flags it did not ask for.
+COV_BUILD_DIR := ./build/$(BUILD)-cov
+
 ASAN_BUILD_DIR := ./build/$(BUILD)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
 ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
@@ -944,37 +949,54 @@ cloc: ## Count the lines of code used in the project
 	cloc src include tests Makefile
 
 coverage: ## Build instrumented, run the tests, and report line coverage
-# Cleans first because the object files would otherwise be reused without the
-# instrumentation, then cleans and rebuilds at the end: leaving the
-# instrumented objects behind would have a later `make` silently link them,
-# and leaving the tree cleaned would break any sibling project that links this
-# one. The cost is one extra build; coverage is not run often.
-	@$(MAKE) --no-print-directory clean > /dev/null
-# The instrumented build, the report and the restoration of the tree are one
-# shell command so that the cleanup runs whatever fails. Letting a failure
-# stop the recipe leaves the --coverage objects in build/, and the next
-# ordinary `make` links them into a library that needs the gcov runtime; every
-# later build then fails with undefined references to __gcov_init until
-# somebody works out why.
+# The instrumented build has a tree of its own, the way the sanitizer builds
+# do, and that is the whole of the safety here. It used to share the ordinary
+# object tree and clean before and after, which works right up until somebody
+# runs the instrumented build by hand instead of through this target.
 #
+# What happens then is worth spelling out, because the obvious check says the
+# tree is fine. The --coverage objects stay behind carrying undefined
+# __gcov_* references, but the .so built alongside them was linked WITH
+# --coverage, so it resolves them and `nm -D --undefined-only` reports it
+# clean. Nothing looks wrong. The contamination is latent in the objects: a
+# later plain `make` finds them newer than their sources, does not rebuild
+# them, and the first time it has any reason to RELINK it produces a .so with
+# three undefined gcov symbols. bootstrap.sh installs that, and every
+# downstream library fails to link.
+#
+# That happened. It broke the shared prefix for the whole workspace and was
+# found by a sibling project failing to link, not by anything here - measured
+# afterwards: instrumented object 3 gcov refs, the .so beside it 0, the same
+# .so after a relink 3.
+#
+# So this is no longer a rule to remember. The release tree is not touched at
+# all, there is nothing to clean up afterwards, and the hand-rolled shortcut
+# that caused it - wanting the .gcov files, which this target used to destroy
+# on its way out - no longer needs taking.
+#
+# The .gcda counters are removed first rather than the objects: gcov merges
+# profiles across runs, so a stale one from a previous source revision reports
+# against lines that have moved. The objects themselves are make's business.
+	@rm -rf $(COV_BUILD_DIR)/objects/*.gcda \
+		$(COV_BUILD_DIR)/objects/*/*.gcda 2> /dev/null || true
 # TEST_GATES is cleared because --coverage links the gcov runtime, which
 # exports mangle_path. check-symbols is right to reject that in a shipping
 # build and wrong to reject it here, and it made this target fail before it
 # ever produced a report.
 	@status=0; \
 	$(MAKE) --no-print-directory test TEST_GATES= \
+		BUILD_DIR=$(COV_BUILD_DIR) \
 		EXTRA_CFLAGS="--coverage -O0" \
 		EXTRA_LDFLAGS="--coverage" > /dev/null || status=$$?; \
 	if [ $$status -eq 0 ]; then \
-		tools/coverage.sh $(OBJ_DIR) || status=$$?; \
+		tools/coverage.sh $(COV_BUILD_DIR)/objects || status=$$?; \
 	else \
 		printf "coverage: the instrumented test run failed; no report\n" >&2; \
 	fi; \
-	$(MAKE) --no-print-directory clean > /dev/null; \
-	$(MAKE) --no-print-directory all > /dev/null; \
 	exit $$status
 
 clean: ## Remove all contents of the build directories.
+	-@rm -rvf $(COV_BUILD_DIR)
 	-@rm -rvf $(OBJ_DIR)/*
 	-@rm -rvf $(APP_DIR)/*
 	-@rm -rvf $(GEN_DIR)/*
