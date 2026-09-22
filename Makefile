@@ -590,6 +590,14 @@ endif
 
 test: ## Make and run the unit tests
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
+# `|| exit 1` is what makes this a gate at all. Without it the loop ran every
+# binary and discarded every exit status, so `make test` returned 0 whatever
+# happened - a failing assertion, a segfault, a sanitizer abort. The failure
+# was visible only as "[  FAILED  ]" text in the log, which meant anything
+# scoring this target had to read the log, and a crash prints no such line at
+# all. Measured before the fix: a deliberate EXPECT_EQ(1, 2) gave exit 0, and
+# so did a null dereference. test-asan already had this; test and
+# test-valgrind did not.
 	@for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf "\033[0;30;43m\n"; \
@@ -597,7 +605,7 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
 		printf "### Running %s tests ###\n" "$$test_name"; \
 		printf "############################"; \
 		printf "\033[0m\n\n"; \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1; \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1 || exit 1; \
 	done
 
 test-quiet: ## Run tests with minimal output (one line per test suite)
@@ -638,6 +646,9 @@ test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 
 test-valgrind: ## Run all tests under valgrind (Linux only)
 test-valgrind: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
+# VALGRIND_FLAGS carries --error-exitcode=1, so valgrind reports a leak or an
+# invalid access in its status - and the loop used to discard it, along with
+# the test binary's own. See the note on `test`.
 ifeq ($(OS_NAME), Linux)
 	@for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
@@ -646,7 +657,7 @@ ifeq ($(OS_NAME), Linux)
 		printf "### Running %s tests under Valgrind ###\n" "$$test_name"; \
 		printf "############################"; \
 		printf "\033[0m\n\n"; \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" valgrind $(VALGRIND_FLAGS) $$test_exe --gtest_brief=1; \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" valgrind $(VALGRIND_FLAGS) $$test_exe --gtest_brief=1 || exit 1; \
 	done
 else
 	@printf "\033[0;31m\nValgrind is only available on Linux\n\033[0m\n"
