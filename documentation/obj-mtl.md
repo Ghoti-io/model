@@ -370,11 +370,22 @@ it in `dropped_faces`; that is the pattern.
 
 ## 9. Dump
 
-`gmdl_obj_dump()` and `gmdl_mtl_dump()` write a model back out as text, for
-debugging and for tests. The guarantee is **structural round-trip**: parsing
-the dump yields a model with the same counts, the same indices, the same
-names, the same group ranges and the same material assignments. Floats are
-written with `%.9g`, which round-trips every float exactly.
+`gmdl_obj_dump()` and `gmdl_mtl_dump()` write a model back out as text. The
+guarantee is **structural round-trip**: parsing the dump yields a model with
+the same counts, the same indices, the same names, the same group ranges and
+the same material assignments. Floats are written with `%.9g`, which
+round-trips every float exactly.
+
+**The OBJ output is read correctly by other tools.** Blender 4.3 and VTK 9.3
+were both given this library's dumps of the checked-in models and of
+synthetic cases, and both produced geometry identical to what they read from
+the sources - the `%.9g` exponent forms, `1.00000001e-07` and
+`-3.40282347e+38` among them. That is a measured result rather than an
+intention; `notes/model/obj-differential.md` in the workspace has the method.
+
+**The MTL output is not**, for a material that omits `d`. See 11.1. Until
+that is fixed, treat `gmdl_mtl_dump()` as a debugging and testing aid rather
+than as something to hand to another program.
 
 The dump writes `usemtl` when the material changes between consecutive faces,
 `g` for each group before its faces, and relative indices as absolute ones.
@@ -444,13 +455,21 @@ holds on all of it.
 
 ## 11. Implementation status
 
-Nothing known. Every defect this section used to list is fixed and pinned by
-a test; the shortfalls that remain are absences rather than misbehaviour, and
-section 12 is where they are written down.
+1. **`gmdl_mtl_dump()` writes `d 0` for a material that never mentioned
+   `d`, which every other reader takes to mean invisible.** 4.2 leaves an
+   absent property at zero, and the dumper writes every property
+   unconditionally, so the two compose into an assertion the source file
+   never made. Given a material with no `d` line, Blender 4.3 reads the
+   source as alpha 1 and our dump of it as alpha 0; VTK 9.3 reads opacity 1
+   and then 0. This is not a corner: `tests/data/models/violin_case/vp.mtl`
+   has 72 materials and no `d` line at all, so a dump of it is 72 invisible
+   materials. The fix is a decision, not a patch - see 12.
 
-Whether a fourth face field should keep being ignored is one of those, and
-it now sits in 12 rather than here: section 3.5 states the behaviour, so it
-is a decision to revisit and not an undocumented surprise.
+The shortfalls that remain besides that one are absences rather than
+misbehaviour, and section 12 is where they are written down. Whether a
+fourth face field should keep being ignored is one of those, and it sits in
+12 rather than here: section 3.5 states the behaviour, so it is a decision
+to revisit and not an undocumented surprise.
 
 ---
 
@@ -468,6 +487,16 @@ is a decision to revisit and not an undocumented surprise.
   points matter for CAD-style models.
 - **Texture maps in MTL.** `map_Kd` at minimum. Needs a path field and a
   decision on the `-o`, `-s`, `-clamp` options.
+- **What an absent `d` should be.** 4.2 leaves it at zero, with every other
+  property, and 11.1 is what that costs on the way out. Three ways to fix
+  it, in increasing order of faithfulness and cost: have the dumper omit `d`
+  when it is zero (no API change, but a material whose dissolve really is
+  zero then reads as opaque elsewhere); default an absent `d` to 1, which is
+  what every other reader does and what the field means, at the price of
+  changing a documented default and what `GMDL_Mtl_Material.d` holds; or
+  record whether the property was present, which is exact and is a new field
+  in the public struct. The same question hangs over `Ns` and `illum`,
+  though nothing invisible comes of getting those wrong.
 - **`Tr` as `1 - d`.** Some exporters write only `Tr`. Map it when `d` is
   absent?
 - **Extra face fields.** Reject `1/2/3/4`, or keep ignoring it?
