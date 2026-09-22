@@ -77,7 +77,8 @@ bool same_map(const GMDL_Mtl_Map * a, const GMDL_Mtl_Map * b) {
     return false;
   }
   if (a->blendu != b->blendu || a->blendv != b->blendv || a->clamp != b->clamp
-      || a->texres != b->texres || a->imfchan != b->imfchan) {
+      || a->texres != b->texres || a->imfchan != b->imfchan
+      || a->type != b->type) {
     return false;
   }
   if (memcmp(&a->boost, &b->boost, sizeof(a->boost)) != 0

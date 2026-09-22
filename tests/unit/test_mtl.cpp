@@ -1303,10 +1303,64 @@ TEST(MtlRefl, OptionsAreReadAndTypeMayComeAnywhere) {
   gmdl_mtl_free(mtl);
 }
 
-TEST(MtlMap, TypeBelongsToReflAlone) {
+// `-type` used to refuse the file anywhere but on `refl`, which was the one
+// option left behind when the rest stopped being refused. It was also the
+// inconsistent one: `-bm` on a colour map is exactly as meaningless and has
+// always been read. Blender keeps the texture from such a line; this keeps
+// the texture and the option.
+TEST(MtlMap, TypeIsRecordedOnAnyMapAndActedOnOnlyByRefl) {
+  GMDL_Mtl * mtl = load_text("newmtl m\nmap_Kd -type sphere t.png\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  const GMDL_Mtl_Map * map = &mtl->materials[0].map_Kd;
+  ASSERT_NE(map->path, nullptr);
+  EXPECT_STREQ(map->path, "t.png");
+  EXPECT_TRUE(map->present & GMDL_MTL_MAP_HAS_TYPE);
+  EXPECT_EQ(map->type, GMDL_MTL_REFL_SPHERE);
+  // No refl slot was disturbed: `-type` chooses a slot for `refl` alone.
+  for (int i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
+    EXPECT_EQ(mtl->materials[0].refl[i].path, nullptr) << "slot " << i;
+  }
+  gmdl_mtl_free(mtl);
+
+  // A map that did not state one says so, rather than reading as untyped
+  // because untyped happens to be zero.
+  GMDL_Mtl * plain = load_text("newmtl m\nmap_Kd t.png\n");
+  ASSERT_NE(plain, nullptr);
+  EXPECT_FALSE(plain->materials[0].map_Kd.present & GMDL_MTL_MAP_HAS_TYPE);
+  gmdl_mtl_free(plain);
+}
+
+// A name that is none of the seven is still a format error, on any map: the
+// option is read, not waved through.
+TEST(MtlMap, AnUnknownTypeNameIsStillMalformed) {
   EXPECT_EQ(
-      load_text_expecting_failure("newmtl m\nmap_Kd -type sphere t.png\n"),
-      GMDL_ERR_UNSUPPORTED);
+      load_text_expecting_failure("newmtl m\nmap_Kd -type banana t.png\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nrefl -type banana t.png\n"),
+      GMDL_ERR_FORMAT);
+}
+
+// `-type` on a colour map has to survive the dump, or reading it would only
+// have moved the loss one file along.
+TEST(MtlDump, TypeOnANonReflMapIsWritten) {
+  GMDL_Mtl * first = load_text("newmtl m\nmap_Kd -type cube_left t.png\n");
+  ASSERT_NE(first, nullptr);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_mtl_dump(first, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Mtl * second = nullptr;
+  ASSERT_EQ(gmdl_mtl_load_file(out.path(), nullptr, nullptr, &second), GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->material_count, 1u);
+  EXPECT_EQ(second->materials[0].map_Kd.type, GMDL_MTL_REFL_CUBE_LEFT);
+  EXPECT_TRUE(second->materials[0].map_Kd.present & GMDL_MTL_MAP_HAS_TYPE);
+  gmdl_mtl_free(second);
+  gmdl_mtl_free(first);
 }
 
 TEST(MtlRefl, ATypedLineWithNoPathIsMalformed) {

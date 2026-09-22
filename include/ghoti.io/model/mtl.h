@@ -120,7 +120,8 @@ typedef enum GMDL_Mtl_Map_Present {
   GMDL_MTL_MAP_HAS_TEXRES = 1u << 7,  ///< `-texres`
   GMDL_MTL_MAP_HAS_CLAMP = 1u << 8,   ///< `-clamp`
   GMDL_MTL_MAP_HAS_BM = 1u << 9,      ///< `-bm`
-  GMDL_MTL_MAP_HAS_IMFCHAN = 1u << 10 ///< `-imfchan`
+  GMDL_MTL_MAP_HAS_IMFCHAN = 1u << 10, ///< `-imfchan`
+  GMDL_MTL_MAP_HAS_TYPE = 1u << 11     ///< `-type`
 } GMDL_Mtl_Map_Present;
 
 /**
@@ -165,6 +166,18 @@ typedef struct GMDL_Mtl_Map {
    */
   float bm;
   GMDL_Mtl_Imfchan imfchan; ///< `-imfchan`. Default luminance.
+  /**
+   * `-type`; the surface a reflection map covers. Default untyped.
+   *
+   * Only `refl` acts on it - it chooses which of ::GMDL_Mtl_Refl_Type's
+   * slots the path lands in (4.6). Anywhere else the option is recorded and
+   * means nothing, exactly as `-bm` on a colour map is recorded and means
+   * nothing. Refusing the file over it instead was the one option this
+   * library still rejected, and both halves of that were wrong: Blender
+   * reads such a line and keeps the texture, and a caller lost the whole
+   * material library over an option that could simply be written down.
+   */
+  GMDL_Mtl_Refl_Type type;
 } GMDL_Mtl_Map;
 
 /**

@@ -72,18 +72,22 @@ static const char * gmdl_mtl_refl_type_name(GMDL_Mtl_Refl_Type type) {
  * @param fd Destination.
  * @param directive The keyword, e.g. "map_Kd".
  * @param map The map. Nothing is written when its path is NULL.
- * @param type_name `-type` for a typed `refl`, else NULL.
  * @return 0, or -1 on a write failure.
  */
-static int mtl_dump_map(FILE * fd, const char * directive,
-    const GMDL_Mtl_Map * map, const char * type_name) {
+static int mtl_dump_map(
+    FILE * fd, const char * directive, const GMDL_Mtl_Map * map) {
   if (!map->path) {
     return 0;
   }
   if (fprintf(fd, "%s", directive) < 0) {
     return -1;
   }
-  if (type_name && fprintf(fd, " -type %s", type_name) < 0) {
+  // `-type` comes from the map's own field rather than from the `refl` slot
+  // it happens to sit in. The two agree for `refl` - the slot *is* the type -
+  // and only the field exists for every other map, so reading the field is
+  // the one rule that covers both.
+  if ((map->present & GMDL_MTL_MAP_HAS_TYPE)
+      && fprintf(fd, " -type %s", gmdl_mtl_refl_type_name(map->type)) < 0) {
     return -1;
   }
   if ((map->present & GMDL_MTL_MAP_HAS_BLENDU)
@@ -239,19 +243,19 @@ static GMDL_Result mtl_dump_pinned(const GMDL_Mtl * mtl, FILE * fd) {
     // "map_bump", the spelling the format's own description leads with -
     // the two are one property here, so the round trip is of the material
     // and not of the keyword that set it.
-    if (mtl_dump_map(fd, "map_Ka", &m->map_Ka, NULL) < 0
-        || mtl_dump_map(fd, "map_Kd", &m->map_Kd, NULL) < 0
-        || mtl_dump_map(fd, "map_Ks", &m->map_Ks, NULL) < 0
-        || mtl_dump_map(fd, "map_Ns", &m->map_Ns, NULL) < 0
-        || mtl_dump_map(fd, "map_d", &m->map_d, NULL) < 0
-        || mtl_dump_map(fd, "map_bump", &m->map_bump, NULL) < 0
-        || mtl_dump_map(fd, "map_Ke", &m->map_Ke, NULL) < 0
-        || mtl_dump_map(fd, "map_Pr", &m->map_Pr, NULL) < 0
-        || mtl_dump_map(fd, "map_Pm", &m->map_Pm, NULL) < 0
-        || mtl_dump_map(fd, "map_Ps", &m->map_Ps, NULL) < 0
-        || mtl_dump_map(fd, "norm", &m->norm, NULL) < 0
-        || mtl_dump_map(fd, "disp", &m->disp, NULL) < 0
-        || mtl_dump_map(fd, "decal", &m->decal, NULL) < 0) {
+    if (mtl_dump_map(fd, "map_Ka", &m->map_Ka) < 0
+        || mtl_dump_map(fd, "map_Kd", &m->map_Kd) < 0
+        || mtl_dump_map(fd, "map_Ks", &m->map_Ks) < 0
+        || mtl_dump_map(fd, "map_Ns", &m->map_Ns) < 0
+        || mtl_dump_map(fd, "map_d", &m->map_d) < 0
+        || mtl_dump_map(fd, "map_bump", &m->map_bump) < 0
+        || mtl_dump_map(fd, "map_Ke", &m->map_Ke) < 0
+        || mtl_dump_map(fd, "map_Pr", &m->map_Pr) < 0
+        || mtl_dump_map(fd, "map_Pm", &m->map_Pm) < 0
+        || mtl_dump_map(fd, "map_Ps", &m->map_Ps) < 0
+        || mtl_dump_map(fd, "norm", &m->norm) < 0
+        || mtl_dump_map(fd, "disp", &m->disp) < 0
+        || mtl_dump_map(fd, "decal", &m->decal) < 0) {
       return GMDL_ERR_IO;
     }
     // A cube map is six lines, so this walks the slots. The untyped slot
@@ -259,10 +263,7 @@ static GMDL_Result mtl_dump_pinned(const GMDL_Mtl * mtl, FILE * fd) {
     // inventing a surface the file never named would be worse than echoing
     // the omission.
     for (size_t j = 0; j < GMDL_MTL_REFL_COUNT; j++) {
-      const char * type_name = j == GMDL_MTL_REFL_UNTYPED
-          ? NULL
-          : gmdl_mtl_refl_type_name((GMDL_Mtl_Refl_Type)j);
-      if (mtl_dump_map(fd, "refl", &m->refl[j], type_name) < 0) {
+      if (mtl_dump_map(fd, "refl", &m->refl[j]) < 0) {
         return GMDL_ERR_IO;
       }
     }

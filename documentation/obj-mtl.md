@@ -620,7 +620,7 @@ pins the rejected spellings too.
 | `-t u [v [w]]` | `t[3]` | 0, 0, 0 |
 | `-texres n` | `texres` | 0 |
 | `-imfchan r\|g\|b\|m\|l\|z` | `imfchan` | `l` |
-| `-type <name>` | the `refl` slot (4.6) | untyped |
+| `-type <name>` | `type`, and the `refl` slot (4.6) | untyped |
 
 Each field holds its default whether or not the file said so, and the map's
 own `present` mask says which were stated - the same division as 4.2, for the
@@ -704,13 +704,22 @@ each NULL until stated. A cube map is six separate lines, which is the reason
 for an array: it is the one property in MTL that a file states across several
 directives.
 
-`-type` is read where `-o` and `-s` are refused (4.5) because it is not the
-same kind of thing. It says which slot the path belongs in; dropping it would
-lose which of seven surfaces the file meant, where dropping a sampling option
-loses only how the image is sampled. **Any other option is still
-`GMDL_ERR_UNSUPPORTED`**, including one that follows a valid `-type`, so this
-is not a general opening of the option syntax. A `-type` naming none of the
-seven is `GMDL_ERR_FORMAT`.
+`-type` is what chooses the slot, which is why it is the one option with a
+consequence beyond being recorded. A `-type` naming none of the seven is
+`GMDL_ERR_FORMAT`, on `refl` and anywhere else.
+
+**Anywhere else it is recorded and does nothing**, in `GMDL_Mtl_Map.type`
+with `GMDL_MTL_MAP_HAS_TYPE` in the mask. It used to refuse the file, which
+was left over from when every option did: `-bm` on a colour map is exactly as
+meaningless and has been read since 4.5 stopped refusing, so the two were
+inconsistent and the inconsistency cost a caller the whole library over an
+option that could simply be written down. Blender keeps the texture from such
+a line; this keeps the texture and the option.
+
+The paragraph this replaced said "any other option is still
+`GMDL_ERR_UNSUPPORTED`", which had been true and stopped being true in the
+same commit that made 4.5's table - a reminder that a section describing a
+neighbouring section's behaviour goes stale without anything failing.
 
 A `refl` with no `-type` at all goes to ::GMDL_MTL_REFL_UNTYPED and is written
 back without one. The format says the option is required; both references
@@ -1067,8 +1076,9 @@ section 12 is where they are written down.
   data - a path each. Recording them means deciding where per-state
   attributes live, which 3.14 explains is the blocker for all nine.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
-  references. Strictness is defensible and this is the one place 4.5 takes it
-  further than either.
+  references. Strictness is defensible and this is now the only place 4.5
+  takes it further than either: `-type` on a colour map was the other, and it
+  was an oversight rather than a position (4.6).
 - **A `v` line with fewer than three numbers.** `GMDL_ERR_FORMAT` here;
   Blender and VTK both read `v 0 1` as `(0, 1, 0)`. The specification requires
   three, so this is the specification against both references - the opposite

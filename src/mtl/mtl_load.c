@@ -368,9 +368,10 @@ static GMDL_Result mtl_parse_map(const char * rest,
       argument = name + argument_length;
     }
     else if (mtl_token_is(token, length, "-type")) {
-      if (!out_type) {
-        return GMDL_ERR_UNSUPPORTED; // "-type" belongs to "refl" alone.
-      }
+      // Recorded on any map; acted on only by "refl", which uses it to pick
+      // a slot. Elsewhere it is as inert as "-bm" on a colour map - and that
+      // one has always been read rather than refused, which is the
+      // inconsistency this removes.
       size_t argument_length = 0;
       const char * name = mtl_next_token(argument, &argument_length);
       GMDL_Mtl_Refl_Type found = GMDL_MTL_REFL_COUNT;
@@ -383,7 +384,11 @@ static GMDL_Result mtl_parse_map(const char * rest,
       if (found == GMDL_MTL_REFL_COUNT) {
         return GMDL_ERR_FORMAT;
       }
-      *out_type = found;
+      parsed.type = found;
+      parsed.present |= GMDL_MTL_MAP_HAS_TYPE;
+      if (out_type) {
+        *out_type = found;
+      }
       argument = name + argument_length;
     }
     else {
