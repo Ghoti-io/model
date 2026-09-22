@@ -474,7 +474,7 @@ library must be copied out.
 | `map_Ke path` | `map_Ke` |
 | `map_Ns path` | `map_Ns` |
 | `map_d path` | `map_d` |
-| `map_bump path`, `bump path` | `map_bump` |
+| `map_bump path`, `bump path`, `map_Bump path` | `map_bump` |
 | `map_Pr path` | `map_Pr` |
 | `map_Pm path` | `map_Pm` |
 | `map_Ps path` | `map_Ps` |
@@ -484,9 +484,18 @@ library must be copied out.
 
 `refl` is a map too, and has a shape of its own; it is 4.6.
 
-`bump` and `map_bump` are two spellings of one property and share a field.
-The dump writes `map_bump`, so the round trip is of the material rather than
-of the keyword that set it.
+`bump`, `map_bump` and `map_Bump` are three spellings of one property and
+share a field; `refl` and `map_refl` (4.6) likewise. The dump writes
+`map_bump` and `refl`, so the round trip is of the material rather than of
+the keyword that set it.
+
+**These are extra spellings, not a relaxation of 2.7's exact matching.**
+Blender 4.3.2 accepts `map_Bump` and `map_refl` while ignoring `kd`, `KD`,
+`map_kd`, `map_BUMP`, `Map_Bump` and `map_Refl` - it carries specific aliases
+rather than folding case. Matching case-insensitively would make this library
+accept input the reference rejects, which is a worse disagreement than the
+one it would fix, so the accepted set is exactly the measured one and a test
+pins the rejected spellings too.
 
 **The path is the whole of the rest of the line**, with trailing blanks
 removed, so `map_Kd my tex.png` names one file called `my tex.png`. The

@@ -1304,6 +1304,49 @@ TEST(MtlVocabulary, TheWholeVocabularySurvivesTheRoundTrip) {
   gmdl_mtl_free(second);
 }
 
+// Blender 4.3.2 accepts "map_Bump" and writes it; we skipped the line and
+// returned GMDL_OK with the map silently absent. The shape worth pinning is
+// that the failure was not an error - it was success with the data gone.
+TEST(MtlMap, EverySpellingOfBumpReachesTheSameField) {
+  for (const char * spelling : {"map_bump", "bump", "map_Bump"}) {
+    GMDL_Mtl * mtl =
+        load_text(std::string("newmtl m\n") + spelling + " tex.png\n");
+    ASSERT_NE(mtl, nullptr) << spelling;
+    ASSERT_EQ(mtl->material_count, 1u) << spelling;
+    EXPECT_STREQ(mtl->materials[0].map_bump, "tex.png") << spelling;
+    gmdl_mtl_free(mtl);
+  }
+}
+
+TEST(MtlMap, MapReflIsTheUntypedReflectionMap) {
+  GMDL_Mtl * mtl = load_text("newmtl m\nmap_refl sky.png\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_STREQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED], "sky.png");
+  gmdl_mtl_free(mtl);
+}
+
+// The two aliases above are specific extra spellings, NOT a case-folding
+// relaxation, and this test is what stops someone "tidying" them into a
+// tolower(). Measured against Blender 4.3.2: it ignores every spelling here
+// while accepting map_Bump and map_refl, so folding case would make this
+// library take input the reference rejects - a worse disagreement than the
+// one it would fix.
+TEST(MtlMap, CaseIsNotFoldedJustBecauseTwoAliasesExist) {
+  for (const char * spelling :
+      {"map_BUMP", "Map_Bump", "map_Refl", "KD", "map_kd", "MAP_KD"}) {
+    GMDL_Mtl * mtl =
+        load_text(std::string("newmtl m\n") + spelling + " tex.png\n");
+    ASSERT_NE(mtl, nullptr) << spelling;
+    ASSERT_EQ(mtl->material_count, 1u) << spelling;
+    EXPECT_EQ(mtl->materials[0].map_bump, nullptr) << spelling;
+    EXPECT_EQ(mtl->materials[0].map_Kd, nullptr) << spelling;
+    EXPECT_EQ(mtl->materials[0].refl[GMDL_MTL_REFL_UNTYPED], nullptr)
+        << spelling;
+    gmdl_mtl_free(mtl);
+  }
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

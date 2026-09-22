@@ -573,10 +573,19 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
         goto cleanup;
       }
     }
-    // "bump" and "map_bump" are two spellings of one property, and exporters
-    // write both. They share a field; the dump writes "map_bump".
+    // "bump", "map_bump" and "map_Bump" are three spellings of one property,
+    // and exporters write all three. They share a field; the dump writes
+    // "map_bump".
+    //
+    // "map_Bump" is not a case-folding concession: matching stays exact (2.7).
+    // Blender 4.3.2 accepts this spelling and "map_refl" below, while ignoring
+    // "kd", "KD", "map_kd", "map_BUMP" and "Map_Bump" - it carries specific
+    // extra spellings rather than folding case, and so do we. Accepting
+    // arbitrary case would take input the reference rejects, which is a worse
+    // disagreement than the one it fixes.
     else if (gmdl_line_is(line_text, "map_bump", &rest)
-        || gmdl_line_is(line_text, "bump", &rest)) {
+        || gmdl_line_is(line_text, "bump", &rest)
+        || gmdl_line_is(line_text, "map_Bump", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_bump);
       if (parsed != GMDL_OK) {
         result = parsed;
@@ -632,7 +641,9 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
         goto cleanup;
       }
     }
-    else if (gmdl_line_is(line_text, "refl", &rest)) {
+    // "map_refl" is the same directive under the spelling Blender accepts.
+    else if (gmdl_line_is(line_text, "refl", &rest)
+        || gmdl_line_is(line_text, "map_refl", &rest)) {
       GMDL_Result parsed = mtl_parse_refl(rest, allocator, material);
       if (parsed != GMDL_OK) {
         result = parsed;
