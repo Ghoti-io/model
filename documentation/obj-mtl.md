@@ -1134,6 +1134,16 @@ no error path, a colour-padding loop changed to give up quietly, an arm
 returning `GMDL_ERR_FORMAT` for an allocation failure, and a recorded
 statement dropped rather than reported.
 
+Coverage says the arm ran; it does not say anything would notice the arm
+misbehaving. The stronger measurement is mutation, and it was made: every
+`GMDL_ERR_OOM` in both loaders - twenty-two of them - was changed in turn to
+`GMDL_ERR_LIMIT`, with a clean control run between each. **Twenty-one were
+killed, every one of them by the sweep and by nothing else.** The
+twenty-second is the zero-capacity call in `obj_load.c` whose arm cannot run
+at all, which is the answer a second instrument should give about a line the
+first one reported uncovered: unreachable code is exactly the code mutation
+cannot kill, and the two agreeing is what turns "explained" into "checked".
+
 **What the sweep structurally cannot find.** It drives one OBJ document and
 one MTL document. That is enough for the arms themselves - the loaders sit at
 99.6% and 100%, so every line is reached - but coverage only settles the
