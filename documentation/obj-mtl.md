@@ -335,14 +335,20 @@ set the others for untrusted input.
 | --- | --- |
 | `GMDL_OK` | parsed; `*out` is set |
 | `GMDL_ERR_INVALID` | `out` or `stream` is `NULL` (`path` for `_file`) |
-| `GMDL_ERR_IO` | `_file` could not open or read the path |
+| `GMDL_ERR_IO` | `_file` could not open or read the path, for any reason including a path too long for the filesystem |
 | `GMDL_ERR_FORMAT` | a line was malformed (sections 3 and 4) |
 | `GMDL_ERR_UNSUPPORTED` | a documented form this library does not implement (4.2) |
 | `GMDL_ERR_LIMIT` | a `GMDL_Limits` cap was exceeded, or a name or path was too long |
-| `GMDL_ERR_OOM` | the allocator returned `NULL` |
+| `GMDL_ERR_OOM` | the allocator returned `NULL`, or the system had no memory to open the file |
 
 On any failure `*out` is `NULL` and nothing is allocated for the caller. The
 file is read to the first error and no further; there is no partial result.
+
+`GMDL_ERR_INVALID` means a caller argument is wrong and nothing else. cutil
+tells a path the filesystem will not accept apart from one it could not read,
+and that distinction is deliberate there; it is dropped here, because this
+enumeration is the narrower one and a path that is too long on one mount and
+fine on another is not the caller misusing the API.
 
 An empty input, or one that is entirely comments and blank lines, is
 `GMDL_OK` with every count zero.

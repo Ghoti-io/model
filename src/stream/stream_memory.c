@@ -78,17 +78,33 @@ GMDL_Result gmdl_stream_create_memory(
  * here. cutil's enumeration grows, so that reasoning was wrong in the way
  * that matters: it turned each addition into "internal library error" for a
  * caller whose file had simply been deleted.
+ *
+ * A default arm only protects the members nobody named. Two of cutil's
+ * errno classifications land on members that ARE named here - a path too
+ * long arrives as GCU_FILE_ERR_INVALID and an out-of-memory open as
+ * GCU_FILE_ERR_OOM, both of which used to be GCU_FILE_ERR_IO - so each was
+ * decided rather than inherited. See the cases.
+ *
+ * This assumes the caller has already rejected its own NULL arguments, which
+ * gmdl_stream_create_file() does. Reusing it anywhere that has not would
+ * turn a genuine argument bug into GMDL_ERR_IO.
  */
 static GMDL_Result gmdl_result_from_file(GCU_File_Result result) {
   switch (result) {
     case GCU_FILE_OK:
       return GMDL_OK;
-    case GCU_FILE_ERR_INVALID:
-      return GMDL_ERR_INVALID;
     case GCU_FILE_ERR_OOM:
       return GMDL_ERR_OOM;
     case GCU_FILE_ERR_LIMIT:
       return GMDL_ERR_LIMIT;
+    case GCU_FILE_ERR_INVALID:
+      // Not the same INVALID. gmdl_stream_create_file() checks its own
+      // arguments before calling, so cutil cannot be telling us we passed a
+      // NULL; what it reports this way is a path the filesystem will not
+      // accept, which in practice means too long. Section 6 says
+      // GMDL_ERR_INVALID is for a caller argument that is wrong, and a path
+      // that is merely too long for one mount is not that - the same path can
+      // be fine elsewhere. It is a file that did not read.
     case GCU_FILE_ERR_IO:
     default:
       return GMDL_ERR_IO;
