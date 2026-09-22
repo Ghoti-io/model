@@ -598,11 +598,24 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     }
     else if (gmdl_line_is(line_text, "g", &rest)
         || gmdl_line_is(line_text, "o", &rest)) {
+      // Which of the two it was, so the dump can write back the spelling the
+      // file used. They behave identically here and do not mean the same
+      // thing to the tools that write them.
+      bool is_object = line_text[0] == 'o';
       // "g" with no name means the default group, per the specification; a
       // name too long for the field is refused rather than cut, because the
       // first 127 bytes of a name name something else (3.9).
+      //
+      // The whole line is the name, as it is for `mtllib` and `usemtl`
+      // (3.7, 3.8). The specification does describe `g a b` as two group
+      // names, and neither reference implements that: Blender reads the line
+      // as one group called "alpha beta". Taking the first token is wrong
+      // under *both* readings - it renames the group under the reference's
+      // and discards a name under the specification's - while the whole-line
+      // reading keeps every byte the file wrote, so a model that one day
+      // supports several names per line can still split it (12).
       char name[GMDL_OBJ_MAX_NAME_LENGTH];
-      GMDL_Result named = gmdl_first_token(rest, name, sizeof(name));
+      GMDL_Result named = gmdl_rest_of_line(rest, name, sizeof(name));
       if (named == GMDL_ERR_FORMAT) {
         memcpy(name, "default", sizeof("default"));
       }
@@ -625,6 +638,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       memcpy(group->name, name, strlen(name) + 1);
       group->start_face = gcu_array_count(&builder.faces);
       group->face_count = 0;
+      group->is_object = is_object;
       current_group = (long)gcu_array_count(&builder.groups) - 1;
     }
     else if (gmdl_line_is(line_text, "l", &rest)) {

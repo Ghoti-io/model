@@ -250,6 +250,8 @@ void check_round_trip(const GMDL_Obj * obj) {
     REQUIRE(obj->groups[g].start_face == again->groups[g].start_face
             && obj->groups[g].face_count == again->groups[g].face_count,
         "group span");
+    REQUIRE(obj->groups[g].is_object == again->groups[g].is_object,
+        "group spelling");
   }
   for (size_t i = 0; i < obj->face_count; i++) {
     REQUIRE(strcmp(material_name(obj, obj->faces[i].material_index),

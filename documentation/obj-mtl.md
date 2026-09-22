@@ -265,11 +265,20 @@ bound on a face's vertex count other than `max_face_indices`.
 ### 3.6 `g [name]` and `o [name]`
 
 Both begin a group: a named run of faces extending to the next `g` or `o` or
-to the end of the file. `o` is treated identically to `g`; the distinction
-the documentation draws (object versus group) is not preserved (12).
+to the end of the file. They behave identically here, and
+`GMDL_Obj_Group.is_object` records which of the two the file said, so the
+dump writes the spelling back. They are not interchangeable to the tools that
+write them - Blender makes an *object* of an `o` and a *vertex group* of a
+`g` - and a reader that flattened them could not put the distinction back.
 
-Only the first name is kept. The documentation permits `g a b c` to put the
-following faces in three groups at once; this library records `a` (12).
+**The whole line is the name**, spaces included, as for `mtllib` and `usemtl`
+(3.7, 3.8). The documentation permits `g a b c` to put the following faces in
+three groups at once, and neither reference implements that: Blender reads
+the line as one group called `a b c`. Taking only the first token was wrong
+under both readings - it renames the group under the reference's and discards
+two names under the documentation's - and the whole-line reading is the one
+that keeps every byte, so a model that one day supports several names per
+line can still recover them by splitting (12).
 
 A bare `g` names the group `default`, as the documentation specifies.
 
@@ -333,7 +342,7 @@ A longer one is `GMDL_ERR_LIMIT`.
 | `lines` | `start`, `count`, `material_index` | one entry per `l` statement |
 | `line_vertices` | vertex and texcoord index | every polyline's references, in file order |
 | `points` | vertex and `material_index` | one entry per index any `p` named |
-| `groups` | name, `start_face`, `face_count` | in file order; ranges are contiguous and do not overlap |
+| `groups` | name, `start_face`, `face_count`, `is_object` | in file order; ranges are contiguous and do not overlap; `is_object` is the `o`/`g` spelling (3.6) |
 | `material_mappings` | name, `index` | `index` equals position |
 | `statements` | kind and text | `call` and `csh`, recorded and never run (3.13) |
 
@@ -1064,11 +1073,12 @@ section 12 is where they are written down.
   silently loses one. Fixing it needs `GMDL_Obj.mtllib` to become a list,
   which is a breaking change to a published field with a consumer in the
   workspace (`libs/cjelly`), so it is a decision rather than an oversight.
-- **Multiple group names per `g` line.** The documentation allows `g a b`;
-  supporting it means a face can be in several groups, which the contiguous
-  range model cannot express.
-- **`o` versus `g`.** Currently identical. A flag on `GMDL_Obj_Group` would
-  preserve the distinction at no cost.
+- **Multiple group names per `g` line.** The documentation allows `g a b`.
+  Measured since: neither reference implements it - Blender reads the line as
+  one group named `a b` - so the conflict with the contiguous range model is
+  not one anybody is having in practice. 3.6 now keeps the whole line, which
+  loses nothing either way and leaves this decidable later; what remains is
+  whether to act on it.
 - **Free-form geometry.** `curv`, `surf` and the rest of the sub-language in
   3.14. A second data model rather than more fields, so it is a decision
   about what this library is for.

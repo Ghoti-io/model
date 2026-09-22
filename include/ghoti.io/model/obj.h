@@ -185,6 +185,17 @@ typedef struct {
   char name[GMDL_OBJ_MAX_NAME_LENGTH]; ///< Group or object name.
   size_t start_face; ///< Index of the first face in the group.
   size_t face_count; ///< Number of faces in the group.
+  /**
+   * True when the file said `o`, false when it said `g`.
+   *
+   * The two behave identically here - each starts a contiguous run of faces -
+   * but they do not mean the same thing to the tools that write them, and a
+   * reader that flattens them cannot put the distinction back. Blender is
+   * explicit about it: `o` names the *object* the faces become, `g` names a
+   * vertex group inside one. Recorded rather than acted on, so the dump can
+   * write back the spelling the file used.
+   */
+  bool is_object;
 } GMDL_Obj_Group;
 
 /**

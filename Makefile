@@ -170,7 +170,17 @@ PKG_CONFIG_LOOKUP_PATH := $(if $(PKG_CONFIG_PATH_ENV),$(PKG_CONFIG_PATH_ENV):)$(
 CXX := g++
 CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g $(EXTRA_CXXFLAGS)
 CC := cc
-CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 -O0 -g $(EXTRA_CFLAGS)
+# -Wfloat-conversion is not in -Wall or -Wextra and catches what the
+# sanitizer cannot: an *implicit* float-to-integer conversion, typically a
+# double handed to an integer parameter, where no cast appears in the source
+# at all and a grep for "(int32_t)" finds nothing. Ghoti.io Tang had exactly
+# that - a float literal passed into a pool keyed by an unsigned integer, so
+# 1.5 and 1.0 shared a key. The two instruments do not overlap: an explicit
+# cast silences this warning and is caught at runtime by float-cast-overflow
+# instead, and an implicit conversion of an in-range value is a wrong answer
+# that no sanitizer reports. This library is clean under it today, so the
+# flag costs nothing and fails the build the moment that stops being true.
+CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -Wno-error=unused-function -Wfatal-errors -std=c17 -O0 -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GMDL_BUILD enables DLL export on Windows (checked by GMDL_API macro)
 # GMDL_TEST_BUILD enables export of internal functions for testing (checked by GMDL_INTERNAL_API macro)

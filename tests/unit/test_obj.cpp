@@ -657,19 +657,88 @@ TEST(ObjParse, AMaterialNameKeepsItsSpaces) {
   gmdl_obj_free(obj);
 }
 
-// `g` is the exception, and deliberately: `g a b` is documented as putting an
-// element in two groups at once (12), so reading the line as one name would
-// decide that open question by accident and in the direction that cannot be
-// undone. Pinned so the inconsistency is a decision rather than an oversight.
-TEST(ObjParse, AGroupStillStopsAtTheFirstBlank) {
+// `g` was left stopping at the first blank on the strength of the
+// specification describing `g a b` as two group names. Measured afterwards:
+// neither reference implements that - Blender reads the line as one group
+// called "alpha beta" - and taking the first token is wrong under *both*
+// readings, renaming the group under one and discarding a name under the
+// other. The whole-line reading keeps every byte, so it is the one that does
+// not foreclose the open question.
+TEST(ObjParse, AGroupNameKeepsItsSpaces) {
   GMDL_Obj * obj = load_text(
-      "g two words\n"
+      "g alpha beta\n"
       "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
       "f 1 2 3\n");
   ASSERT_NE(obj, nullptr);
   ASSERT_EQ(obj->group_count, 1u);
-  EXPECT_STREQ(obj->groups[0].name, "two");
+  EXPECT_STREQ(obj->groups[0].name, "alpha beta");
   gmdl_obj_free(obj);
+}
+
+// `o` and `g` behave identically here and do not mean the same thing to the
+// tools that write them: Blender makes an object of one and a vertex group
+// of the other. Flattening them lost that, and nothing could put it back.
+TEST(ObjParse, ObjectAndGroupAreToldApart) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 2 0 0\n"
+      "o thing\nf 1 2 3\n"
+      "g part\nf 1 2 4\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->group_count, 2u);
+  EXPECT_TRUE(obj->groups[0].is_object);
+  EXPECT_STREQ(obj->groups[0].name, "thing");
+  EXPECT_FALSE(obj->groups[1].is_object);
+  EXPECT_STREQ(obj->groups[1].name, "part");
+  gmdl_obj_free(obj);
+}
+
+// A `g` with no name is the default group, and it is a group rather than an
+// object - the flag has to come from the directive, not from whatever the
+// name turned out to be.
+TEST(ObjParse, ABareDirectiveKeepsItsOwnSpelling) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+      "o\nf 1 2 3\n"
+      "g\nf 1 2 3\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->group_count, 2u);
+  EXPECT_STREQ(obj->groups[0].name, "default");
+  EXPECT_TRUE(obj->groups[0].is_object);
+  EXPECT_STREQ(obj->groups[1].name, "default");
+  EXPECT_FALSE(obj->groups[1].is_object);
+  gmdl_obj_free(obj);
+}
+
+// Reading the distinction is only half of it: writing `g` for an `o` would
+// move the loss one file along.
+TEST(ObjDump, ObjectsAreWrittenAsObjects) {
+  GMDL_Obj * first = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 2 0 0\n"
+      "o two words\nf 1 2 3\n"
+      "g part\nf 1 2 4\n");
+  ASSERT_NE(first, nullptr);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(first, sink), GMDL_OK);
+  fclose(sink);
+
+  std::ifstream in(out.path());
+  std::string text((std::istreambuf_iterator<char>(in)),
+      std::istreambuf_iterator<char>());
+  EXPECT_NE(text.find("o two words\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("g part\n"), std::string::npos) << text;
+
+  GMDL_Obj * second = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &second), GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->group_count, 2u);
+  EXPECT_TRUE(second->groups[0].is_object);
+  EXPECT_STREQ(second->groups[0].name, "two words");
+  EXPECT_FALSE(second->groups[1].is_object);
+  gmdl_obj_free(second);
+  gmdl_obj_free(first);
 }
 
 // `sscanf("%d")` is undefined behaviour when the value does not fit, and

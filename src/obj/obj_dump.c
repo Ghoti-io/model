@@ -343,7 +343,11 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
       return GMDL_ERR_IO;
     }
     for (size_t g = 0; g < obj->group_count; g++) {
-      if (fprintf(fd, "g %s\n", obj->groups[g].name) < 0) {
+      // The spelling the file used, so `o` does not become `g` on the way
+      // out: Blender makes an object of one and a vertex group of the other.
+      if (fprintf(fd, "%s %s\n", obj->groups[g].is_object ? "o" : "g",
+              obj->groups[g].name)
+          < 0) {
         return GMDL_ERR_IO;
       }
       if (obj_dump_face_range(fd, obj, obj->groups[g].start_face,
