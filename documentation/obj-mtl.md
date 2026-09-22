@@ -1134,6 +1134,18 @@ no error path, a colour-padding loop changed to give up quietly, an arm
 returning `GMDL_ERR_FORMAT` for an allocation failure, and a recorded
 statement dropped rather than reported.
 
+**What the sweep structurally cannot find.** It drives one OBJ document and
+one MTL document. That is enough for the arms themselves - the loaders sit at
+99.6% and 100%, so every line is reached - but coverage only settles the
+*fatal* half. A refusal that is survived is judged by comparing the dump
+against an unrefused parse of the same document, so a refusal that loses
+nothing here could lose something on a document shape these two do not
+contain, and the line would have executed either way. The claim the sweep
+supports is therefore "every arm runs, and survived refusals are lossless for
+one document shape", which is weaker than it reads. Driving a refusal from
+the fuzzers' options byte would put the injection on the corpus's input axis
+and close it; section 12 carries that.
+
 **What the fuzzers structurally cannot find.** They drive the caps that
 exist, so a quantity with no field in `GMDL_Limits` is invisible to them -
 `call` and `csh` allocated without bound for as long as `max_statements` was
@@ -1204,3 +1216,12 @@ section 12 is where they are written down.
   to know is to survey files they produce rather than to reason about what
   they ought to write. Until then the accepted set is "what was measured",
   which is a smaller claim than "what exists".
+
+**Allocation failure is swept on one document shape.** `test_allocator.cpp`
+refuses every allocation each loader makes, three refusal widths apiece, but
+against a single OBJ document and a single MTL one. Every arm is reached; what
+is not established is that a *survived* refusal is lossless for document
+shapes other than those two, since the comparison is against an unrefused
+parse of the same input. The fix is to drive the refusal from the fuzz
+harnesses' options byte, so the injection rides the corpus rather than one
+hand-written file. Not done.
