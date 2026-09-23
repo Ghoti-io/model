@@ -198,6 +198,61 @@ for source, name, count in capacities:
             "never grows during a parse and its failure arm goes unreached"
             % (source, name, count, grow))
 
+#
+# The flag stamps against the recipes they guard
+#
+# Each build tree keeps a .flags file holding the flag string it was built
+# with, and the object rules depend on it, so a flag change - including one
+# that arrives on the command line and touches no file - moves an mtime and
+# forces a rebuild.  That only works if the stamp records the variables the
+# recipes actually expand.  It did not: the release stamp recorded $(CFLAGS)
+# while the library objects compile with $(LIB_CFLAGS), so changing a flag
+# that lives only in LIB_CFLAGS rebuilt nothing at all.  A rebuild that does
+# not happen is invisible - it looks exactly like a build already current -
+# which is why this is checked here rather than left to a comment.
+
+makefile = read("Makefile")
+
+stamp_recipes = {}
+for name, body in re.findall(
+        r"^\$\((\w*FLAGS_STAMP)\): force-flags\n((?:\t.*\n)+)",
+        makefile, re.M):
+    printf = re.search(r"printf '%s\\n' '([^']*)'", body)
+    if not printf:
+        fail("the %s recipe does not printf a flag string; this gate is "
+             "measuring nothing" % name)
+    stamp_recipes[name] = set(re.findall(r"\$\((\w+)\)", printf.group(1)))
+if not stamp_recipes:
+    fail("found no flag stamps at all; the pattern must have rotted")
+
+guarded = re.findall(
+    r"^\$\(\w*OBJ_DIR\)/[^\n:]*:[^\n]*\$\((\w*FLAGS_STAMP)\)[^\n]*\n"
+    r"((?:\t.*\n)+)",
+    makefile, re.M)
+if not guarded:
+    fail("found no object rules guarded by a flag stamp; the pattern must "
+         "have rotted")
+
+rules = re.findall(r"^\$\(\w*OBJ_DIR\)/[^\n:]*\.o:", makefile, re.M)
+if len(guarded) != len(rules):
+    problems.append(
+        "%d object pattern rules but only %d name a flag stamp. Partial "
+        "coverage is worse than none: the rules that do rebuild make it look "
+        "as though a flag change rebuilt everything"
+        % (len(rules), len(guarded)))
+
+# $(@D), $@ and $< are make's own automatic variables, not flags.
+AUTOMATIC = {"@D", "@", "<", "CURDIR", "MAKE"}
+for stamp, body in guarded:
+    used = set(re.findall(r"\$\((\w+)\)", body)) - AUTOMATIC
+    missing = sorted(used - stamp_recipes.get(stamp, set()))
+    if missing:
+        problems.append(
+            "a rule guarded by %s expands %s, which %s does not record, so "
+            "changing %s rebuilds nothing"
+            % (stamp, ", ".join("$(%s)" % m for m in missing), stamp,
+               "them" if len(missing) > 1 else "it"))
+
 if problems:
     for problem in problems:
         print("check-lists: %s" % problem, file=sys.stderr)
@@ -205,6 +260,9 @@ if problems:
 
 print("check-lists: %d maps in %d lists, %d arrays in %d lists, all present"
       % (len(scalar), len(lists), len(arrays_obj), len(obj_lists)))
+print("check-lists: %d flag stamps guarding %d object rules, each recording "
+      "every variable its recipes expand"
+      % (len(stamp_recipes), len(guarded)))
 print("check-lists: %d builder capacities, largest %d, all under the sweep's "
       "kGrow of %d; %d deliberately empty"
       % (len(capacities), max(c for _, _, c in capacities), grow, len(empty)))

@@ -1146,19 +1146,34 @@ help: ## Display this help
 # definition has an empty target: not an error, just a rule that silently does
 # not exist. And the first target in a makefile is the default goal, so a stamp
 # rule above `all:` makes a bare `make` build the stamp and nothing else.
+# Each stamp must record the variables its own recipes expand, not the ones
+# they are derived from. The release stamp recorded $(CFLAGS) while the
+# library objects compile with $(LIB_CFLAGS); changing a flag that lives only
+# in LIB_CFLAGS -- -fvisibility=hidden, -DGMDL_BUILD -- moved no recorded
+# string and rebuilt nothing. Measured before the fix: 0 compiles, where
+# naming Makefile as a prerequisite had rebuilt all 10. That is strictly
+# worse than having no stamp, because a rebuild that does not happen looks
+# exactly like a build that was already current.
+#
+# The compiler belongs in the string too. `make CC=clang` is a command-line
+# override that changes every object and no file's mtime, which is precisely
+# the case these stamps exist for.
+#
+# The check is mechanical, and check-lists.py runs it: for each rule guarded
+# by a stamp, every $(VAR) its recipe expands must appear in that stamp.
 .PHONY: force-flags
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(TEST_DATA)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(ASAN_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(ASAN_CFLAGS) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(INCLUDE)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(ASAN_CFLAGS) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(INCLUDE) $(TEST_DATA)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(FUZZ_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(FUZZ_SAN) $(FUZZ_LIB_FLAGS) $(FUZZ_BIN_FLAGS) $(INCLUDE)' > $@.new
+	@printf '%s\n' '$(FUZZ_CC) $(FUZZ_CXX) $(FUZZ_SAN) $(FUZZ_LIB_FLAGS) $(FUZZ_BIN_FLAGS) $(INCLUDE)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
