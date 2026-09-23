@@ -223,7 +223,10 @@ stamp_recipes = {}
 for name, body in re.findall(
         r"^\$\((\w*FLAGS_STAMP)\): force-flags\n((?:\t.*\n)+)",
         makefile, re.M):
-    printf = re.search(r"printf '%s\\n' '([^']*)'", body)
+    # Tolerate whitespace between the format and the string: joining a
+    # backslash continuation leaves the recipe's indentation behind, so a
+    # stamp whose printf is wrapped would otherwise read as having none.
+    printf = re.search(r"printf '%s\\n'\s*'([^']*)'", body)
     if not printf:
         fail("the %s recipe does not printf a flag string; this gate is "
              "measuring nothing" % name)
