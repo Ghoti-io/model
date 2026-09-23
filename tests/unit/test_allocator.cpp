@@ -450,6 +450,9 @@ std::string dump_to_string(Model * model, Dump dump) {
 // of kSweepModes: one request, one append, exhausted.
 const size_t kObjFloors[3] = {160, 160, 500};
 const size_t kMtlFloors[3] = {10, 10, 18};
+// Measured; the file path is short, so these are small numbers.
+const size_t kObjFileFloors[3] = {14, 14, 14};
+const size_t kMtlFileFloors[3] = {5, 5, 5};
 
 // Every allocation the OBJ loader makes can fail, and before this sweep
 // existed not one of those arms had ever run - the same gap FailingSink
@@ -478,6 +481,73 @@ TEST(Allocator, EveryMtlAllocationFailureIsReported) {
         MemStream stream(rich_mtl());
         GMDL_Mtl * mtl = nullptr;
         GMDL_Result result = gmdl_mtl_load(stream.get(), nullptr, a.get(), &mtl);
+        a.stop_failing();
+        *out = mtl ? dump_to_string(mtl, gmdl_mtl_dump) : std::string();
+        gmdl_mtl_free(mtl);
+        return result;
+      });
+}
+
+// The stream is the other half of the library that allocates, and until now
+// nothing drove its failure at all: every test above hands the loaders a
+// stream built with the default allocator, so a refusal never reached it.
+//
+// gmdl_stream_create_memory_with_allocator() makes exactly one allocation.
+// Stating it directly, rather than only reaching it through the file sweep
+// below, because this is the arm every other entry point is built on.
+TEST(Allocator, StreamCreationReportsAllocationFailure) {
+  gmdltest::FailingAllocator allocator(0);
+  GMDL_Stream * stream = nullptr;
+  EXPECT_EQ(gmdl_stream_create_memory_with_allocator(
+                "v 0 0 0\n", 8, allocator.get(), &stream),
+      GMDL_ERR_OOM);
+  EXPECT_TRUE(allocator.failed()) << "the refusal was never reached";
+  EXPECT_EQ(stream, nullptr) << "a failed creation handed back a stream";
+  EXPECT_EQ(allocator.live(), 0u);
+}
+
+// A small document on purpose. The loaders' own arms are swept above against
+// one built to make every array grow; what these two add is the path *before*
+// the loader - cutil reading the file, and the stream being wrapped around
+// what it read - so re-sweeping 542 loader allocations through a file open
+// each time would buy nothing but minutes.
+//
+// The arm this exists for is the one in gmdl_stream_create_file() that frees
+// the file's contents when the stream cannot be created. Nothing else reaches
+// it: it needs the read to succeed and the very next allocation to fail, and
+// a missing free there would leak the whole file rather than report wrongly.
+const char * const kSmallObj = "v 1 2 3\nv 4 5 6 0.5 0.25 0.125\n"
+                               "vt 0.5\nvn 0 1 0\no an object\n"
+                               "usemtl a material\nf 1 2 1\ncall thing.obj\n";
+
+const char * const kSmallMtl = "newmtl a material\nKd 0.4 0.5 0.6\n"
+                               "map_Kd -bm 2 some texture.png\n";
+
+TEST(Allocator, EveryObjFileAllocationFailureIsReported) {
+  gmdltest::TempFile file(kSmallObj);
+  ASSERT_TRUE(file.valid()) << "could not write the fixture";
+  sweep_allocation_failures(
+      "obj file", kObjFileFloors,
+      [&file](gmdltest::FailingAllocator & a, std::string * out) {
+        GMDL_Obj * obj = nullptr;
+        GMDL_Result result =
+            gmdl_obj_load_file(file.path(), nullptr, a.get(), &obj);
+        a.stop_failing();
+        *out = obj ? dump_to_string(obj, gmdl_obj_dump) : std::string();
+        gmdl_obj_free(obj);
+        return result;
+      });
+}
+
+TEST(Allocator, EveryMtlFileAllocationFailureIsReported) {
+  gmdltest::TempFile file(kSmallMtl);
+  ASSERT_TRUE(file.valid()) << "could not write the fixture";
+  sweep_allocation_failures(
+      "mtl file", kMtlFileFloors,
+      [&file](gmdltest::FailingAllocator & a, std::string * out) {
+        GMDL_Mtl * mtl = nullptr;
+        GMDL_Result result =
+            gmdl_mtl_load_file(file.path(), nullptr, a.get(), &mtl);
         a.stop_failing();
         *out = mtl ? dump_to_string(mtl, gmdl_mtl_dump) : std::string();
         gmdl_mtl_free(mtl);

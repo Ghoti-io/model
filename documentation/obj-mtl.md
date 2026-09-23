@@ -1144,6 +1144,18 @@ at all, which is the answer a second instrument should give about a line the
 first one reported uncovered: unreachable code is exactly the code mutation
 cannot kill, and the two agreeing is what turns "explained" into "checked".
 
+**The stream allocates too, and nothing drove its failure.** Every sweep
+above hands the loaders a stream built with the default allocator, so a
+refusal never reached the one `calloc` in
+`gmdl_stream_create_memory_with_allocator()`. The file entry points are swept
+separately for that reason - against a small document, since the loaders' own
+arms are covered above and re-sweeping them through a file open buys nothing.
+The arm worth having is in `gmdl_stream_create_file()`: it frees the file's
+contents when the stream cannot be wrapped around them, which needs the read
+to succeed and the very next allocation to fail, and where a missing free
+would leak the whole file rather than report wrongly. Seen to fail by removing
+that free.
+
 **The corpus drives it too.** Both fuzz harnesses now take the top two bits
 of their options byte as a refusal width - none, one request, one append, all
 of them - and two further bytes as which allocation to refuse. Each input is

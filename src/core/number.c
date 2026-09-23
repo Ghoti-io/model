@@ -74,12 +74,17 @@ GMDL_INTERNAL_API void gmdl_numeric_scope_begin(GMDL_Numeric_Scope * scope) {
     // before this file existed.
     //
     // This return and the one in _end() are the two uncovered lines in this
-    // file (86.7% of 15). Reaching them needs newlocale() to fail, which on
-    // this platform means allocation failure while building a locale that is
-    // compiled into libc - there is no input to this library that produces
-    // it. They are left untested deliberately rather than overlooked: a hook
-    // to force the failure would add production surface to make two
-    // unreachable lines green, which is a worse trade than saying so here.
+    // file. There used to be a percentage here too; it drifted the moment the
+    // file grew, so it is gone - a count of what is uncovered survives an
+    // edit, a percentage of a line total does not.
+    //
+    // Reaching them needs newlocale() to fail, which on this platform means
+    // allocation failure while building a locale compiled into libc. No input
+    // to this library produces it, and the allocation-failure sweep cannot
+    // either: newlocale() takes its memory from libc, not from the allocator
+    // the caller handed us. They are left untested deliberately rather than
+    // overlooked - a hook to force the failure would add production surface
+    // to make two unreachable lines green, which is a worse trade.
     return;
   }
   scope->previous = (void *)uselocale(c_locale);
