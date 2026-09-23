@@ -166,6 +166,11 @@ bool names_are_representable(const GMDL_Obj * obj) {
       return false;
     }
   }
+  for (size_t i = 0; i < obj->freeform_attr_count; i++) {
+    if (ends_with_backslash(obj->freeform_attrs[i].text)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -402,6 +407,16 @@ void check_round_trip(const GMDL_Obj * obj) {
         "statement kind");
     REQUIRE(strcmp(obj->statements[i].text, again->statements[i].text) == 0,
         "statement text");
+  }
+  REQUIRE(obj->freeform_attr_count == again->freeform_attr_count,
+      "freeform_attr_count");
+  for (size_t i = 0; i < obj->freeform_attr_count; i++) {
+    REQUIRE(obj->freeform_attrs[i].kind == again->freeform_attrs[i].kind,
+        "freeform attribute kind");
+    REQUIRE(strcmp(obj->freeform_attrs[i].text,
+                again->freeform_attrs[i].text)
+            == 0,
+        "freeform attribute text");
   }
 
   if (indices_are_representable(obj)) {

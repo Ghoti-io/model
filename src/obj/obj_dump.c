@@ -472,6 +472,22 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     }
   }
 
+  // The free-form approximation directives, in file order (3.18). With them
+  // and the statements above, everything this dump writes before the
+  // elements is text it never acted on.
+  for (size_t i = 0; i < obj->freeform_attr_count; i++) {
+    const char * directive = "mg";
+    if (obj->freeform_attrs[i].kind == GMDL_OBJ_FREEFORM_CTECH) {
+      directive = "ctech";
+    }
+    else if (obj->freeform_attrs[i].kind == GMDL_OBJ_FREEFORM_STECH) {
+      directive = "stech";
+    }
+    if (fprintf(fd, "%s %s\n", directive, obj->freeform_attrs[i].text) < 0) {
+      return GMDL_ERR_IO;
+    }
+  }
+
   // Everything naming no material first, while none is in force. See
   // obj_dump_lines_and_points().
   if (obj_dump_lines_and_points(fd, obj, &state, true) < 0) {

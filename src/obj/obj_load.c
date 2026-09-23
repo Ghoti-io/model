@@ -72,6 +72,7 @@ typedef struct {
   GCU_Array statements;
   GCU_Array mtllibs;
   GCU_Array maplibs;
+  GCU_Array freeform_attrs;
   GCU_Array shadow_objs;
   GCU_Array trace_objs;
   const GMDL_Allocator * allocator;
@@ -112,6 +113,8 @@ static bool obj_builder_init(
       && gcu_array_create_in_place(
           &b->maplibs, sizeof(GMDL_Obj_Maplib), 4, allocator)
       && gcu_array_create_in_place(
+          &b->freeform_attrs, sizeof(GMDL_Obj_Freeform_Attr), 4, allocator)
+      && gcu_array_create_in_place(
           &b->shadow_objs, sizeof(GMDL_Obj_Render_Object), 4, allocator)
       && gcu_array_create_in_place(
           &b->trace_objs, sizeof(GMDL_Obj_Render_Object), 4, allocator);
@@ -132,8 +135,14 @@ static void obj_builder_destroy(obj_builder_t * b) {
         (GMDL_Obj_Statement *)gcu_array_at(&b->statements, i);
     gcu_allocator_free(b->allocator, statement->text);
   }
+  for (size_t i = 0; i < gcu_array_count(&b->freeform_attrs); i++) {
+    GMDL_Obj_Freeform_Attr * attr =
+        (GMDL_Obj_Freeform_Attr *)gcu_array_at(&b->freeform_attrs, i);
+    gcu_allocator_free(b->allocator, attr->text);
+  }
   gcu_array_destroy_in_place(&b->mtllibs);
   gcu_array_destroy_in_place(&b->maplibs);
+  gcu_array_destroy_in_place(&b->freeform_attrs);
   gcu_array_destroy_in_place(&b->shadow_objs);
   gcu_array_destroy_in_place(&b->trace_objs);
   gcu_array_destroy_in_place(&b->vertices);
@@ -382,10 +391,45 @@ static int32_t obj_index(long value, size_t declared) {
 }
 
 /**
+ * Copy the text after a directive, exactly as written, trailing blanks
+ * removed.
+ *
+ * Shared by the two kinds of line this parser keeps whole rather than
+ * reading: the `call` and `csh` statements it refuses to execute (3.13) and
+ * the `ctech`, `stech` and `mg` lines it has nothing to attach to yet
+ * (3.18). The trimming and the empty check are the part worth having in one
+ * place; each caller does its own emplace, because the records are different
+ * types with different meanings.
+ *
+ * @param rest The text after the directive, already past leading blanks.
+ * @param allocator The allocator for the copy.
+ * @param out Receives the copy, owned by the caller.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT when there is no text, or
+ *   ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_copy_line_text(
+    const char * rest, const GMDL_Allocator * allocator, char ** out) {
+  size_t length = strlen(rest);
+  while (length > 0 && (rest[length - 1] == ' ' || rest[length - 1] == '\t')) {
+    length--;
+  }
+  if (length == 0) {
+    return GMDL_ERR_FORMAT; // A directive naming nothing.
+  }
+  char * copy = gcu_allocator_malloc(allocator, length + 1);
+  if (!copy) {
+    return GMDL_ERR_OOM;
+  }
+  memcpy(copy, rest, length);
+  copy[length] = '\0';
+  *out = copy;
+  return GMDL_OK;
+}
+
+/**
  * Record a `call` or `csh` statement without acting on it.
  *
- * The text is kept exactly as written, trailing blanks removed. Nothing is
- * split, resolved or executed: see ::GMDL_Obj_Statement for why.
+ * Nothing is split, resolved or executed: see ::GMDL_Obj_Statement for why.
  *
  * @param rest The text after the directive, already past leading blanks.
  * @param kind Which directive it was.
@@ -397,23 +441,44 @@ static int32_t obj_index(long value, size_t declared) {
 static GMDL_Result obj_record_statement(const char * rest,
     GMDL_Obj_Statement_Kind kind, const GMDL_Allocator * allocator,
     GCU_Array * statements) {
-  size_t length = strlen(rest);
-  while (length > 0 && (rest[length - 1] == ' ' || rest[length - 1] == '\t')) {
-    length--;
+  char * copy = NULL;
+  GMDL_Result copied = obj_copy_line_text(rest, allocator, &copy);
+  if (copied != GMDL_OK) {
+    return copied;
   }
-  if (length == 0) {
-    return GMDL_ERR_FORMAT; // "call" or "csh" naming nothing.
-  }
-
-  char * copy = gcu_allocator_malloc(allocator, length + 1);
-  if (!copy) {
-    return GMDL_ERR_OOM;
-  }
-  memcpy(copy, rest, length);
-  copy[length] = '\0';
 
   GMDL_Obj_Statement * stored =
       (GMDL_Obj_Statement *)gcu_array_emplace(statements);
+  if (!stored) {
+    gcu_allocator_free(allocator, copy);
+    return GMDL_ERR_OOM;
+  }
+  stored->kind = kind;
+  stored->text = copy;
+  return GMDL_OK;
+}
+
+/**
+ * Record a `ctech`, `stech` or `mg` line as text (3.18).
+ *
+ * @param rest The text after the directive.
+ * @param kind Which directive it was.
+ * @param allocator The allocator for the copy.
+ * @param attrs The array to append to.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT when there is no text, or
+ *   ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_record_freeform(const char * rest,
+    GMDL_Obj_Freeform_Attr_Kind kind, const GMDL_Allocator * allocator,
+    GCU_Array * attrs) {
+  char * copy = NULL;
+  GMDL_Result copied = obj_copy_line_text(rest, allocator, &copy);
+  if (copied != GMDL_OK) {
+    return copied;
+  }
+
+  GMDL_Obj_Freeform_Attr * stored =
+      (GMDL_Obj_Freeform_Attr *)gcu_array_emplace(attrs);
   if (!stored) {
     gcu_allocator_free(allocator, copy);
     return GMDL_ERR_OOM;
@@ -1201,6 +1266,33 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         goto cleanup;
       }
     }
+    // `ctech`, `stech` and `mg` are state for the free-form sub-language
+    // this library does not read (3.14), so there is nothing here for them
+    // to apply to. The line is kept as text rather than parsed: choosing a
+    // representation before the model it describes exists would attach it to
+    // nothing (3.18).
+    else if (gmdl_line_is(line_text, "ctech", &rest)
+        || gmdl_line_is(line_text, "stech", &rest)
+        || gmdl_line_is(line_text, "mg", &rest)) {
+      GMDL_Obj_Freeform_Attr_Kind kind = GMDL_OBJ_FREEFORM_MG;
+      if (gmdl_line_is(line_text, "ctech", NULL)) {
+        kind = GMDL_OBJ_FREEFORM_CTECH;
+      }
+      else if (gmdl_line_is(line_text, "stech", NULL)) {
+        kind = GMDL_OBJ_FREEFORM_STECH;
+      }
+      if (gmdl_limit_reached(gcu_array_count(&builder.freeform_attrs),
+              limits->max_freeform_attrs)) {
+        result = GMDL_ERR_LIMIT;
+        goto cleanup;
+      }
+      GMDL_Result recorded = obj_record_freeform(
+          rest, kind, allocator, &builder.freeform_attrs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
     // Anything else - comments, unsupported directives - is ignored, which is
     // what the OBJ specification asks readers to do.
   }
@@ -1238,6 +1330,8 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         obj_steal_into(&builder.shadow_objs, &obj->shadow_obj_count);
     obj->trace_objs =
         obj_steal_into(&builder.trace_objs, &obj->trace_obj_count);
+    obj->freeform_attrs =
+        obj_steal_into(&builder.freeform_attrs, &obj->freeform_attr_count);
 
     // The compatibility field is derived from the list rather than
     // maintained alongside it, so the two cannot disagree. They did: a bare
@@ -1330,6 +1424,12 @@ void gmdl_obj_free(GMDL_Obj * obj) {
       gcu_allocator_free(allocator, obj->statements[i].text);
     }
     gcu_allocator_free(allocator, obj->statements);
+  }
+  if (obj->freeform_attrs) {
+    for (size_t i = 0; i < obj->freeform_attr_count; i++) {
+      gcu_allocator_free(allocator, obj->freeform_attrs[i].text);
+    }
+    gcu_allocator_free(allocator, obj->freeform_attrs);
   }
   gcu_allocator_free(allocator, obj);
 }

@@ -341,6 +341,40 @@ typedef struct {
 } GMDL_Obj_Statement;
 
 /**
+ * @brief Which approximation directive a ::GMDL_Obj_Freeform_Attr holds.
+ */
+typedef enum GMDL_Obj_Freeform_Attr_Kind {
+  GMDL_OBJ_FREEFORM_CTECH = 0, ///< `ctech technique resolution...`.
+  GMDL_OBJ_FREEFORM_STECH,     ///< `stech technique resolution...`.
+  GMDL_OBJ_FREEFORM_MG,        ///< `mg group res`, or `mg off`.
+} GMDL_Obj_Freeform_Attr_Kind;
+
+/**
+ * @brief A `ctech`, `stech` or `mg` line, kept as text.
+ *
+ * These three are state for the **free-form** sub-language: `ctech` and
+ * `stech` set how a curve or a surface is approximated, and `mg` sets the
+ * merging group for the free-form surfaces that follow. This library does
+ * not read free-form geometry (3.14), so there is nothing here for them to
+ * apply to - which is why they are text and not parsed fields.
+ *
+ * That is deliberate and it is **provisional**. Parsing them into typed
+ * records now would mean choosing a representation before the model they
+ * describe exists, and attaching it to nothing. Keeping the line loses no
+ * bytes and commits to nothing; when free-form geometry arrives, these get a
+ * typed home beside it.
+ *
+ * `text` is everything after the directive with trailing blanks removed,
+ * exactly as written. Unlike ::GMDL_Obj_Statement this names no file and no
+ * command - there is nothing here a consumer could execute - so the warnings
+ * on that type do not apply.
+ */
+typedef struct {
+  GMDL_Obj_Freeform_Attr_Kind kind; ///< Which directive this was.
+  char * text; ///< The text after it, owned by the ::GMDL_Obj.
+} GMDL_Obj_Freeform_Attr;
+
+/**
  * @brief A parsed OBJ file.
  */
 typedef struct {
@@ -422,6 +456,15 @@ typedef struct {
    */
   GMDL_Obj_Statement * statements;
   size_t statement_count; ///< Number of statements.
+
+  /**
+   * `ctech`, `stech` and `mg` lines, in file order, or NULL.
+   *
+   * Kept as text because the geometry they describe is not read - see
+   * ::GMDL_Obj_Freeform_Attr, which also says why that is provisional.
+   */
+  GMDL_Obj_Freeform_Attr * freeform_attrs;
+  size_t freeform_attr_count; ///< Number of those lines.
 
   /**
    * Every `mtllib` path the document named, in the order it named them.

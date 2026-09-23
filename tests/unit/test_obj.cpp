@@ -1513,7 +1513,8 @@ namespace {
  *  which the dumper writes in a pass of its own - a maplib, a usemap, the
  *  usemap off that turns it back around, a map change at a polyline and at a
  *  point, each render switch in both directions and a lod, a shadow and a
- *  trace object, and a recorded call and
+ *  trace object, one of each approximation directive, and a recorded call
+ *  and
  *  csh. A directive the model
  *  does not carry has its
  *  failure arm go unexecuted, which is how this sweep quietly stops covering
@@ -1522,6 +1523,9 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "maplib maps.map\n"
                           "shadow_obj shade.obj\n"
                           "trace_obj trace.obj\n"
+                          "ctech cparm 0.5\n"
+                          "stech cparma 4 4\n"
+                          "mg 1 0.5\n"
                           "call parts.obj 1\n"
                           "csh -date\n"
                           "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
@@ -2177,23 +2181,113 @@ TEST(ObjLine, AMaterialAlreadyInForceIsNotRepeated) {
 }
 
 TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
-  // 3.14: the free-form sub-language, and the render attributes that are
-  // still unread. A file carrying them still loads. `maplib` and `usemap`
-  // (3.15), the four render switches (3.16) and the two object references
-  // (3.17) used to be here too and are read now, which is why they are not
-  // in this list.
+  // 3.14: what is left unread, which is the free-form sub-language itself.
+  // A file carrying it still loads. `maplib` and `usemap` (3.15), the four
+  // render switches (3.16), the two object references (3.17) and the three
+  // approximation directives (3.18) used to be here too and are read now,
+  // which is why they are not in this list.
   GMDL_Obj * obj = load_text("v 0 0 0\n"
                              "vp 0.5\n"
                              "cstype bezier\n"
                              "deg 3\n"
-                             "ctech cparm 0.5\n"
-                             "stech cparma 4 4\n"
-                             "mg 1 0.5\n"
+                             "curv 0 1 1 2 3\n"
+                             "parm u 0 1\n"
                              "f 1 1 1\n");
   ASSERT_NE(obj, nullptr);
   EXPECT_EQ(obj->vertex_count, 1u);
   EXPECT_EQ(obj->face_count, 1u);
   EXPECT_EQ(obj->statement_count, 0u);
+  gmdl_obj_free(obj);
+}
+
+//
+// `ctech`, `stech` and `mg` (3.18). State for the free-form sub-language,
+// which this library does not read - so the line is kept as text and
+// attached to nothing, and that is provisional rather than final.
+//
+
+TEST(ObjFreeform, AllThreeAreRecordedInFileOrder) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "ctech cparm 0.5\n"
+                             "mg 1 0.5\n"
+                             "stech cparma 4 4\n"
+                             "mg off\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_attr_count, 4u);
+  EXPECT_EQ(obj->freeform_attrs[0].kind, GMDL_OBJ_FREEFORM_CTECH);
+  EXPECT_STREQ(obj->freeform_attrs[0].text, "cparm 0.5");
+  EXPECT_EQ(obj->freeform_attrs[1].kind, GMDL_OBJ_FREEFORM_MG);
+  EXPECT_STREQ(obj->freeform_attrs[1].text, "1 0.5");
+  EXPECT_EQ(obj->freeform_attrs[2].kind, GMDL_OBJ_FREEFORM_STECH);
+  EXPECT_STREQ(obj->freeform_attrs[2].text, "cparma 4 4");
+  EXPECT_EQ(obj->freeform_attrs[3].kind, GMDL_OBJ_FREEFORM_MG);
+  EXPECT_STREQ(obj->freeform_attrs[3].text, "off")
+      << "`mg off` is a spelling the format defines and text keeps it";
+  EXPECT_EQ(obj->face_count, 1u) << "the geometry still parses";
+  gmdl_obj_free(obj);
+}
+
+// Trailing blanks are not part of the line, which is the reading `call` and
+// `csh` use (3.13) - these share the trimming with them.
+TEST(ObjFreeform, TrailingBlanksAreNotPartOfTheText) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nctech curv 0.5 30   \n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_attr_count, 1u);
+  EXPECT_STREQ(obj->freeform_attrs[0].text, "curv 0.5 30");
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeform, ABareDirectiveIsAFormatError) {
+  for (const char * line : {"ctech", "stech", "mg", "mg   "}) {
+    EXPECT_EQ(
+        load_text_expecting_failure(std::string("v 0 0 0\n") + line + "\n"),
+        GMDL_ERR_FORMAT)
+        << line;
+  }
+}
+
+TEST(ObjFreeform, ADocumentWithNoneHoldsNoRecords) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->freeform_attr_count, 0u);
+  EXPECT_EQ(obj->freeform_attrs, nullptr);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjDump, TheApproximationDirectivesSurviveARoundTrip) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "ctech cparm 0.5\n"
+                             "mg 1 0.5\n"
+                             "stech cparma 4 4\n"
+                             "mg off\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->freeform_attr_count, 4u);
+  // Against what the source said, not against what this library parsed. A
+  // loader that recorded every one of the three as `mg` and a dumper that
+  // wrote every one back as `mg` agree with each other perfectly: measured,
+  // the mutation that does exactly that survived the self-comparison this
+  // test used to make, and is caught by naming the kinds here.
+  const GMDL_Obj_Freeform_Attr_Kind expected[4] = {GMDL_OBJ_FREEFORM_CTECH,
+      GMDL_OBJ_FREEFORM_MG, GMDL_OBJ_FREEFORM_STECH, GMDL_OBJ_FREEFORM_MG};
+  const char * texts[4] = {"cparm 0.5", "1 0.5", "cparma 4 4", "off"};
+  for (size_t i = 0; i < 4; i++) {
+    EXPECT_EQ(again->freeform_attrs[i].kind, expected[i]) << i;
+    EXPECT_STREQ(again->freeform_attrs[i].text, texts[i]) << i;
+  }
+  gmdl_obj_free(again);
   gmdl_obj_free(obj);
 }
 
@@ -2660,6 +2754,7 @@ TEST(ObjStatement, NothingIsExecuted) {
 
 TEST(ObjStatement, NamingNothingIsRefused) {
   EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncsh\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncall\n"), GMDL_ERR_FORMAT);
   EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncall   \n"),
       GMDL_ERR_FORMAT);
 }
@@ -2748,6 +2843,10 @@ const LimitCase kLimitCases[] = {
         {"shadow_obj a.obj\nshadow_obj b.obj\nshadow_obj c.obj\n"}},
     {offsetof(GMDL_Limits, max_trace_objs), "max_trace_objs",
         {"trace_obj a.obj\ntrace_obj b.obj\ntrace_obj c.obj\n"}},
+    // Read once for each of the three directives; only `ctech` was driven.
+    {offsetof(GMDL_Limits, max_freeform_attrs), "max_freeform_attrs",
+        {"ctech a\nctech b\nctech c\n", "stech a\nstech b\nstech c\n",
+            "mg 1 1\nmg 2 1\nmg off\n"}},
 };
 
 } // namespace

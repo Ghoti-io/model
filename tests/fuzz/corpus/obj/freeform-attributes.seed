@@ -1,0 +1,6 @@
+ctech cparm 0.5
+stech cparma 4 4
+mg 1 0.5
+mg off
+v 0 0 0
+f 1 1 1

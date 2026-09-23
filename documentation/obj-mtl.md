@@ -476,8 +476,6 @@ where they sit is not something a consumer of it can observe.
 
 ### 3.14 Not read
 
-Two groups of directives, both deliberate.
-
 **The free-form geometry sub-language**: `vp`, `cstype`, `deg`, `bmat`,
 `step`, `curv`, `curv2`, `surf`, `parm`, `trim`, `hole`, `scrv`, `sp`, `end`
 and `con`. These describe curves and surfaces - NURBS and their trimming -
@@ -485,19 +483,17 @@ which is a different kind of geometry from the polygon mesh this library
 holds, not another record to append to it. Supporting them means a second
 data model, not a field.
 
-**Render attributes still unread**: `ctech`, `stech` and `mg`. These three
-are state for the free-form sub-language above rather than for the polygon
-mesh, so there is nothing in this model for them to attach to yet.
-
-The other six were in this group until 2026-09-23 and are read now: the four
-switches in 3.16, and the two object references in 3.17.
+All nine of what this section used to call the render attributes are read as
+of 2026-09-23: the four switches in 3.16, the two object references in 3.17,
+and the three approximation directives in 3.18. What is left here is the
+free-form sub-language itself.
 
 `maplib` and `usemap` were a third group here until 2026-09-23. They are
 read now; 3.15 is what they do and why the argument for leaving them out did
 not survive being written down.
 
 A line whose directive is none of the above and none of 3.1-3.13 or
-3.15-3.17 is skipped, which is how a file carrying an exporter's private
+3.15-3.18 is skipped, which is how a file carrying an exporter's private
 extension still loads.
 
 ### 3.15 `maplib path` and `usemap name`
@@ -641,6 +637,37 @@ path points at.
 
 `GMDL_Limits.max_shadow_objs` and `GMDL_Limits.max_trace_objs` cap the two
 counts.
+
+### 3.18 `ctech`, `stech` and `mg`
+
+The last three of what 3.14 used to call the render attributes, and the only
+ones that are not about the polygon mesh at all. `ctech` and `stech` set how
+a curve or a surface is approximated; `mg` sets the merging group and
+resolution for the free-form surfaces that follow, with `mg off` turning
+adjacency detection off.
+
+All three are state for the **free-form sub-language this library does not
+read** (3.14). There is nothing in this model for them to apply to, so they
+are kept as text: `GMDL_Obj.freeform_attrs` holds them in file order, each
+with the directive it came from and everything after it, trailing blanks
+removed - the reading `call` and `csh` use (3.13), with which they share the
+trimming. A bare one is `GMDL_ERR_FORMAT`.
+
+**Text is a provisional answer and is meant to look like one.** Parsing them
+into typed records now would mean choosing a representation before the model
+they describe exists, and then attaching it to nothing; keeping the line
+loses no bytes and commits to nothing. When free-form geometry arrives these
+get a typed home beside it, and that will be a breaking change to a field
+this documents as provisional rather than a silent loss of data in the
+meantime.
+
+Unlike `call` and `csh` these name no file and no command, so none of the
+warnings section 3.13 carries apply. The dump writes them in file order
+before the elements, with the statements, for the same reason: nothing in
+this model is ordered against the geometry.
+
+`GMDL_Limits.max_freeform_attrs` caps the three together, one budget across
+one array.
 
 ---
 
@@ -925,6 +952,7 @@ assuming a surface would record something the file never said.
 | `max_render_states` | 0 | distinct render-attribute combinations |
 | `max_shadow_objs` | 0 | `shadow_obj` records |
 | `max_trace_objs` | 0 | `trace_obj` records |
+| `max_freeform_attrs` | 0 | `ctech`, `stech` and `mg` records together |
 
 `0` means no limit. When a record would take a count from `limit` to
 `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
@@ -1466,7 +1494,9 @@ section 12 is where they are written down.
   whether to act on it.
 - **Free-form geometry.** `curv`, `surf` and the rest of the sub-language in
   3.14. A second data model rather than more fields, so it is a decision
-  about what this library is for.
+  about what this library is for. Deciding it also settles 3.18, whose three
+  directives are recorded as text only because the geometry they describe is
+  not read.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is now the only place 4.5
   takes it further than either: `-type` on a colour map was the other, and it

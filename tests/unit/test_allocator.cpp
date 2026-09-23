@@ -295,6 +295,10 @@ std::string rich_obj() {
   for (size_t i = 0; i < kGrow; i++) {
     t += (i % 2 ? "call something.obj " : "csh echo hello ") +
         std::to_string(i) + "\n";
+    // The approximation directives allocate a text copy each, the way the
+    // statements above do, and grow their own array.
+    t += "ctech cparm 0." + std::to_string(i) + "\n";
+    t += "mg " + std::to_string(i) + " 0.5\n";
   }
   return t;
 }
