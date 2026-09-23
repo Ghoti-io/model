@@ -234,6 +234,8 @@ std::string rich_obj() {
   for (size_t i = 0; i < 6; i++) {
     t += "mtllib library " + std::to_string(i) + ".mtl\n";
     t += "maplib maps " + std::to_string(i) + ".map\n";
+    t += "shadow_obj shade " + std::to_string(i) + ".obj\n";
+    t += "trace_obj trace " + std::to_string(i) + ".obj\n";
   }
   // Plain vertices first and coloured ones after, so the colour array is
   // padded across a growth as well as appended to - obj_color_append() has an
@@ -263,6 +265,15 @@ std::string rich_obj() {
       // do; `off` among them so the dumper's return-to-nothing is swept too.
       t += (i % 20 ? "usemap a map " + std::to_string(i) : "usemap off");
       t += "\n";
+      // A distinct render combination each time, so the render states grow
+      // the way the mappings do. A toggled switch would reuse two records
+      // for ever and never make the array reallocate. All four directives,
+      // because each appends through its own branch and the arm that
+      // reports THAT append failing is per-branch.
+      t += "lod " + std::to_string(i + 1) + "\n";
+      t += (i % 20 ? "bevel on\n" : "bevel off\n");
+      t += (i % 40 ? "c_interp on\n" : "c_interp off\n");
+      t += (i % 60 ? "d_interp on\n" : "d_interp off\n");
     }
     t += "f 1/1/1 2/2/1 3/1/1 4/1/1 5/1/1\n";
   }
@@ -284,6 +295,10 @@ std::string rich_obj() {
   for (size_t i = 0; i < kGrow; i++) {
     t += (i % 2 ? "call something.obj " : "csh echo hello ") +
         std::to_string(i) + "\n";
+    // The approximation directives allocate a text copy each, the way the
+    // statements above do, and grow their own array.
+    t += "ctech cparm 0." + std::to_string(i) + "\n";
+    t += "mg " + std::to_string(i) + " 0.5\n";
   }
   return t;
 }
@@ -326,6 +341,8 @@ std::string regrow_obj() {
   for (size_t i = 0; i < 6; i++) {
     t += "mtllib library " + std::to_string(i) + ".mtl\n";
     t += "maplib maps " + std::to_string(i) + ".map\n";
+    t += "shadow_obj shade " + std::to_string(i) + ".obj\n";
+    t += "trace_obj trace " + std::to_string(i) + ".obj\n";
   }
   for (size_t i = 0; i < kRegrow; i++) {
     t += "v " + std::to_string(i) + " 0 0\n";
@@ -348,6 +365,10 @@ std::string regrow_obj() {
       t += "usemtl a material " + std::to_string(i) + "\n";
       t += (i % 20 ? "usemap a map " + std::to_string(i) : "usemap off");
       t += "\n";
+      t += "lod " + std::to_string(i + 1) + "\n";
+      t += (i % 20 ? "bevel on\n" : "bevel off\n");
+      t += (i % 40 ? "c_interp on\n" : "c_interp off\n");
+      t += (i % 60 ? "d_interp on\n" : "d_interp off\n");
     }
     t += "f 1/1/1 2/2/1 3/1/1 4/1/1 5/1/1\n";
   }

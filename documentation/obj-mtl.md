@@ -476,8 +476,6 @@ where they sit is not something a consumer of it can observe.
 
 ### 3.14 Not read
 
-Two groups of directives, both deliberate.
-
 **The free-form geometry sub-language**: `vp`, `cstype`, `deg`, `bmat`,
 `step`, `curv`, `curv2`, `surf`, `parm`, `trim`, `hole`, `scrv`, `sp`, `end`
 and `con`. These describe curves and surfaces - NURBS and their trimming -
@@ -485,21 +483,18 @@ which is a different kind of geometry from the polygon mesh this library
 holds, not another record to append to it. Supporting them means a second
 data model, not a field.
 
-**Render attributes**: `bevel`, `c_interp`, `d_interp`, `lod`, `shadow_obj`,
-`trace_obj`, `ctech`, `stech` and `mg`. These are state for a renderer and
-change no geometry. They could be recorded, and the reason not to is that
-there is nowhere honest to put them: they are per-state like `usemtl`, so
-each would become a field on every face, describing something no consumer of
-this library asks about. `shadow_obj` and `trace_obj` are the two carrying
-real data - paths - and section 12 keeps the question open.
+All nine of what this section used to call the render attributes are read as
+of 2026-09-23: the four switches in 3.16, the two object references in 3.17,
+and the three approximation directives in 3.18. What is left here is the
+free-form sub-language itself.
 
 `maplib` and `usemap` were a third group here until 2026-09-23. They are
 read now; 3.15 is what they do and why the argument for leaving them out did
 not survive being written down.
 
-A line whose directive is none of the above and none of 3.1-3.13 or 3.15 is
-skipped, which is how a file carrying an exporter's private extension still
-loads.
+A line whose directive is none of the above and none of 3.1-3.13 or
+3.15-3.18 is skipped, which is how a file carrying an exporter's private
+extension still loads.
 
 ### 3.15 `maplib path` and `usemap name`
 
@@ -551,6 +546,128 @@ lose them.
 `GMDL_Limits.max_maplibs` and `GMDL_Limits.max_maps` cap the two counts, and
 like every other record cap they default to 0, meaning the size of the input
 is the bound.
+
+### 3.16 `bevel`, `c_interp`, `d_interp` and `lod`
+
+Four render attributes. Each is state, like `usemtl`: it applies to every
+element after it - faces, polylines and points alike - until the next one
+changes it. None of them changes any geometry; they describe how a renderer
+should draw it.
+
+| directive | argument | default |
+| --- | --- | --- |
+| `bevel` | `on` or `off` | `off` |
+| `c_interp` | `on` or `off` | `off` |
+| `d_interp` | `on` or `off` | `off` |
+| `lod` | an integer, documented as 0 to 100 | `0` |
+
+A switch whose argument is neither word - including a bare one - is
+`GMDL_ERR_FORMAT`: the format defines two spellings and there is no third
+reading to guess at. Trailing text is ignored, so `bevel on please` is `on`,
+which is the reading `s` and every number in this parser already use. A
+`lod` with no number is `GMDL_ERR_FORMAT` and one too wide for an `int32_t`
+is `GMDL_ERR_LIMIT`, as it is for `s` (5).
+
+**`lod` is kept as written, in the documented range or outside it.** A file
+saying `lod 200` holds 200. This is the call `GMDL_Obj_Color` makes for a
+colour outside `[0, 1]` and the one section 1 argues for generally: what an
+out-of-range value means is a consumer's decision, and a parser that
+corrected it would leave the file unrecoverable.
+
+**The four live in a record elements point at, not in four fields on every
+element.** `GMDL_Obj.render_states` holds one `GMDL_Obj_Render_State` per
+distinct combination the document put in force, in order of first use - the
+way `usemtl` names are assigned - and each element carries a
+`render_index` into it. The all-defaults state takes no record and is named
+by `-1`, so a document mentioning none of the four holds no records and
+every element says `-1`.
+
+That is the answer to 3.14's objection, which was that recording these would
+put a field on every face "describing something no consumer of this library
+asks about". It would have: four fields, on all three element kinds.
+Measured on x86-64 with one index instead: a face stays 80 bytes and a point
+stays 16, because the index lands in padding they already carried, and a
+polyline grows from 24 to 32. There is one polyline per `l` statement
+against one face per `f`. A fifth attribute of this kind widens the record
+and no element.
+
+Every attribute has a spelling for its own default, so the dump can always
+write a return to them - which is not true of `usemtl` (9), and is why these
+need none of the two-pass handling polylines and points need for materials.
+The dump writes **only the attributes that change**, so a document that sets
+`bevel on` once carries one `bevel` line however many elements follow.
+
+**No reference reads any of them.** Measured 2026-09-23: Blender 4.3.2 given
+a file carrying all nine of 3.14's render attributes prints `OBJ element not
+recognized` for every one and loads the geometry without them.
+
+`GMDL_Limits.max_render_states` caps the number of distinct combinations.
+
+### 3.17 `shadow_obj path` and `trace_obj path`
+
+Two paths to other OBJ documents: the object that casts shadows for this one,
+and the object used for reflections when ray tracing. Both are **recorded and
+never opened**, the way `call` is (3.13) - and the same warning applies more
+sharply, because these name a document that would then be parsed. A consumer
+that resolves either must treat the path the way section 8 says to treat a
+texture map path.
+
+Both read the **whole line** as one path, blanks at either end dropped, and a
+bare directive names nothing and contributes no entry - the reading 3.8 makes
+for `mtllib`, for the reason it gives. A path too long for the field is
+`GMDL_ERR_LIMIT` (3.9).
+
+**Both are lists, though the specification says one per file.** `You can use
+only one shadow object per file` is a statement about conforming documents,
+not about what arrives. A scalar would make a document carrying two lose one
+without saying so, which is precisely the defect `GMDL_Obj.mtllib` had (3.8)
+and precisely the reason that field is now derived rather than maintained. A
+conforming document gives `GMDL_Obj.shadow_objs` one entry.
+
+Their position relative to the geometry is not recorded, for the reason 3.13
+gives for `call` and `csh`: nothing else in this model is ordered against the
+geometry, and a directive the specification calls one-per-file has no
+position to preserve anyway. The dump writes them with the other paths, before
+the vertices.
+
+`GMDL_Obj_Render_Object` is one type for both, where `GMDL_Obj_Mtllib` and
+`GMDL_Obj_Maplib` are two: those name libraries of definitions in two
+different formats, and these both name an OBJ file. The type says what the
+path points at.
+
+`GMDL_Limits.max_shadow_objs` and `GMDL_Limits.max_trace_objs` cap the two
+counts.
+
+### 3.18 `ctech`, `stech` and `mg`
+
+The last three of what 3.14 used to call the render attributes, and the only
+ones that are not about the polygon mesh at all. `ctech` and `stech` set how
+a curve or a surface is approximated; `mg` sets the merging group and
+resolution for the free-form surfaces that follow, with `mg off` turning
+adjacency detection off.
+
+All three are state for the **free-form sub-language this library does not
+read** (3.14). There is nothing in this model for them to apply to, so they
+are kept as text: `GMDL_Obj.freeform_attrs` holds them in file order, each
+with the directive it came from and everything after it, trailing blanks
+removed - the reading `call` and `csh` use (3.13), with which they share the
+trimming. A bare one is `GMDL_ERR_FORMAT`.
+
+**Text is a provisional answer and is meant to look like one.** Parsing them
+into typed records now would mean choosing a representation before the model
+they describe exists, and then attaching it to nothing; keeping the line
+loses no bytes and commits to nothing. When free-form geometry arrives these
+get a typed home beside it, and that will be a breaking change to a field
+this documents as provisional rather than a silent loss of data in the
+meantime.
+
+Unlike `call` and `csh` these name no file and no command, so none of the
+warnings section 3.13 carries apply. The dump writes them in file order
+before the elements, with the statements, for the same reason: nothing in
+this model is ordered against the geometry.
+
+`GMDL_Limits.max_freeform_attrs` caps the three together, one budget across
+one array.
 
 ---
 
@@ -832,6 +949,10 @@ assuming a surface would record something the file never said.
 | `max_mtllibs` | 0 | `mtllib` records |
 | `max_maplibs` | 0 | `maplib` records |
 | `max_maps` | 0 | distinct `usemap` names |
+| `max_render_states` | 0 | distinct render-attribute combinations |
+| `max_shadow_objs` | 0 | `shadow_obj` records |
+| `max_trace_objs` | 0 | `trace_obj` records |
+| `max_freeform_attrs` | 0 | `ctech`, `stech` and `mg` records together |
 
 `0` means no limit. When a record would take a count from `limit` to
 `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
@@ -1047,8 +1168,9 @@ it lands on the one a single-texture renderer wants. A test pins the order
 so it stays deliberate.
 
 The dump writes `usemtl` when the material changes, `usemap` when the
-texture map does, `s` when the smoothing group does, `g` for each group
-before its faces, and relative indices as absolute ones.
+texture map does, `s` when the smoothing group does, a render attribute when
+that one attribute changes, `g` for each group before its faces, and
+relative indices as absolute ones.
 
 Polylines and points are written in two passes, before the faces and after,
 split on whether they name a material. OBJ can change the material in force
@@ -1372,10 +1494,9 @@ section 12 is where they are written down.
   whether to act on it.
 - **Free-form geometry.** `curv`, `surf` and the rest of the sub-language in
   3.14. A second data model rather than more fields, so it is a decision
-  about what this library is for.
-- **`shadow_obj` and `trace_obj`.** The two render attributes carrying real
-  data - a path each. Recording them means deciding where per-state
-  attributes live, which 3.14 explains is the blocker for all nine.
+  about what this library is for. Deciding it also settles 3.18, whose three
+  directives are recorded as text only because the geometry they describe is
+  not read.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is now the only place 4.5
   takes it further than either: `-type` on a colour map was the other, and it

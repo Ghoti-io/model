@@ -1,0 +1,15 @@
+bevel on
+c_interp on
+d_interp on
+lod 40
+v 0 0 0
+v 1 0 0
+l 1 2
+p 1
+f 1 1 1
+bevel off
+lod 0
+f 1 1 1
+c_interp off
+d_interp off
+f 1 1 1

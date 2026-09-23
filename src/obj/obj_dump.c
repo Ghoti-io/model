@@ -111,6 +111,15 @@ typedef struct {
   int32_t material;  ///< Material index the file currently names.
   int32_t map;       ///< Texture map index the file currently names.
   int32_t smoothing; ///< Smoothing group currently in force.
+  /**
+   * The render attributes currently in force, as values rather than as an
+   * index.
+   *
+   * The values are what is carried, because each of the four directives sets
+   * one attribute on its own: moving between two states writes only the
+   * lines that differ, and an index cannot say which those are.
+   */
+  GMDL_Obj_Render_State render;
 } obj_dump_state_t;
 
 /**
@@ -198,6 +207,53 @@ static int obj_dump_map_change(
 }
 
 /**
+ * Move the file's render attributes to the state @p wanted names, writing a
+ * line for each attribute that changes.
+ *
+ * Only the attributes that differ are written, which is what makes the dump
+ * say what the model says and no more - the same reason the material is
+ * carried across ranges rather than re-derived. Every attribute has a
+ * spelling for its default (`off`, and `lod 0`), so unlike a material this
+ * can always be written, in either direction.
+ *
+ * An index naming no record is the all-defaults state, which is also what -1
+ * means. No parse produces the first - every index comes from a record the
+ * parser made - but a model built through the struct can hold it, and
+ * reading it as "defaults" is the only answer that round-trips.
+ *
+ * @param fd Destination.
+ * @param obj The model.
+ * @param wanted The render index the element carries.
+ * @param state Carried state, updated.
+ * @return 0, or -1 on a write failure.
+ */
+static int obj_dump_render_change(
+    FILE * fd, const GMDL_Obj * obj, int32_t wanted, obj_dump_state_t * state) {
+  GMDL_Obj_Render_State target = {false, false, false, 0};
+  if (wanted >= 0 && (size_t)wanted < obj->render_state_count) {
+    target = obj->render_states[wanted];
+  }
+  if (target.bevel != state->render.bevel
+      && fprintf(fd, "bevel %s\n", target.bevel ? "on" : "off") < 0) {
+    return -1;
+  }
+  if (target.c_interp != state->render.c_interp
+      && fprintf(fd, "c_interp %s\n", target.c_interp ? "on" : "off") < 0) {
+    return -1;
+  }
+  if (target.d_interp != state->render.d_interp
+      && fprintf(fd, "d_interp %s\n", target.d_interp ? "on" : "off") < 0) {
+    return -1;
+  }
+  if (target.lod != state->render.lod
+      && fprintf(fd, "lod %d\n", target.lod) < 0) {
+    return -1;
+  }
+  state->render = target;
+  return 0;
+}
+
+/**
  * Print a run of faces, emitting "usemtl" and "s" whenever they change.
  *
  * @param fd Destination.
@@ -218,6 +274,9 @@ static int obj_dump_face_range(FILE * fd, const GMDL_Obj * obj, size_t start,
       return -1;
     }
     if (obj_dump_map_change(fd, obj, obj->faces[i].map_index, state) < 0) {
+      return -1;
+    }
+    if (obj_dump_render_change(fd, obj, obj->faces[i].render_index, state) < 0) {
       return -1;
     }
     if (obj->faces[i].smoothing_group != state->smoothing) {
@@ -276,6 +335,9 @@ static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
     if (obj_dump_map_change(fd, obj, obj->lines[i].map_index, state) < 0) {
       return -1;
     }
+    if (obj_dump_render_change(fd, obj, obj->lines[i].render_index, state) < 0) {
+      return -1;
+    }
     if (fprintf(fd, "l") < 0) {
       return -1;
     }
@@ -307,6 +369,9 @@ static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
       return -1;
     }
     if (obj_dump_map_change(fd, obj, obj->points[i].map_index, state) < 0) {
+      return -1;
+    }
+    if (obj_dump_render_change(fd, obj, obj->points[i].render_index, state) < 0) {
       return -1;
     }
     if (fprintf(fd, "p %lld\n", (long long)obj->points[i].vertex + 1) < 0) {
@@ -344,6 +409,20 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     }
   }
 
+  // The shadow and ray-tracing objects (3.17). Written here with the other
+  // paths rather than among the elements: the specification calls them one
+  // per file, so there is no position among the geometry to preserve.
+  for (size_t i = 0; i < obj->shadow_obj_count; i++) {
+    if (fprintf(fd, "shadow_obj %s\n", obj->shadow_objs[i].path) < 0) {
+      return GMDL_ERR_IO;
+    }
+  }
+  for (size_t i = 0; i < obj->trace_obj_count; i++) {
+    if (fprintf(fd, "trace_obj %s\n", obj->trace_objs[i].path) < 0) {
+      return GMDL_ERR_IO;
+    }
+  }
+
   for (size_t i = 0; i < obj->vertex_count; i++) {
     // A vertex whose colour is absent is written without one even in a file
     // that has colours, because that is what the file said and writing white
@@ -375,10 +454,11 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     }
   }
 
-  // The parser starts with no material, no texture map and no smoothing
-  // group in force, so the dump does too; a model whose faces all say zero
-  // writes no "s" at all.
-  obj_dump_state_t state = {-1, -1, 0};
+  // The parser starts with no material, no texture map, no smoothing group
+  // and every render attribute at its default, so the dump does too; a model
+  // whose faces all say zero writes no "s" at all, and one that never
+  // mentions the render attributes writes none of them.
+  obj_dump_state_t state = {-1, -1, 0, {false, false, false, 0}};
 
   // The general statements lead, in file order. Their position relative to
   // the geometry is not recorded - nothing else in this model is ordered
@@ -388,6 +468,22 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     const char * directive =
         obj->statements[i].kind == GMDL_OBJ_STATEMENT_CALL ? "call" : "csh";
     if (fprintf(fd, "%s %s\n", directive, obj->statements[i].text) < 0) {
+      return GMDL_ERR_IO;
+    }
+  }
+
+  // The free-form approximation directives, in file order (3.18). With them
+  // and the statements above, everything this dump writes before the
+  // elements is text it never acted on.
+  for (size_t i = 0; i < obj->freeform_attr_count; i++) {
+    const char * directive = "mg";
+    if (obj->freeform_attrs[i].kind == GMDL_OBJ_FREEFORM_CTECH) {
+      directive = "ctech";
+    }
+    else if (obj->freeform_attrs[i].kind == GMDL_OBJ_FREEFORM_STECH) {
+      directive = "stech";
+    }
+    if (fprintf(fd, "%s %s\n", directive, obj->freeform_attrs[i].text) < 0) {
       return GMDL_ERR_IO;
     }
   }

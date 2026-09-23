@@ -68,9 +68,13 @@ typedef struct {
   GCU_Array groups;
   GCU_Array material_mappings;
   GCU_Array map_mappings;
+  GCU_Array render_states;
   GCU_Array statements;
   GCU_Array mtllibs;
   GCU_Array maplibs;
+  GCU_Array freeform_attrs;
+  GCU_Array shadow_objs;
+  GCU_Array trace_objs;
   const GMDL_Allocator * allocator;
 } obj_builder_t;
 
@@ -102,10 +106,18 @@ static bool obj_builder_init(
           &b->statements, sizeof(GMDL_Obj_Statement), 4, allocator)
       && gcu_array_create_in_place(&b->map_mappings,
           sizeof(GMDL_Obj_Map_Mapping), 4, allocator)
+      && gcu_array_create_in_place(&b->render_states,
+          sizeof(GMDL_Obj_Render_State), 4, allocator)
       && gcu_array_create_in_place(
           &b->mtllibs, sizeof(GMDL_Obj_Mtllib), 4, allocator)
       && gcu_array_create_in_place(
-          &b->maplibs, sizeof(GMDL_Obj_Maplib), 4, allocator);
+          &b->maplibs, sizeof(GMDL_Obj_Maplib), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->freeform_attrs, sizeof(GMDL_Obj_Freeform_Attr), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->shadow_objs, sizeof(GMDL_Obj_Render_Object), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->trace_objs, sizeof(GMDL_Obj_Render_Object), 4, allocator);
 }
 
 /**
@@ -123,8 +135,16 @@ static void obj_builder_destroy(obj_builder_t * b) {
         (GMDL_Obj_Statement *)gcu_array_at(&b->statements, i);
     gcu_allocator_free(b->allocator, statement->text);
   }
+  for (size_t i = 0; i < gcu_array_count(&b->freeform_attrs); i++) {
+    GMDL_Obj_Freeform_Attr * attr =
+        (GMDL_Obj_Freeform_Attr *)gcu_array_at(&b->freeform_attrs, i);
+    gcu_allocator_free(b->allocator, attr->text);
+  }
   gcu_array_destroy_in_place(&b->mtllibs);
   gcu_array_destroy_in_place(&b->maplibs);
+  gcu_array_destroy_in_place(&b->freeform_attrs);
+  gcu_array_destroy_in_place(&b->shadow_objs);
+  gcu_array_destroy_in_place(&b->trace_objs);
   gcu_array_destroy_in_place(&b->vertices);
   gcu_array_destroy_in_place(&b->colors);
   gcu_array_destroy_in_place(&b->texcoords);
@@ -136,6 +156,7 @@ static void obj_builder_destroy(obj_builder_t * b) {
   gcu_array_destroy_in_place(&b->groups);
   gcu_array_destroy_in_place(&b->material_mappings);
   gcu_array_destroy_in_place(&b->map_mappings);
+  gcu_array_destroy_in_place(&b->render_states);
   gcu_array_destroy_in_place(&b->statements);
 }
 
@@ -370,10 +391,45 @@ static int32_t obj_index(long value, size_t declared) {
 }
 
 /**
+ * Copy the text after a directive, exactly as written, trailing blanks
+ * removed.
+ *
+ * Shared by the two kinds of line this parser keeps whole rather than
+ * reading: the `call` and `csh` statements it refuses to execute (3.13) and
+ * the `ctech`, `stech` and `mg` lines it has nothing to attach to yet
+ * (3.18). The trimming and the empty check are the part worth having in one
+ * place; each caller does its own emplace, because the records are different
+ * types with different meanings.
+ *
+ * @param rest The text after the directive, already past leading blanks.
+ * @param allocator The allocator for the copy.
+ * @param out Receives the copy, owned by the caller.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT when there is no text, or
+ *   ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_copy_line_text(
+    const char * rest, const GMDL_Allocator * allocator, char ** out) {
+  size_t length = strlen(rest);
+  while (length > 0 && (rest[length - 1] == ' ' || rest[length - 1] == '\t')) {
+    length--;
+  }
+  if (length == 0) {
+    return GMDL_ERR_FORMAT; // A directive naming nothing.
+  }
+  char * copy = gcu_allocator_malloc(allocator, length + 1);
+  if (!copy) {
+    return GMDL_ERR_OOM;
+  }
+  memcpy(copy, rest, length);
+  copy[length] = '\0';
+  *out = copy;
+  return GMDL_OK;
+}
+
+/**
  * Record a `call` or `csh` statement without acting on it.
  *
- * The text is kept exactly as written, trailing blanks removed. Nothing is
- * split, resolved or executed: see ::GMDL_Obj_Statement for why.
+ * Nothing is split, resolved or executed: see ::GMDL_Obj_Statement for why.
  *
  * @param rest The text after the directive, already past leading blanks.
  * @param kind Which directive it was.
@@ -385,20 +441,11 @@ static int32_t obj_index(long value, size_t declared) {
 static GMDL_Result obj_record_statement(const char * rest,
     GMDL_Obj_Statement_Kind kind, const GMDL_Allocator * allocator,
     GCU_Array * statements) {
-  size_t length = strlen(rest);
-  while (length > 0 && (rest[length - 1] == ' ' || rest[length - 1] == '\t')) {
-    length--;
+  char * copy = NULL;
+  GMDL_Result copied = obj_copy_line_text(rest, allocator, &copy);
+  if (copied != GMDL_OK) {
+    return copied;
   }
-  if (length == 0) {
-    return GMDL_ERR_FORMAT; // "call" or "csh" naming nothing.
-  }
-
-  char * copy = gcu_allocator_malloc(allocator, length + 1);
-  if (!copy) {
-    return GMDL_ERR_OOM;
-  }
-  memcpy(copy, rest, length);
-  copy[length] = '\0';
 
   GMDL_Obj_Statement * stored =
       (GMDL_Obj_Statement *)gcu_array_emplace(statements);
@@ -408,6 +455,163 @@ static GMDL_Result obj_record_statement(const char * rest,
   }
   stored->kind = kind;
   stored->text = copy;
+  return GMDL_OK;
+}
+
+/**
+ * Record a `ctech`, `stech` or `mg` line as text (3.18).
+ *
+ * @param rest The text after the directive.
+ * @param kind Which directive it was.
+ * @param allocator The allocator for the copy.
+ * @param attrs The array to append to.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT when there is no text, or
+ *   ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_record_freeform(const char * rest,
+    GMDL_Obj_Freeform_Attr_Kind kind, const GMDL_Allocator * allocator,
+    GCU_Array * attrs) {
+  char * copy = NULL;
+  GMDL_Result copied = obj_copy_line_text(rest, allocator, &copy);
+  if (copied != GMDL_OK) {
+    return copied;
+  }
+
+  GMDL_Obj_Freeform_Attr * stored =
+      (GMDL_Obj_Freeform_Attr *)gcu_array_emplace(attrs);
+  if (!stored) {
+    gcu_allocator_free(allocator, copy);
+    return GMDL_ERR_OOM;
+  }
+  stored->kind = kind;
+  stored->text = copy;
+  return GMDL_OK;
+}
+
+// Every list of whole-line paths holds elements that are exactly one
+// char[GMDL_OBJ_MAX_PATH_LENGTH] and nothing else, which is what lets
+// obj_record_path() fill one through a plain buffer. Asserted rather than
+// assumed: adding a field to any of them would otherwise make it copy the
+// wrong number of bytes, silently.
+_Static_assert(sizeof(GMDL_Obj_Mtllib) == GMDL_OBJ_MAX_PATH_LENGTH,
+    "GMDL_Obj_Mtllib must be exactly its path");
+_Static_assert(sizeof(GMDL_Obj_Maplib) == GMDL_OBJ_MAX_PATH_LENGTH,
+    "GMDL_Obj_Maplib must be exactly its path");
+_Static_assert(sizeof(GMDL_Obj_Render_Object) == GMDL_OBJ_MAX_PATH_LENGTH,
+    "GMDL_Obj_Render_Object must be exactly its path");
+
+/**
+ * Read a whole-line path and append it to a list of them.
+ *
+ * `mtllib`, `maplib`, `shadow_obj` and `trace_obj` are read identically:
+ * the whole line is the path, blanks at either end dropped, and a bare
+ * directive names nothing and contributes no entry - appending an empty one
+ * would put a file nobody asked for into the list and write it back out on
+ * the dump. One reader rather than four copies, because the four copies had
+ * already drifted once: `maplib` arrived with a line `mtllib` had needed and
+ * no longer did.
+ *
+ * A path too long for the field is GMDL_ERR_LIMIT (3.9), since one cut at
+ * 255 bytes names a different file, or none.
+ *
+ * @param rest The text after the directive.
+ * @param paths The builder's array for that directive.
+ * @param max The cap from GMDL_Limits, or 0.
+ * @return GMDL_OK - including for a bare directive - GMDL_ERR_LIMIT or
+ *   GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_record_path(
+    const char * rest, GCU_Array * paths, size_t max) {
+  char path[GMDL_OBJ_MAX_PATH_LENGTH];
+  GMDL_Result named = gmdl_rest_of_line(rest, path, sizeof(path));
+  if (named == GMDL_ERR_FORMAT) {
+    return GMDL_OK; // A bare directive names nothing.
+  }
+  if (named != GMDL_OK) {
+    return named;
+  }
+  if (gmdl_limit_reached(gcu_array_count(paths), max)) {
+    return GMDL_ERR_LIMIT;
+  }
+  if (!gcu_array_append(paths, path)) {
+    return GMDL_ERR_OOM;
+  }
+  return GMDL_OK;
+}
+
+/**
+ * Read the `on` or `off` a render-attribute switch takes.
+ *
+ * Trailing text is ignored, as it is for `s` and for every number this
+ * parser reads, so `bevel on please` is `on`. Anything that is neither word
+ * is ::GMDL_ERR_FORMAT: the format defines two spellings and there is no
+ * third reading to guess at, and a bare `bevel` names no value at all.
+ */
+static GMDL_Result obj_parse_on_off(const char * rest, bool * out) {
+  if (gmdl_line_is(rest, "on", NULL)) {
+    *out = true;
+    return GMDL_OK;
+  }
+  if (gmdl_line_is(rest, "off", NULL)) {
+    *out = false;
+    return GMDL_OK;
+  }
+  return GMDL_ERR_FORMAT;
+}
+
+/** Whether a render state is the one a file starts in. */
+static bool obj_render_is_default(const GMDL_Obj_Render_State * state) {
+  return !state->bevel && !state->c_interp && !state->d_interp
+      && state->lod == 0;
+}
+
+/**
+ * Whether two render states hold the same attributes.
+ *
+ * Field by field rather than with memcmp(), because three bools and an
+ * int32_t leave padding and memcmp() reads it - two states built the same
+ * way can differ in bytes no field owns.
+ */
+static bool obj_render_same(
+    const GMDL_Obj_Render_State * a, const GMDL_Obj_Render_State * b) {
+  return a->bevel == b->bevel && a->c_interp == b->c_interp
+      && a->d_interp == b->d_interp && a->lod == b->lod;
+}
+
+/**
+ * Find the index elements should carry for @p wanted, appending a record if
+ * the document has not put that combination in force before.
+ *
+ * The all-defaults state is named by -1 and never takes a record, so a
+ * document mentioning none of the four directives - which is very nearly all
+ * of them - carries no render states at all.
+ *
+ * @param states The builder's array.
+ * @param wanted The attributes now in force.
+ * @param max The cap from GMDL_Limits, or 0.
+ * @param out_index Receives the index, or -1.
+ * @return GMDL_OK, GMDL_ERR_LIMIT or GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_render_use(GCU_Array * states,
+    const GMDL_Obj_Render_State * wanted, size_t max, int32_t * out_index) {
+  if (obj_render_is_default(wanted)) {
+    *out_index = -1;
+    return GMDL_OK;
+  }
+  for (size_t i = 0; i < gcu_array_count(states); i++) {
+    if (obj_render_same(
+            (GMDL_Obj_Render_State *)gcu_array_at(states, i), wanted)) {
+      *out_index = (int32_t)i;
+      return GMDL_OK;
+    }
+  }
+  if (gmdl_limit_reached(gcu_array_count(states), max)) {
+    return GMDL_ERR_LIMIT;
+  }
+  if (!gcu_array_append(states, wanted)) {
+    return GMDL_ERR_OOM;
+  }
+  *out_index = (int32_t)gcu_array_count(states) - 1;
   return GMDL_OK;
 }
 
@@ -449,6 +653,11 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
   // Texture map set by the last "usemap"; -1 is "none", which is both the
   // state a file starts in and what "usemap off" returns it to.
   int32_t current_map = -1;
+  // The render attributes in force, and the index elements carry for them.
+  // Both are kept: the values are what the next directive modifies, the
+  // index is what an element records. -1 is the all-defaults state.
+  GMDL_Obj_Render_State current_render = {false, false, false, 0};
+  int32_t current_render_index = -1;
   // Smoothing group set by the last "s"; 0 is the format's own default, so a
   // file with no "s" line leaves every face at 0 and writes none back.
   int32_t current_smoothing = 0;
@@ -558,6 +767,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       face.count = 0;
       face.material_index = current_material;
       face.map_index = current_map;
+      face.render_index = current_render_index;
       face.smoothing_group = current_smoothing;
       face.overflow = NULL;
 
@@ -707,6 +917,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       element.count = 0;
       element.material_index = current_material;
       element.map_index = current_map;
+      element.render_index = current_render_index;
 
       const char * cursor = rest;
       while (*cursor) {
@@ -801,6 +1012,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         stored->vertex = obj_index(v, vertex_count);
         stored->material_index = current_material;
         stored->map_index = current_map;
+        stored->render_index = current_render_index;
         declared++;
       }
 
@@ -823,6 +1035,66 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           goto cleanup;
         }
         current_smoothing = value;
+      }
+    }
+    // The render attributes (3.16). Each is state, like `usemtl`, and each
+    // takes effect for the elements that follow it.
+    else if (gmdl_line_is(line_text, "bevel", &rest)) {
+      GMDL_Result parsed = obj_parse_on_off(rest, &current_render.bevel);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      GMDL_Result used = obj_render_use(&builder.render_states,
+          &current_render, limits->max_render_states, &current_render_index);
+      if (used != GMDL_OK) {
+        result = used;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "c_interp", &rest)) {
+      GMDL_Result parsed = obj_parse_on_off(rest, &current_render.c_interp);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      GMDL_Result used = obj_render_use(&builder.render_states,
+          &current_render, limits->max_render_states, &current_render_index);
+      if (used != GMDL_OK) {
+        result = used;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "d_interp", &rest)) {
+      GMDL_Result parsed = obj_parse_on_off(rest, &current_render.d_interp);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      GMDL_Result used = obj_render_use(&builder.render_states,
+          &current_render, limits->max_render_states, &current_render_index);
+      if (used != GMDL_OK) {
+        result = used;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "lod", &rest)) {
+      // Documented as 0 to 100 and kept as written, in or out of that range,
+      // for the reason section 1 gives: a value this parser corrected would
+      // leave the file unrecoverable. An integer too wide for the field is
+      // GMDL_ERR_LIMIT, as it is for `s`.
+      int32_t value = 0;
+      GMDL_Result parsed = gmdl_parse_int32(rest, &value);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      current_render.lod = value;
+      GMDL_Result used = obj_render_use(&builder.render_states,
+          &current_render, limits->max_render_states, &current_render_index);
+      if (used != GMDL_OK) {
+        result = used;
+        goto cleanup;
       }
     }
     // "call" and "csh" are recorded and never acted on. A parser that ran a
@@ -949,35 +1221,18 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // The whole line is the path, spaces included - Blender exports
       // `mtllib my model.mtl` for a document saved under that name, and
       // taking the first token off it names a file that does not exist.
-      // One too long for the field is GMDL_ERR_LIMIT (3.9), since a path cut
-      // at 255 bytes names a different file, or none.
-      GMDL_Obj_Mtllib entry;
-      GMDL_Result named =
-          gmdl_rest_of_line(rest, entry.path, sizeof(entry.path));
-      if (named == GMDL_OK) {
-        if (gmdl_limit_reached(
-                gcu_array_count(&builder.mtllibs), limits->max_mtllibs)) {
-          result = GMDL_ERR_LIMIT;
-          goto cleanup;
-        }
-        if (!gcu_array_append(&builder.mtllibs, &entry)) {
-          result = GMDL_ERR_OOM;
-          goto cleanup;
-        }
-      }
-      else if (named != GMDL_ERR_FORMAT) {
-        result = named;
+      // A bare `mtllib` does not clear the libraries already named:
+      // measured 2026-09-23, Blender 4.3.2 reads the line as an unrecognized
+      // element and still applies a material from a library an earlier line
+      // named. It used to clear the compatibility field, which broke the
+      // round trip; the steal at the end of this function says what happened
+      // and why the field is derived now.
+      GMDL_Result recorded = obj_record_path(
+          rest, &builder.mtllibs, limits->max_mtllibs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
         goto cleanup;
       }
-      // A bare `mtllib` names no library, so it contributes no entry -
-      // appending an empty one would put a library nobody asked for into the
-      // list and write it back out on the dump. It does not clear the
-      // libraries already named: measured 2026-09-23, Blender 4.3.2 reads
-      // the line as an unrecognized element and still applies a material
-      // from a library an earlier line named. It used to clear the
-      // compatibility field, which broke the round trip; the steal at the
-      // end of this function says what happened and why the field is
-      // derived now.
     }
     else if (gmdl_line_is(line_text, "maplib", &rest)) {
       // Read exactly as `mtllib` is, whole line and all, and kept in a list
@@ -985,24 +1240,56 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // `maplib` line just as it does for `mtllib`; no reference settles
       // which reading is right, because no reference implements the
       // directive (3.15), so this follows the rule the library already has.
-      // A bare `maplib` names no library and contributes no entry, so the
-      // dump does not write back a line the document never had.
-      GMDL_Obj_Maplib entry;
-      GMDL_Result named =
-          gmdl_rest_of_line(rest, entry.path, sizeof(entry.path));
-      if (named == GMDL_OK) {
-        if (gmdl_limit_reached(
-                gcu_array_count(&builder.maplibs), limits->max_maplibs)) {
-          result = GMDL_ERR_LIMIT;
-          goto cleanup;
-        }
-        if (!gcu_array_append(&builder.maplibs, &entry)) {
-          result = GMDL_ERR_OOM;
-          goto cleanup;
-        }
+      GMDL_Result recorded = obj_record_path(
+          rest, &builder.maplibs, limits->max_maplibs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
       }
-      else if (named != GMDL_ERR_FORMAT) {
-        result = named;
+    }
+    else if (gmdl_line_is(line_text, "shadow_obj", &rest)) {
+      // A path to another OBJ document, recorded and never opened (3.17).
+      // The specification says one per file; this is a list because a
+      // document carrying two would otherwise lose one without saying so.
+      GMDL_Result recorded = obj_record_path(
+          rest, &builder.shadow_objs, limits->max_shadow_objs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "trace_obj", &rest)) {
+      GMDL_Result recorded = obj_record_path(
+          rest, &builder.trace_objs, limits->max_trace_objs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
+    // `ctech`, `stech` and `mg` are state for the free-form sub-language
+    // this library does not read (3.14), so there is nothing here for them
+    // to apply to. The line is kept as text rather than parsed: choosing a
+    // representation before the model it describes exists would attach it to
+    // nothing (3.18).
+    else if (gmdl_line_is(line_text, "ctech", &rest)
+        || gmdl_line_is(line_text, "stech", &rest)
+        || gmdl_line_is(line_text, "mg", &rest)) {
+      GMDL_Obj_Freeform_Attr_Kind kind = GMDL_OBJ_FREEFORM_MG;
+      if (gmdl_line_is(line_text, "ctech", NULL)) {
+        kind = GMDL_OBJ_FREEFORM_CTECH;
+      }
+      else if (gmdl_line_is(line_text, "stech", NULL)) {
+        kind = GMDL_OBJ_FREEFORM_STECH;
+      }
+      if (gmdl_limit_reached(gcu_array_count(&builder.freeform_attrs),
+              limits->max_freeform_attrs)) {
+        result = GMDL_ERR_LIMIT;
+        goto cleanup;
+      }
+      GMDL_Result recorded = obj_record_freeform(
+          rest, kind, allocator, &builder.freeform_attrs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
         goto cleanup;
       }
     }
@@ -1035,8 +1322,16 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         obj_steal_into(&builder.statements, &obj->statement_count);
     obj->map_mappings =
         obj_steal_into(&builder.map_mappings, &obj->map_mapping_count);
+    obj->render_states =
+        obj_steal_into(&builder.render_states, &obj->render_state_count);
     obj->mtllibs = obj_steal_into(&builder.mtllibs, &obj->mtllib_count);
     obj->maplibs = obj_steal_into(&builder.maplibs, &obj->maplib_count);
+    obj->shadow_objs =
+        obj_steal_into(&builder.shadow_objs, &obj->shadow_obj_count);
+    obj->trace_objs =
+        obj_steal_into(&builder.trace_objs, &obj->trace_obj_count);
+    obj->freeform_attrs =
+        obj_steal_into(&builder.freeform_attrs, &obj->freeform_attr_count);
 
     // The compatibility field is derived from the list rather than
     // maintained alongside it, so the two cannot disagree. They did: a bare
@@ -1105,6 +1400,8 @@ void gmdl_obj_free(GMDL_Obj * obj) {
 
   gcu_allocator_free(allocator, obj->mtllibs);
   gcu_allocator_free(allocator, obj->maplibs);
+  gcu_allocator_free(allocator, obj->shadow_objs);
+  gcu_allocator_free(allocator, obj->trace_objs);
   gcu_allocator_free(allocator, obj->vertices);
   gcu_allocator_free(allocator, obj->colors);
   gcu_allocator_free(allocator, obj->texcoords);
@@ -1121,11 +1418,18 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   gcu_allocator_free(allocator, obj->groups);
   gcu_allocator_free(allocator, obj->material_mappings);
   gcu_allocator_free(allocator, obj->map_mappings);
+  gcu_allocator_free(allocator, obj->render_states);
   if (obj->statements) {
     for (size_t i = 0; i < obj->statement_count; i++) {
       gcu_allocator_free(allocator, obj->statements[i].text);
     }
     gcu_allocator_free(allocator, obj->statements);
+  }
+  if (obj->freeform_attrs) {
+    for (size_t i = 0; i < obj->freeform_attr_count; i++) {
+      gcu_allocator_free(allocator, obj->freeform_attrs[i].text);
+    }
+    gcu_allocator_free(allocator, obj->freeform_attrs);
   }
   gcu_allocator_free(allocator, obj);
 }

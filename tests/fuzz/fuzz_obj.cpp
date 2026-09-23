@@ -134,6 +134,16 @@ bool names_are_representable(const GMDL_Obj * obj) {
       return false;
     }
   }
+  for (size_t i = 0; i < obj->shadow_obj_count; i++) {
+    if (ends_with_backslash(obj->shadow_objs[i].path)) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < obj->trace_obj_count; i++) {
+    if (ends_with_backslash(obj->trace_objs[i].path)) {
+      return false;
+    }
+  }
   for (size_t i = 0; i < obj->map_mapping_count; i++) {
     if (ends_with_backslash(obj->map_mappings[i].name)) {
       return false;
@@ -153,6 +163,11 @@ bool names_are_representable(const GMDL_Obj * obj) {
   // text, so a trailing backslash continues into whatever follows.
   for (size_t i = 0; i < obj->statement_count; i++) {
     if (ends_with_backslash(obj->statements[i].text)) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < obj->freeform_attr_count; i++) {
+    if (ends_with_backslash(obj->freeform_attrs[i].text)) {
       return false;
     }
   }
@@ -199,6 +214,28 @@ const char * map_name(const GMDL_Obj * obj, int32_t index) {
     }
   }
   return "?unmapped";
+}
+
+/**
+ * The render attributes an element names, by value.
+ *
+ * By value for the reason material_name() compares names: a record no
+ * element uses is never written, so render_state_count is not stable across
+ * a round trip. An index naming no record is the all-defaults state, which
+ * is what -1 means and what the dump writes it back as.
+ */
+GMDL_Obj_Render_State render_state_of(const GMDL_Obj * obj, int32_t index) {
+  if (index >= 0 && (size_t)index < obj->render_state_count) {
+    return obj->render_states[index];
+  }
+  return GMDL_Obj_Render_State{false, false, false, 0};
+}
+
+/** Field by field: three bools and an int32_t leave padding memcmp reads. */
+bool same_render(const GMDL_Obj_Render_State & a,
+    const GMDL_Obj_Render_State & b) {
+  return a.bevel == b.bevel && a.c_interp == b.c_interp
+      && a.d_interp == b.d_interp && a.lod == b.lod;
 }
 
 /**
@@ -269,6 +306,17 @@ void check_round_trip(const GMDL_Obj * obj) {
     REQUIRE(strcmp(obj->maplibs[i].path, again->maplibs[i].path) == 0,
         "maplib path");
   }
+  REQUIRE(obj->shadow_obj_count == again->shadow_obj_count,
+      "shadow_obj_count");
+  for (size_t i = 0; i < obj->shadow_obj_count; i++) {
+    REQUIRE(strcmp(obj->shadow_objs[i].path, again->shadow_objs[i].path) == 0,
+        "shadow_obj path");
+  }
+  REQUIRE(obj->trace_obj_count == again->trace_obj_count, "trace_obj_count");
+  for (size_t i = 0; i < obj->trace_obj_count; i++) {
+    REQUIRE(strcmp(obj->trace_objs[i].path, again->trace_objs[i].path) == 0,
+        "trace_obj path");
+  }
 
   for (size_t i = 0; i < obj->vertex_count; i++) {
     REQUIRE(same_float(obj->vertices[i].x, again->vertices[i].x)
@@ -323,6 +371,9 @@ void check_round_trip(const GMDL_Obj * obj) {
                 map_name(again, again->faces[i].map_index))
             == 0,
         "face map");
+    REQUIRE(same_render(render_state_of(obj, obj->faces[i].render_index),
+                render_state_of(again, again->faces[i].render_index)),
+        "face render attributes");
   }
   for (size_t i = 0; i < obj->line_count; i++) {
     REQUIRE(obj->lines[i].count == again->lines[i].count, "line span");
@@ -334,6 +385,9 @@ void check_round_trip(const GMDL_Obj * obj) {
                 map_name(again, again->lines[i].map_index))
             == 0,
         "line map");
+    REQUIRE(same_render(render_state_of(obj, obj->lines[i].render_index),
+                render_state_of(again, again->lines[i].render_index)),
+        "line render attributes");
   }
   for (size_t i = 0; i < obj->point_count; i++) {
     REQUIRE(strcmp(material_name(obj, obj->points[i].material_index),
@@ -344,12 +398,25 @@ void check_round_trip(const GMDL_Obj * obj) {
                 map_name(again, again->points[i].map_index))
             == 0,
         "point map");
+    REQUIRE(same_render(render_state_of(obj, obj->points[i].render_index),
+                render_state_of(again, again->points[i].render_index)),
+        "point render attributes");
   }
   for (size_t i = 0; i < obj->statement_count; i++) {
     REQUIRE(obj->statements[i].kind == again->statements[i].kind,
         "statement kind");
     REQUIRE(strcmp(obj->statements[i].text, again->statements[i].text) == 0,
         "statement text");
+  }
+  REQUIRE(obj->freeform_attr_count == again->freeform_attr_count,
+      "freeform_attr_count");
+  for (size_t i = 0; i < obj->freeform_attr_count; i++) {
+    REQUIRE(obj->freeform_attrs[i].kind == again->freeform_attrs[i].kind,
+        "freeform attribute kind");
+    REQUIRE(strcmp(obj->freeform_attrs[i].text,
+                again->freeform_attrs[i].text)
+            == 0,
+        "freeform attribute text");
   }
 
   if (indices_are_representable(obj)) {

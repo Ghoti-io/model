@@ -71,6 +71,55 @@ typedef struct {
 } GMDL_Obj_Maplib;
 
 /**
+ * @brief The render attributes in force, as one record elements name.
+ *
+ * `bevel`, `c_interp`, `d_interp` and `lod` are state in the file exactly as
+ * `usemtl` is: each applies to every element after it until the next one
+ * changes it. They describe how a renderer should draw the geometry and
+ * change no geometry.
+ *
+ * They are held as a **record elements point at** rather than as four fields
+ * on every element, which is what section 3.14 objected to when it declined
+ * them. A document that never mentions them holds no records and every
+ * element carries -1; one that toggles `bevel` holds two.
+ *
+ * Measured on x86-64: the index lands in padding ::GMDL_Obj_Face already
+ * carried, so a face stays 80 bytes and a point stays 16. A polyline grows
+ * from 24 to 32, which is the one place this costs anything - and there is
+ * one polyline per `l` statement against one face per `f`. Four fields
+ * instead would have widened all three. Another attribute of this kind goes
+ * in this record without widening any element again.
+ *
+ * Values are recorded as written, not validated. `lod` is documented as 0 to
+ * 100 and a file saying `lod 200` keeps 200, for the reason
+ * ::GMDL_Obj_Color gives for a colour outside `[0, 1]`: deciding what an
+ * out-of-range value means is a consumer's job, and a parser that clamped it
+ * would make the file unrecoverable.
+ */
+typedef struct {
+  bool bevel;    ///< `bevel on`; false is the format's default.
+  bool c_interp; ///< `c_interp on`; false is the format's default.
+  bool d_interp; ///< `d_interp on`; false is the format's default.
+  int32_t lod;   ///< `lod level`, as written; 0 is the format's default.
+} GMDL_Obj_Render_State;
+
+/**
+ * @brief One `shadow_obj` or `trace_obj` path.
+ *
+ * Both name an **OBJ file** - the same kind of thing - which is why they
+ * share a type where ::GMDL_Obj_Mtllib and ::GMDL_Obj_Maplib do not: those
+ * two name libraries of definitions in two different formats. The type says
+ * what the path points at.
+ *
+ * Nothing here opens the file. A consumer that does must treat the path the
+ * way section 8 says to treat a texture map path, and more carefully: this
+ * one names a document that would then be parsed.
+ */
+typedef struct {
+  char path[GMDL_OBJ_MAX_PATH_LENGTH]; ///< The path, whole line, NUL-terminated.
+} GMDL_Obj_Render_Object;
+
+/**
  * @brief A 3D vertex.
  */
 typedef struct {
@@ -160,6 +209,14 @@ typedef struct {
    */
   int32_t map_index;
   /**
+   * Index into the render states, or -1 when every attribute is at its
+   * default.
+   *
+   * -1 is not "unset": it names the state a file starts in, so an element
+   * carrying it is fully described. See ::GMDL_Obj_Render_State.
+   */
+  int32_t render_index;
+  /**
    * Smoothing group in force for this face, or 0 for none.
    *
    * `s` is state, like `usemtl`: it applies to every face after it until the
@@ -196,6 +253,7 @@ typedef struct {
   size_t count; ///< Number of entries.
   int32_t material_index; ///< Index into the material mappings, or -1.
   int32_t map_index;      ///< Index into the map mappings, or -1.
+  int32_t render_index;   ///< Index into the render states, or -1.
 } GMDL_Obj_Line;
 
 /**
@@ -208,6 +266,7 @@ typedef struct {
   int32_t vertex;         ///< Vertex index (0-based).
   int32_t material_index; ///< Index into the material mappings, or -1.
   int32_t map_index;      ///< Index into the map mappings, or -1.
+  int32_t render_index;   ///< Index into the render states, or -1.
 } GMDL_Obj_Point;
 
 /**
@@ -282,6 +341,40 @@ typedef struct {
 } GMDL_Obj_Statement;
 
 /**
+ * @brief Which approximation directive a ::GMDL_Obj_Freeform_Attr holds.
+ */
+typedef enum GMDL_Obj_Freeform_Attr_Kind {
+  GMDL_OBJ_FREEFORM_CTECH = 0, ///< `ctech technique resolution...`.
+  GMDL_OBJ_FREEFORM_STECH,     ///< `stech technique resolution...`.
+  GMDL_OBJ_FREEFORM_MG,        ///< `mg group res`, or `mg off`.
+} GMDL_Obj_Freeform_Attr_Kind;
+
+/**
+ * @brief A `ctech`, `stech` or `mg` line, kept as text.
+ *
+ * These three are state for the **free-form** sub-language: `ctech` and
+ * `stech` set how a curve or a surface is approximated, and `mg` sets the
+ * merging group for the free-form surfaces that follow. This library does
+ * not read free-form geometry (3.14), so there is nothing here for them to
+ * apply to - which is why they are text and not parsed fields.
+ *
+ * That is deliberate and it is **provisional**. Parsing them into typed
+ * records now would mean choosing a representation before the model they
+ * describe exists, and attaching it to nothing. Keeping the line loses no
+ * bytes and commits to nothing; when free-form geometry arrives, these get a
+ * typed home beside it.
+ *
+ * `text` is everything after the directive with trailing blanks removed,
+ * exactly as written. Unlike ::GMDL_Obj_Statement this names no file and no
+ * command - there is nothing here a consumer could execute - so the warnings
+ * on that type do not apply.
+ */
+typedef struct {
+  GMDL_Obj_Freeform_Attr_Kind kind; ///< Which directive this was.
+  char * text; ///< The text after it, owned by the ::GMDL_Obj.
+} GMDL_Obj_Freeform_Attr;
+
+/**
  * @brief A parsed OBJ file.
  */
 typedef struct {
@@ -344,6 +437,17 @@ typedef struct {
   size_t map_mapping_count; ///< Number of map mappings.
 
   /**
+   * Distinct render-attribute states the document put in force, or NULL.
+   *
+   * One entry per distinct combination, in order of first use, the way
+   * ::material_mappings are assigned. The all-defaults state gets no entry:
+   * elements name it with -1, so a document mentioning none of the four
+   * directives holds no records at all.
+   */
+  GMDL_Obj_Render_State * render_states;
+  size_t render_state_count; ///< Number of render states.
+
+  /**
    * `call` and `csh` statements, in file order, or NULL.
    *
    * Recorded, never executed - see ::GMDL_Obj_Statement. Their position
@@ -352,6 +456,15 @@ typedef struct {
    */
   GMDL_Obj_Statement * statements;
   size_t statement_count; ///< Number of statements.
+
+  /**
+   * `ctech`, `stech` and `mg` lines, in file order, or NULL.
+   *
+   * Kept as text because the geometry they describe is not read - see
+   * ::GMDL_Obj_Freeform_Attr, which also says why that is provisional.
+   */
+  GMDL_Obj_Freeform_Attr * freeform_attrs;
+  size_t freeform_attr_count; ///< Number of those lines.
 
   /**
    * Every `mtllib` path the document named, in the order it named them.
@@ -385,6 +498,22 @@ typedef struct {
    */
   GMDL_Obj_Maplib * maplibs;
   size_t maplib_count; ///< Number of `maplib` paths.
+
+  /**
+   * Every `shadow_obj` path the document named, in order, or NULL.
+   *
+   * The specification says one per file, and this is a list because a
+   * document that carries two would otherwise lose one silently - which is
+   * exactly the defect ::mtllib had. A conforming document gives this one
+   * entry. Position relative to the geometry is not recorded, for the reason
+   * ::statements gives.
+   */
+  GMDL_Obj_Render_Object * shadow_objs;
+  size_t shadow_obj_count; ///< Number of `shadow_obj` paths.
+
+  /** Every `trace_obj` path the document named, in order, or NULL. */
+  GMDL_Obj_Render_Object * trace_objs;
+  size_t trace_obj_count; ///< Number of `trace_obj` paths.
 
   const GMDL_Allocator * allocator; ///< Allocator that owns the arrays above.
 } GMDL_Obj;

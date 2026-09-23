@@ -76,5 +76,9 @@ void gmdl_limits_default(GMDL_Limits * limits) {
     .max_mtllibs = 0,
     .max_maplibs = 0,
     .max_maps = 0,
+    .max_render_states = 0,
+    .max_shadow_objs = 0,
+    .max_trace_objs = 0,
+    .max_freeform_attrs = 0,
   };
 }
