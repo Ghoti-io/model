@@ -1144,17 +1144,47 @@ at all, which is the answer a second instrument should give about a line the
 first one reported uncovered: unreachable code is exactly the code mutation
 cannot kill, and the two agreeing is what turns "explained" into "checked".
 
-**What the sweep structurally cannot find.** It drives one OBJ document and
-one MTL document. That is enough for the arms themselves - the loaders sit at
-99.6% and 100%, so every line is reached - but coverage only settles the
-*fatal* half. A refusal that is survived is judged by comparing the dump
-against an unrefused parse of the same document, so a refusal that loses
-nothing here could lose something on a document shape these two do not
-contain, and the line would have executed either way. The claim the sweep
-supports is therefore "every arm runs, and survived refusals are lossless for
-one document shape", which is weaker than it reads. Driving a refusal from
-the fuzzers' options byte would put the injection on the corpus's input axis
-and close it; section 12 carries that.
+**The corpus drives it too.** Both fuzz harnesses now take the top two bits
+of their options byte as a refusal width - none, one request, one append, all
+of them - and two further bytes as which allocation to refuse. Each input is
+parsed twice: once with nothing refused, to establish what the document costs
+and what it produces, and once with the refusal, held against that. Refusing
+an allocation may only turn a result into `GMDL_ERR_OOM`; it may never change
+the diagnosis, never rescue a document the reference refused, and never - when
+survived - produce a different model.
+
+**The choice has to be bounded by the measured cost, and getting that wrong
+is silent.** The first version took a 16-bit number straight from the input.
+Against documents that allocate a dozen times, essentially every choice landed
+past the end, so the refusal never fired and the harness reported nothing
+while looking entirely healthy. Taking it modulo the reference parse's request
+count fixed it. The minimal pair, one plant and one corpus replay, changing
+only the bounding:
+
+| harness | planted statement-drop defect |
+| --- | --- |
+| 16-bit choice, unbounded | 11,522 files, nothing reported |
+| same choice modulo the request count | caught in four seconds |
+
+Both harnesses have since been seen to fail that way, each against a loader
+arm changed to drop its allocation error quietly.
+
+**The two reach different things, and neither is the other's substitute.**
+The unit sweep walks *every* allocation of a document built to make every
+array grow; the fuzzers walk *one* allocation each of tens of thousands of
+documents nobody designed. Measured, against the working harness rather
+than the broken one: a defect that only a survived refusal can reveal - the
+colour-padding loop changed to give up quietly - is caught by the unit sweep
+immediately and was **not** caught by the fuzzer in a full corpus replay
+followed by 1,982,029 executions. Reaching it needs a document with more than
+a hundred vertices carrying a late colour, which is far past the sizes
+libFuzzer generates from this corpus. The reverse is the point of adding the
+fuzzers: they vary document shape, which the unit sweep does not vary at all.
+
+So the honest joint claim is "every arm runs, survived refusals are lossless
+on one designed document and on every corpus document, and neither instrument
+sees the large-document shapes the other would need". Section 12 keeps what
+that still leaves open.
 
 **What the fuzzers structurally cannot find.** They drive the caps that
 exist, so a quantity with no field in `GMDL_Limits` is invisible to them -
@@ -1227,11 +1257,14 @@ section 12 is where they are written down.
   they ought to write. Until then the accepted set is "what was measured",
   which is a smaller claim than "what exists".
 
-**Allocation failure is swept on one document shape.** `test_allocator.cpp`
-refuses every allocation each loader makes, three refusal widths apiece, but
-against a single OBJ document and a single MTL one. Every arm is reached; what
-is not established is that a *survived* refusal is lossless for document
-shapes other than those two, since the comparison is against an unrefused
-parse of the same input. The fix is to drive the refusal from the fuzz
-harnesses' options byte, so the injection rides the corpus rather than one
-hand-written file. Not done.
+**No instrument refuses an allocation in a large document.**
+`test_allocator.cpp` refuses every allocation against one designed document
+per format, and the fuzz harnesses refuse one allocation against every corpus
+document - so document shape is varied and allocation position is swept, but
+never both at once, and never above a few kilobytes. libFuzzer does not
+generate inputs of the size where the builders' arrays grow repeatedly, which
+is measurable: a planted defect reachable only past 128 vertices survived a
+corpus replay and 1,982,029 fuzz executions, and died instantly under the unit
+sweep. Closing it
+wants either a seed corpus of large documents, or a generator that builds one
+and sweeps its allocations the way the unit sweep does. Not done.

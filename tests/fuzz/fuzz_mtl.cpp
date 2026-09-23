@@ -19,6 +19,8 @@
 
 #include <ghoti.io/model/model.h>
 
+#include "../failing_allocator.h"
+
 namespace {
 
 /** Report a broken invariant and stop, so libFuzzer records the input. */
@@ -204,11 +206,97 @@ void check_round_trip(const GMDL_Mtl * mtl) {
   gmdl_mtl_free(again);
 }
 
+
+/**
+ * How an allocation failure is injected for this input, if at all.
+ *
+ * See the OBJ harness for why this exists: the unit sweep refuses every
+ * allocation the loader makes but against one hand-written document, so what
+ * it cannot establish is that a *survived* refusal is lossless on document
+ * shapes that document does not contain. The corpus supplies the shapes.
+ */
+struct Injection {
+  bool active = false;
+  size_t raw = 0; ///< The fuzzer's choice, before it is bounded.
+  size_t run = 1; ///< Requests to refuse; 0 refuses everything from there on.
+};
+
+/** Dump a library to a heap buffer, or return nullptr. Caller frees. */
+char * dump_to_buffer(const GMDL_Mtl * mtl, size_t * out_length) {
+  char * text = nullptr;
+  size_t length = 0;
+  FILE * sink = open_memstream(&text, &length);
+  if (!sink) {
+    return nullptr;
+  }
+  GMDL_Result dumped = gmdl_mtl_dump(mtl, sink);
+  fclose(sink);
+  if (dumped != GMDL_OK) {
+    free(text);
+    return nullptr;
+  }
+  *out_length = length;
+  return text;
+}
+
+/** Parse the same bytes with one allocation refused, and compare. */
+void check_under_refusal(const uint8_t * data, size_t size,
+    const GMDL_Limits * limits, const Injection & how, GMDL_Result reference,
+    const GMDL_Mtl * reference_mtl) {
+  GMDL_Stream * stream = nullptr;
+  if (gmdl_stream_create_memory(data, size, &stream) != GMDL_OK) {
+    return;
+  }
+  gmdltest::FailingAllocator allocator(how.raw, how.run);
+  GMDL_Mtl * mtl = nullptr;
+  GMDL_Result result = gmdl_mtl_load(stream, limits, allocator.get(), &mtl);
+  gmdl_stream_destroy(stream);
+  // The library carries this allocator, so everything below would be refused
+  // too. The refusal has done its work by now.
+  allocator.stop_failing();
+
+  // The choice was bounded by what the reference parse cost, so the refusal
+  // lands - except where an earlier refusal shortens the parse, which is not
+  // a finding.
+  if (!allocator.failed()) {
+    REQUIRE(result == reference, "an uninjected parse disagreed with itself");
+    gmdl_mtl_free(mtl);
+    return;
+  }
+
+  REQUIRE(result == reference || result == GMDL_ERR_OOM,
+      "a refused allocation changed the diagnosis");
+
+  if (result == GMDL_ERR_OOM) {
+    REQUIRE(mtl == nullptr, "GMDL_ERR_OOM handed back a library anyway");
+    return;
+  }
+
+  REQUIRE((mtl != nullptr) == (reference_mtl != nullptr),
+      "a survived refusal changed whether a library was produced");
+  if (mtl && reference_mtl) {
+    size_t a_len = 0;
+    size_t b_len = 0;
+    char * a = dump_to_buffer(mtl, &a_len);
+    char * b = dump_to_buffer(reference_mtl, &b_len);
+    if (a && b) {
+      REQUIRE(a_len == b_len && memcmp(a, b, a_len) == 0,
+          "a survived refusal produced a different library");
+    }
+    free(a);
+    free(b);
+  }
+  gmdl_mtl_free(mtl);
+}
+
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   GMDL_Limits limits;
   gmdl_limits_default(&limits);
+  Injection how;
+  const uint8_t * body = data;
+  size_t body_size = size;
   if (size) {
     uint8_t options = data[0];
     data++;
@@ -219,6 +307,19 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     if (options & 0x02) {
       limits.max_materials = 4;
     }
+
+    // The top two bits choose the refusal width; see the OBJ harness for why
+    // all three are needed and why a quarter of inputs inject nothing.
+    static const size_t kWidths[4] = {1, 1, 2, 0};
+    how.run = kWidths[(options >> 6) & 0x03];
+    how.active = ((options >> 6) & 0x03) != 0;
+    if (how.active && size >= 2) {
+      how.raw = (size_t)data[0] | ((size_t)data[1] << 8);
+      data += 2;
+      size -= 2;
+    }
+    body = data;
+    body_size = size;
   }
 
   GMDL_Stream * stream = nullptr;
@@ -226,8 +327,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     return 0;
   }
 
+  // Counted, so the refusal below can be bounded by what this parse costs.
+  gmdltest::FailingAllocator counting((size_t)-1);
   GMDL_Mtl * mtl = nullptr;
-  GMDL_Result result = gmdl_mtl_load(stream, &limits, nullptr, &mtl);
+  GMDL_Result result = gmdl_mtl_load(stream, &limits, counting.get(), &mtl);
   gmdl_stream_destroy(stream);
 
   if (result == GMDL_OK && mtl) {
@@ -237,6 +340,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     // Dump it, parse the dump, and hold the two against each other. This is
     // the invariant section 10 describes, and until now was not checked.
     check_round_trip(mtl);
+  }
+
+  // The same bytes with one allocation refused, held against the unrefused
+  // parse. Run whatever the reference said: a document the parser refuses
+  // still allocates on the way to refusing it.
+  if (how.active && counting.requests() > 0) {
+    how.raw %= counting.requests();
+    check_under_refusal(body, body_size, &limits, how, result, mtl);
   }
 
   gmdl_mtl_free(mtl);
