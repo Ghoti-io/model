@@ -266,6 +266,34 @@ CC := cc
 # comparison on its own code instead of inheriting the result: the same
 # measurement elsewhere in the suite found objects that do change at -O1.
 #
+# `-Wall` is not neutral here: it sets -Wstrict-aliasing to 3 on its own, and
+# level 3 is silent on the plain type-punned dereference that level 1
+# rejects. So a library at -O2 with `-Wall -Werror` and no level named has
+# the aliasing *optimisation* armed and no warning behind it - which reads,
+# from the flag list, exactly like a library that is covered.
+#
+# The level cannot be read off the flag list by eye. `gcc -Q --help=warnings`
+# with the real flags is the direct read, and on gcc 14.2 the precedence is
+# not "the last level named wins". Each row below was confirmed twice, by -Q
+# and by compiling a planted `*(int *)f = 7` at -O2 and counting the
+# diagnostic, with `=1` alone warning and `=0` alone silent as the controls:
+#
+#                                           -Q   warns on the plant
+#   -Wall                                    3   no
+#   -Wall -Wstrict-aliasing                  3   -     bare, no level
+#   -Wall -Wstrict-aliasing=1                1   yes
+#   -Wstrict-aliasing=1 -Wall                1   yes   order does not matter
+#   -Wall -Wstrict-aliasing=1 ...=3          3   no    between two explicit
+#                                                      levels, it does
+#   -Wstrict-aliasing=1 -Wno-strict-aliasing 0   -
+#
+# An explicit level beats -Wall's implicit 3 from either side, so this line's
+# ordering is not load-bearing. What does beat it is another explicit level
+# later on the command line, and $(EXTRA_CFLAGS) is last: `make
+# EXTRA_CFLAGS=-Wstrict-aliasing=3` disarms this with every flag still
+# present. Measured here, all four trees - release, debug, ASan, and
+# LIB_CFLAGS - report level 1.
+#
 # The fuzz tree does not read CFLAGS - it builds with clang on a command line
 # of its own, at -O1 and with -w, so it reports nothing and is not a warning
 # gate - and clang implements nothing for -Wstrict-aliasing in any case,
