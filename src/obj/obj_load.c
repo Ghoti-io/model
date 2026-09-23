@@ -144,14 +144,25 @@ static size_t obj_element_count(const obj_builder_t * b) {
       + gcu_array_count(&b->points);
 }
 
-/** Move one array into a model's pointer and count. */
-static void obj_steal_into(
-    GCU_Array * array, void ** out_data, size_t * out_count) {
+/**
+ * Move one array out, returning its buffer and writing its length.
+ *
+ * It returns the buffer rather than taking a `void **` to write through,
+ * because the caller's destination is a typed pointer: `(void **)&obj->faces`
+ * would store a `void *` through an lvalue whose declared type is
+ * `GMDL_Obj_Face *`, which is a strict-aliasing violation (C17 6.5p7).
+ * Returning it makes the conversion an ordinary assignment from `void *`,
+ * which is what that rule permits. gcc's `-Wall` level of
+ * `-Wstrict-aliasing` did not report the old spelling; levels 1 and 2 did,
+ * eleven times.
+ */
+static void * obj_steal_into(GCU_Array * array, size_t * out_count) {
   // Trim first, so the model does not carry the parser's spare capacity.
   (void)gcu_array_shrink_to_fit(array);
   size_t count = 0;
-  *out_data = gcu_array_steal(array, &count);
+  void * data = gcu_array_steal(array, &count);
   *out_count = count;
+  return data;
 }
 
 /**
@@ -900,23 +911,20 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       goto cleanup;
     }
 
-    obj_steal_into(
-        &builder.vertices, (void **)&obj->vertices, &obj->vertex_count);
-    obj_steal_into(&builder.colors, (void **)&obj->colors, &obj->color_count);
-    obj_steal_into(
-        &builder.texcoords, (void **)&obj->texcoords, &obj->texcoord_count);
-    obj_steal_into(&builder.normals, (void **)&obj->normals,
-        &obj->normal_count);
-    obj_steal_into(&builder.faces, (void **)&obj->faces, &obj->face_count);
-    obj_steal_into(&builder.lines, (void **)&obj->lines, &obj->line_count);
-    obj_steal_into(&builder.line_vertices, (void **)&obj->line_vertices,
-        &obj->line_vertex_count);
-    obj_steal_into(&builder.points, (void **)&obj->points, &obj->point_count);
-    obj_steal_into(&builder.groups, (void **)&obj->groups, &obj->group_count);
-    obj_steal_into(&builder.material_mappings,
-        (void **)&obj->material_mappings, &obj->material_mapping_count);
-    obj_steal_into(&builder.statements, (void **)&obj->statements,
-        &obj->statement_count);
+    obj->vertices = obj_steal_into(&builder.vertices, &obj->vertex_count);
+    obj->colors = obj_steal_into(&builder.colors, &obj->color_count);
+    obj->texcoords = obj_steal_into(&builder.texcoords, &obj->texcoord_count);
+    obj->normals = obj_steal_into(&builder.normals, &obj->normal_count);
+    obj->faces = obj_steal_into(&builder.faces, &obj->face_count);
+    obj->lines = obj_steal_into(&builder.lines, &obj->line_count);
+    obj->line_vertices = obj_steal_into(
+        &builder.line_vertices, &obj->line_vertex_count);
+    obj->points = obj_steal_into(&builder.points, &obj->point_count);
+    obj->groups = obj_steal_into(&builder.groups, &obj->group_count);
+    obj->material_mappings = obj_steal_into(
+        &builder.material_mappings, &obj->material_mapping_count);
+    obj->statements =
+        obj_steal_into(&builder.statements, &obj->statement_count);
 
     memcpy(obj->mtllib, mtllib, sizeof(obj->mtllib));
     obj->allocator = allocator;

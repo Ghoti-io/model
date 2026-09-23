@@ -131,7 +131,7 @@ obj_load = read("src/obj/obj_load.c")
 obj_lists = {
     "the steal list (a missing entry hands back NULL for records that parsed)":
         set(re.findall(
-            r"obj_steal_into\(\s*&builder\.\w+,\s*\(void \*\*\)&obj->(\w+),",
+            r"obj->(\w+)\s*=\s*obj_steal_into\(\s*&builder\.\w+,",
             obj_load)),
     "the free list (a missing entry leaks the whole array)":
         set(re.findall(r"gcu_allocator_free\(allocator, obj->(\w+)\)", obj_load)),

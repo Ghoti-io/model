@@ -1198,6 +1198,51 @@ on one designed document and on every corpus document, and neither instrument
 sees the large-document shapes the other would need". Section 12 keeps what
 that still leaves open.
 
+**Strict aliasing, which no runtime gate can see.** ASan, UBSan and valgrind
+do not report a strict-aliasing violation, and this is not a matter of the
+violation being theoretical. On a minimal pair gcc genuinely miscompiles -
+store through `int *`, store through `float *`, reload the `int *` - a binary
+built with *this library's own* sanitizer flags printed the miscompiled
+answer at -O2 and -O3 and exited 0 with nothing on stderr. The sanitizer runs
+the wrong code and says nothing. So the only instrument for the class is the
+compiler, and the library now compiles with `-fstrict-aliasing
+-Wstrict-aliasing=1` in `CFLAGS`.
+
+Turning it on found eleven violations in `obj_load.c`, all one shape:
+`obj_steal_into(&builder.faces, (void **)&obj->faces, ...)` stored a `void *`
+through an lvalue whose declared type was `GMDL_Obj_Face *`. The fix was for
+the helper to return the buffer, so the conversion happens in an ordinary
+assignment, which is what the rule permits.
+
+Three things about this are worth keeping, because each is a way the check
+can be present and mean nothing:
+
+- **The level matters.** `-Wall` turns on level 3, and level 3 reported none
+  of the eleven. Levels 1 and 2 reported all eleven. Level 1 additionally
+  reports the minimal pair above, which level 2 does not. The library is
+  clean at all three, so it sits at the noisiest.
+- **`-fstrict-aliasing` is what arms the warning, and gcc only enables it
+  from -O2.** Measured: the warning fires at `-O0 -fstrict-aliasing` and is
+  silent at both `-O0` and `-O1`. An optimised build is therefore not
+  automatically a checked one, and naming the flag is what keeps the check
+  live in the coverage tree, in a debug build, and in a sanitizer tree if one
+  is ever pinned to -O1. Naming it changes what is checked rather than what
+  is built: all nine objects of an -O0 tree are instruction-identical with
+  and without it.
+- **It was seen to fail.** Reinstating one of the eleven spellings fails the
+  release, asan and coverage builds with
+  `error: dereferencing type-punned pointer` under `-Werror`. Coverage is the
+  -O0 tree, which is the evidence that naming `-fstrict-aliasing` did what it
+  is there for.
+
+What the check does *not* establish is that the old code was miscompiled. It
+was not, measurably: building `obj_load.c` at -O2 with `-fstrict-aliasing`
+and with `-fno-strict-aliasing` gave the same instructions in a different
+order - identical opcode multiset - and the suite's 262 tests produced
+byte-identical output under both. The eleven were latent, which is the
+ordinary state of this class and the reason a compile-time gate is worth more
+here than another runtime one.
+
 **What the fuzzers structurally cannot find.** They drive the caps that
 exist, so a quantity with no field in `GMDL_Limits` is invisible to them -
 `call` and `csh` allocated without bound for as long as `max_statements` was

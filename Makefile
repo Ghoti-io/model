@@ -202,7 +202,45 @@ CC := cc
 # instead, and an implicit conversion of an in-range value is a wrong answer
 # that no sanitizer reports. This library is clean under it today, so the
 # flag costs nothing and fails the build the moment that stops being true.
-CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
+# -Wstrict-aliasing=1 is a stronger level than the one -Wall turns on, and
+# -fstrict-aliasing is what arms it. Both halves were measured here.
+#
+# No sanitizer reports a strict-aliasing violation. On a minimal pair gcc
+# actually miscompiles - two stores through different pointer types, then a
+# reload - ASan and UBSan built with this library's own flags ran the
+# miscompiled answer at -O2 and -O3 and printed nothing, exit 0. So this
+# compile-time check is the only instrument the suite has for the class, and
+# the runtime gates are not a second opinion on it.
+#
+# -Wall's level 3 reported nothing here. Level 1 reported eleven type-punned
+# stores in obj_load.c: `(void **)&obj->faces` and its siblings wrote a
+# `void *` through an lvalue whose declared type was a struct pointer. The
+# fix was to return the buffer and let the assignment convert it. Level 1 is
+# the noisiest level and the library is clean under it, so it costs nothing
+# and fails the build the moment that stops being true.
+#
+# -fstrict-aliasing is named explicitly because the warning is silent without
+# it and gcc only enables it from -O2. Without this the check would be live in
+# the release tree and *silently inert* in every other tree that CFLAGS
+# reaches: the coverage tree, which appends its own -O0, `BUILD=debug`, and a
+# sanitizer tree if it is ever pinned to -O1. Measured: the warning fires at
+# `-O0 -fstrict-aliasing`, and not at `-O0` or at `-O1`, so an optimised tree
+# is not automatically a checked one. Planting a violation was seen to fail
+# the release, asan and coverage trees; coverage is the -O0 one, and is the
+# evidence for that half. `BUILD=debug` could not be built to check, for a
+# reason of its own: BRANCH becomes `-debug`, so CUTIL_PC asks pkg-config for
+# ghoti.io-cutil-debug, which exists only after a `./bootstrap.sh BUILD=debug`
+# has installed the whole suite in debug.
+#
+# Naming the flag is codegen-neutral where it is not already on - all 9
+# objects of an -O0 tree are instruction-identical with and without it - and
+# at -O2 it is the default, so this changes what is checked, not what is
+# built.
+#
+# The fuzz tree is the exception and stays one: it builds with clang on a
+# command line of its own, at -O1 and with -w, so it reports nothing by
+# design. It is not a warning gate and this flag does not reach it.
+CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -fstrict-aliasing -Wstrict-aliasing=1 -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GMDL_BUILD enables DLL export on Windows (checked by GMDL_API macro)
 # GMDL_TEST_BUILD enables export of internal functions for testing (checked by GMDL_INTERNAL_API macro)
