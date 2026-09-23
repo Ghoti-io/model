@@ -234,6 +234,8 @@ std::string rich_obj() {
   for (size_t i = 0; i < 6; i++) {
     t += "mtllib library " + std::to_string(i) + ".mtl\n";
     t += "maplib maps " + std::to_string(i) + ".map\n";
+    t += "shadow_obj shade " + std::to_string(i) + ".obj\n";
+    t += "trace_obj trace " + std::to_string(i) + ".obj\n";
   }
   // Plain vertices first and coloured ones after, so the colour array is
   // padded across a growth as well as appended to - obj_color_append() has an
@@ -335,6 +337,8 @@ std::string regrow_obj() {
   for (size_t i = 0; i < 6; i++) {
     t += "mtllib library " + std::to_string(i) + ".mtl\n";
     t += "maplib maps " + std::to_string(i) + ".map\n";
+    t += "shadow_obj shade " + std::to_string(i) + ".obj\n";
+    t += "trace_obj trace " + std::to_string(i) + ".obj\n";
   }
   for (size_t i = 0; i < kRegrow; i++) {
     t += "v " + std::to_string(i) + " 0 0\n";

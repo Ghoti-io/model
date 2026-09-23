@@ -104,6 +104,22 @@ typedef struct {
 } GMDL_Obj_Render_State;
 
 /**
+ * @brief One `shadow_obj` or `trace_obj` path.
+ *
+ * Both name an **OBJ file** - the same kind of thing - which is why they
+ * share a type where ::GMDL_Obj_Mtllib and ::GMDL_Obj_Maplib do not: those
+ * two name libraries of definitions in two different formats. The type says
+ * what the path points at.
+ *
+ * Nothing here opens the file. A consumer that does must treat the path the
+ * way section 8 says to treat a texture map path, and more carefully: this
+ * one names a document that would then be parsed.
+ */
+typedef struct {
+  char path[GMDL_OBJ_MAX_PATH_LENGTH]; ///< The path, whole line, NUL-terminated.
+} GMDL_Obj_Render_Object;
+
+/**
  * @brief A 3D vertex.
  */
 typedef struct {
@@ -439,6 +455,22 @@ typedef struct {
    */
   GMDL_Obj_Maplib * maplibs;
   size_t maplib_count; ///< Number of `maplib` paths.
+
+  /**
+   * Every `shadow_obj` path the document named, in order, or NULL.
+   *
+   * The specification says one per file, and this is a list because a
+   * document that carries two would otherwise lose one silently - which is
+   * exactly the defect ::mtllib had. A conforming document gives this one
+   * entry. Position relative to the geometry is not recorded, for the reason
+   * ::statements gives.
+   */
+  GMDL_Obj_Render_Object * shadow_objs;
+  size_t shadow_obj_count; ///< Number of `shadow_obj` paths.
+
+  /** Every `trace_obj` path the document named, in order, or NULL. */
+  GMDL_Obj_Render_Object * trace_objs;
+  size_t trace_obj_count; ///< Number of `trace_obj` paths.
 
   const GMDL_Allocator * allocator; ///< Allocator that owns the arrays above.
 } GMDL_Obj;

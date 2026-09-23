@@ -134,6 +134,16 @@ bool names_are_representable(const GMDL_Obj * obj) {
       return false;
     }
   }
+  for (size_t i = 0; i < obj->shadow_obj_count; i++) {
+    if (ends_with_backslash(obj->shadow_objs[i].path)) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < obj->trace_obj_count; i++) {
+    if (ends_with_backslash(obj->trace_objs[i].path)) {
+      return false;
+    }
+  }
   for (size_t i = 0; i < obj->map_mapping_count; i++) {
     if (ends_with_backslash(obj->map_mappings[i].name)) {
       return false;
@@ -290,6 +300,17 @@ void check_round_trip(const GMDL_Obj * obj) {
   for (size_t i = 0; i < obj->maplib_count; i++) {
     REQUIRE(strcmp(obj->maplibs[i].path, again->maplibs[i].path) == 0,
         "maplib path");
+  }
+  REQUIRE(obj->shadow_obj_count == again->shadow_obj_count,
+      "shadow_obj_count");
+  for (size_t i = 0; i < obj->shadow_obj_count; i++) {
+    REQUIRE(strcmp(obj->shadow_objs[i].path, again->shadow_objs[i].path) == 0,
+        "shadow_obj path");
+  }
+  REQUIRE(obj->trace_obj_count == again->trace_obj_count, "trace_obj_count");
+  for (size_t i = 0; i < obj->trace_obj_count; i++) {
+    REQUIRE(strcmp(obj->trace_objs[i].path, again->trace_objs[i].path) == 0,
+        "trace_obj path");
   }
 
   for (size_t i = 0; i < obj->vertex_count; i++) {

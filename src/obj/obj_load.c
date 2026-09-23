@@ -72,6 +72,8 @@ typedef struct {
   GCU_Array statements;
   GCU_Array mtllibs;
   GCU_Array maplibs;
+  GCU_Array shadow_objs;
+  GCU_Array trace_objs;
   const GMDL_Allocator * allocator;
 } obj_builder_t;
 
@@ -108,7 +110,11 @@ static bool obj_builder_init(
       && gcu_array_create_in_place(
           &b->mtllibs, sizeof(GMDL_Obj_Mtllib), 4, allocator)
       && gcu_array_create_in_place(
-          &b->maplibs, sizeof(GMDL_Obj_Maplib), 4, allocator);
+          &b->maplibs, sizeof(GMDL_Obj_Maplib), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->shadow_objs, sizeof(GMDL_Obj_Render_Object), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->trace_objs, sizeof(GMDL_Obj_Render_Object), 4, allocator);
 }
 
 /**
@@ -128,6 +134,8 @@ static void obj_builder_destroy(obj_builder_t * b) {
   }
   gcu_array_destroy_in_place(&b->mtllibs);
   gcu_array_destroy_in_place(&b->maplibs);
+  gcu_array_destroy_in_place(&b->shadow_objs);
+  gcu_array_destroy_in_place(&b->trace_objs);
   gcu_array_destroy_in_place(&b->vertices);
   gcu_array_destroy_in_place(&b->colors);
   gcu_array_destroy_in_place(&b->texcoords);
@@ -412,6 +420,57 @@ static GMDL_Result obj_record_statement(const char * rest,
   }
   stored->kind = kind;
   stored->text = copy;
+  return GMDL_OK;
+}
+
+// Every list of whole-line paths holds elements that are exactly one
+// char[GMDL_OBJ_MAX_PATH_LENGTH] and nothing else, which is what lets
+// obj_record_path() fill one through a plain buffer. Asserted rather than
+// assumed: adding a field to any of them would otherwise make it copy the
+// wrong number of bytes, silently.
+_Static_assert(sizeof(GMDL_Obj_Mtllib) == GMDL_OBJ_MAX_PATH_LENGTH,
+    "GMDL_Obj_Mtllib must be exactly its path");
+_Static_assert(sizeof(GMDL_Obj_Maplib) == GMDL_OBJ_MAX_PATH_LENGTH,
+    "GMDL_Obj_Maplib must be exactly its path");
+_Static_assert(sizeof(GMDL_Obj_Render_Object) == GMDL_OBJ_MAX_PATH_LENGTH,
+    "GMDL_Obj_Render_Object must be exactly its path");
+
+/**
+ * Read a whole-line path and append it to a list of them.
+ *
+ * `mtllib`, `maplib`, `shadow_obj` and `trace_obj` are read identically:
+ * the whole line is the path, blanks at either end dropped, and a bare
+ * directive names nothing and contributes no entry - appending an empty one
+ * would put a file nobody asked for into the list and write it back out on
+ * the dump. One reader rather than four copies, because the four copies had
+ * already drifted once: `maplib` arrived with a line `mtllib` had needed and
+ * no longer did.
+ *
+ * A path too long for the field is GMDL_ERR_LIMIT (3.9), since one cut at
+ * 255 bytes names a different file, or none.
+ *
+ * @param rest The text after the directive.
+ * @param paths The builder's array for that directive.
+ * @param max The cap from GMDL_Limits, or 0.
+ * @return GMDL_OK - including for a bare directive - GMDL_ERR_LIMIT or
+ *   GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_record_path(
+    const char * rest, GCU_Array * paths, size_t max) {
+  char path[GMDL_OBJ_MAX_PATH_LENGTH];
+  GMDL_Result named = gmdl_rest_of_line(rest, path, sizeof(path));
+  if (named == GMDL_ERR_FORMAT) {
+    return GMDL_OK; // A bare directive names nothing.
+  }
+  if (named != GMDL_OK) {
+    return named;
+  }
+  if (gmdl_limit_reached(gcu_array_count(paths), max)) {
+    return GMDL_ERR_LIMIT;
+  }
+  if (!gcu_array_append(paths, path)) {
+    return GMDL_ERR_OOM;
+  }
   return GMDL_OK;
 }
 
@@ -1097,35 +1156,18 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // The whole line is the path, spaces included - Blender exports
       // `mtllib my model.mtl` for a document saved under that name, and
       // taking the first token off it names a file that does not exist.
-      // One too long for the field is GMDL_ERR_LIMIT (3.9), since a path cut
-      // at 255 bytes names a different file, or none.
-      GMDL_Obj_Mtllib entry;
-      GMDL_Result named =
-          gmdl_rest_of_line(rest, entry.path, sizeof(entry.path));
-      if (named == GMDL_OK) {
-        if (gmdl_limit_reached(
-                gcu_array_count(&builder.mtllibs), limits->max_mtllibs)) {
-          result = GMDL_ERR_LIMIT;
-          goto cleanup;
-        }
-        if (!gcu_array_append(&builder.mtllibs, &entry)) {
-          result = GMDL_ERR_OOM;
-          goto cleanup;
-        }
-      }
-      else if (named != GMDL_ERR_FORMAT) {
-        result = named;
+      // A bare `mtllib` does not clear the libraries already named:
+      // measured 2026-09-23, Blender 4.3.2 reads the line as an unrecognized
+      // element and still applies a material from a library an earlier line
+      // named. It used to clear the compatibility field, which broke the
+      // round trip; the steal at the end of this function says what happened
+      // and why the field is derived now.
+      GMDL_Result recorded = obj_record_path(
+          rest, &builder.mtllibs, limits->max_mtllibs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
         goto cleanup;
       }
-      // A bare `mtllib` names no library, so it contributes no entry -
-      // appending an empty one would put a library nobody asked for into the
-      // list and write it back out on the dump. It does not clear the
-      // libraries already named: measured 2026-09-23, Blender 4.3.2 reads
-      // the line as an unrecognized element and still applies a material
-      // from a library an earlier line named. It used to clear the
-      // compatibility field, which broke the round trip; the steal at the
-      // end of this function says what happened and why the field is
-      // derived now.
     }
     else if (gmdl_line_is(line_text, "maplib", &rest)) {
       // Read exactly as `mtllib` is, whole line and all, and kept in a list
@@ -1133,24 +1175,29 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // `maplib` line just as it does for `mtllib`; no reference settles
       // which reading is right, because no reference implements the
       // directive (3.15), so this follows the rule the library already has.
-      // A bare `maplib` names no library and contributes no entry, so the
-      // dump does not write back a line the document never had.
-      GMDL_Obj_Maplib entry;
-      GMDL_Result named =
-          gmdl_rest_of_line(rest, entry.path, sizeof(entry.path));
-      if (named == GMDL_OK) {
-        if (gmdl_limit_reached(
-                gcu_array_count(&builder.maplibs), limits->max_maplibs)) {
-          result = GMDL_ERR_LIMIT;
-          goto cleanup;
-        }
-        if (!gcu_array_append(&builder.maplibs, &entry)) {
-          result = GMDL_ERR_OOM;
-          goto cleanup;
-        }
+      GMDL_Result recorded = obj_record_path(
+          rest, &builder.maplibs, limits->max_maplibs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
       }
-      else if (named != GMDL_ERR_FORMAT) {
-        result = named;
+    }
+    else if (gmdl_line_is(line_text, "shadow_obj", &rest)) {
+      // A path to another OBJ document, recorded and never opened (3.17).
+      // The specification says one per file; this is a list because a
+      // document carrying two would otherwise lose one without saying so.
+      GMDL_Result recorded = obj_record_path(
+          rest, &builder.shadow_objs, limits->max_shadow_objs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "trace_obj", &rest)) {
+      GMDL_Result recorded = obj_record_path(
+          rest, &builder.trace_objs, limits->max_trace_objs);
+      if (recorded != GMDL_OK) {
+        result = recorded;
         goto cleanup;
       }
     }
@@ -1187,6 +1234,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         obj_steal_into(&builder.render_states, &obj->render_state_count);
     obj->mtllibs = obj_steal_into(&builder.mtllibs, &obj->mtllib_count);
     obj->maplibs = obj_steal_into(&builder.maplibs, &obj->maplib_count);
+    obj->shadow_objs =
+        obj_steal_into(&builder.shadow_objs, &obj->shadow_obj_count);
+    obj->trace_objs =
+        obj_steal_into(&builder.trace_objs, &obj->trace_obj_count);
 
     // The compatibility field is derived from the list rather than
     // maintained alongside it, so the two cannot disagree. They did: a bare
@@ -1255,6 +1306,8 @@ void gmdl_obj_free(GMDL_Obj * obj) {
 
   gcu_allocator_free(allocator, obj->mtllibs);
   gcu_allocator_free(allocator, obj->maplibs);
+  gcu_allocator_free(allocator, obj->shadow_objs);
+  gcu_allocator_free(allocator, obj->trace_objs);
   gcu_allocator_free(allocator, obj->vertices);
   gcu_allocator_free(allocator, obj->colors);
   gcu_allocator_free(allocator, obj->texcoords);

@@ -1,0 +1,5 @@
+shadow_obj my shadow.obj
+shadow_obj second.obj
+trace_obj trace.obj
+v 0 0 0
+f 1 1 1

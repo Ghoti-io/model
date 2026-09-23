@@ -485,21 +485,19 @@ which is a different kind of geometry from the polygon mesh this library
 holds, not another record to append to it. Supporting them means a second
 data model, not a field.
 
-**Render attributes still unread**: `shadow_obj`, `trace_obj`, `ctech`,
-`stech` and `mg`. Section 12 keeps the first two open. The last three are
-state for the free-form sub-language above rather than for the polygon mesh,
-so there is nothing in this model for them to attach to yet.
+**Render attributes still unread**: `ctech`, `stech` and `mg`. These three
+are state for the free-form sub-language above rather than for the polygon
+mesh, so there is nothing in this model for them to attach to yet.
 
-`bevel`, `c_interp`, `d_interp` and `lod` were in this group until
-2026-09-23 and are read now; 3.16 is what they do, and why the reason given
-here for leaving them out did not survive being written down.
+The other six were in this group until 2026-09-23 and are read now: the four
+switches in 3.16, and the two object references in 3.17.
 
 `maplib` and `usemap` were a third group here until 2026-09-23. They are
 read now; 3.15 is what they do and why the argument for leaving them out did
 not survive being written down.
 
-A line whose directive is none of the above and none of 3.1-3.13, 3.15 or
-3.16 is skipped, which is how a file carrying an exporter's private
+A line whose directive is none of the above and none of 3.1-3.13 or
+3.15-3.17 is skipped, which is how a file carrying an exporter's private
 extension still loads.
 
 ### 3.15 `maplib path` and `usemap name`
@@ -608,6 +606,41 @@ a file carrying all nine of 3.14's render attributes prints `OBJ element not
 recognized` for every one and loads the geometry without them.
 
 `GMDL_Limits.max_render_states` caps the number of distinct combinations.
+
+### 3.17 `shadow_obj path` and `trace_obj path`
+
+Two paths to other OBJ documents: the object that casts shadows for this one,
+and the object used for reflections when ray tracing. Both are **recorded and
+never opened**, the way `call` is (3.13) - and the same warning applies more
+sharply, because these name a document that would then be parsed. A consumer
+that resolves either must treat the path the way section 8 says to treat a
+texture map path.
+
+Both read the **whole line** as one path, blanks at either end dropped, and a
+bare directive names nothing and contributes no entry - the reading 3.8 makes
+for `mtllib`, for the reason it gives. A path too long for the field is
+`GMDL_ERR_LIMIT` (3.9).
+
+**Both are lists, though the specification says one per file.** `You can use
+only one shadow object per file` is a statement about conforming documents,
+not about what arrives. A scalar would make a document carrying two lose one
+without saying so, which is precisely the defect `GMDL_Obj.mtllib` had (3.8)
+and precisely the reason that field is now derived rather than maintained. A
+conforming document gives `GMDL_Obj.shadow_objs` one entry.
+
+Their position relative to the geometry is not recorded, for the reason 3.13
+gives for `call` and `csh`: nothing else in this model is ordered against the
+geometry, and a directive the specification calls one-per-file has no
+position to preserve anyway. The dump writes them with the other paths, before
+the vertices.
+
+`GMDL_Obj_Render_Object` is one type for both, where `GMDL_Obj_Mtllib` and
+`GMDL_Obj_Maplib` are two: those name libraries of definitions in two
+different formats, and these both name an OBJ file. The type says what the
+path points at.
+
+`GMDL_Limits.max_shadow_objs` and `GMDL_Limits.max_trace_objs` cap the two
+counts.
 
 ---
 
@@ -890,6 +923,8 @@ assuming a surface would record something the file never said.
 | `max_maplibs` | 0 | `maplib` records |
 | `max_maps` | 0 | distinct `usemap` names |
 | `max_render_states` | 0 | distinct render-attribute combinations |
+| `max_shadow_objs` | 0 | `shadow_obj` records |
+| `max_trace_objs` | 0 | `trace_obj` records |
 
 `0` means no limit. When a record would take a count from `limit` to
 `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
@@ -1432,12 +1467,6 @@ section 12 is where they are written down.
 - **Free-form geometry.** `curv`, `surf` and the rest of the sub-language in
   3.14. A second data model rather than more fields, so it is a decision
   about what this library is for.
-- **`shadow_obj` and `trace_obj`.** The two render attributes carrying real
-  data - a path each. The blocker 3.14 gave was where per-state attributes
-  live, and 3.16 answers it for the four switches; what is left here is that
-  the specification calls these one per file rather than state, so whether
-  they are a scalar pair, a list, or state like the rest is a different
-  question from the one 3.16 settled.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is now the only place 4.5
   takes it further than either: `-type` on a colour map was the other, and it

@@ -409,6 +409,20 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     }
   }
 
+  // The shadow and ray-tracing objects (3.17). Written here with the other
+  // paths rather than among the elements: the specification calls them one
+  // per file, so there is no position among the geometry to preserve.
+  for (size_t i = 0; i < obj->shadow_obj_count; i++) {
+    if (fprintf(fd, "shadow_obj %s\n", obj->shadow_objs[i].path) < 0) {
+      return GMDL_ERR_IO;
+    }
+  }
+  for (size_t i = 0; i < obj->trace_obj_count; i++) {
+    if (fprintf(fd, "trace_obj %s\n", obj->trace_objs[i].path) < 0) {
+      return GMDL_ERR_IO;
+    }
+  }
+
   for (size_t i = 0; i < obj->vertex_count; i++) {
     // A vertex whose colour is absent is written without one even in a file
     // that has colours, because that is what the file said and writing white

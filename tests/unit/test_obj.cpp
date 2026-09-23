@@ -1512,14 +1512,16 @@ namespace {
  *  at the points, a polyline and a point declared before any material -
  *  which the dumper writes in a pass of its own - a maplib, a usemap, the
  *  usemap off that turns it back around, a map change at a polyline and at a
- *  point, each render switch in both directions and a lod, and a recorded
- *  call and
+ *  point, each render switch in both directions and a lod, a shadow and a
+ *  trace object, and a recorded call and
  *  csh. A directive the model
  *  does not carry has its
  *  failure arm go unexecuted, which is how this sweep quietly stops covering
  *  the writer whenever the format grows. */
 const char * kRichModel = "mtllib m.mtl\n"
                           "maplib maps.map\n"
+                          "shadow_obj shade.obj\n"
+                          "trace_obj trace.obj\n"
                           "call parts.obj 1\n"
                           "csh -date\n"
                           "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
@@ -2177,19 +2179,100 @@ TEST(ObjLine, AMaterialAlreadyInForceIsNotRepeated) {
 TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
   // 3.14: the free-form sub-language, and the render attributes that are
   // still unread. A file carrying them still loads. `maplib` and `usemap`
-  // (3.15) and the four render switches (3.16) used to be here too and are
-  // read now, which is why they are not in this list.
+  // (3.15), the four render switches (3.16) and the two object references
+  // (3.17) used to be here too and are read now, which is why they are not
+  // in this list.
   GMDL_Obj * obj = load_text("v 0 0 0\n"
                              "vp 0.5\n"
                              "cstype bezier\n"
                              "deg 3\n"
-                             "shadow_obj shadow.obj\n"
-                             "trace_obj trace.obj\n"
+                             "ctech cparm 0.5\n"
+                             "stech cparma 4 4\n"
+                             "mg 1 0.5\n"
                              "f 1 1 1\n");
   ASSERT_NE(obj, nullptr);
   EXPECT_EQ(obj->vertex_count, 1u);
   EXPECT_EQ(obj->face_count, 1u);
   EXPECT_EQ(obj->statement_count, 0u);
+  gmdl_obj_free(obj);
+}
+
+//
+// `shadow_obj` and `trace_obj` (3.17). Two paths to other OBJ documents,
+// recorded and never opened. The specification calls them one per file;
+// they are lists here because a document carrying two would otherwise lose
+// one silently, which is the defect `mtllib` had.
+//
+
+TEST(ObjRenderObject, BothArePathsAndBothAreKept) {
+  GMDL_Obj * obj = load_text("shadow_obj shade.obj\n"
+                             "trace_obj trace.obj\n"
+                             "v 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->shadow_obj_count, 1u);
+  ASSERT_EQ(obj->trace_obj_count, 1u);
+  EXPECT_STREQ(obj->shadow_objs[0].path, "shade.obj");
+  EXPECT_STREQ(obj->trace_objs[0].path, "trace.obj");
+  gmdl_obj_free(obj);
+}
+
+// The whole line is the path, as it is for `mtllib` (3.8) - Blender exports
+// a document saved as `my model.obj` with spaces intact, and nothing says a
+// shadow object is named more carefully than a material library.
+TEST(ObjRenderObject, APathKeepsItsSpacesAndEveryLineIsKept) {
+  GMDL_Obj * obj = load_text("shadow_obj my shadow.obj\n"
+                             "shadow_obj second.obj\n"
+                             "v 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->shadow_obj_count, 2u);
+  EXPECT_STREQ(obj->shadow_objs[0].path, "my shadow.obj");
+  EXPECT_STREQ(obj->shadow_objs[1].path, "second.obj")
+      << "the specification says one per file; a file that says two keeps "
+         "both rather than losing one";
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjRenderObject, ABareDirectiveAddsNoEntry) {
+  GMDL_Obj * obj = load_text("shadow_obj a.obj\nshadow_obj\n"
+                             "trace_obj\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->shadow_obj_count, 1u);
+  EXPECT_EQ(obj->trace_obj_count, 0u);
+  EXPECT_EQ(obj->trace_objs, nullptr);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjRenderObject, APathTooLongIsRefused) {
+  std::string path(GMDL_OBJ_MAX_PATH_LENGTH, 'p');
+  EXPECT_EQ(load_text_expecting_failure("shadow_obj " + path + "\n"),
+      GMDL_ERR_LIMIT);
+  EXPECT_EQ(load_text_expecting_failure("trace_obj " + path + "\n"),
+      GMDL_ERR_LIMIT);
+}
+
+TEST(ObjDump, BothObjectReferencesSurviveARoundTrip) {
+  GMDL_Obj * obj = load_text("shadow_obj my shadow.obj\n"
+                             "shadow_obj second.obj\n"
+                             "trace_obj trace.obj\n"
+                             "v 0 0 0\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->shadow_obj_count, 2u);
+  EXPECT_STREQ(again->shadow_objs[0].path, "my shadow.obj");
+  EXPECT_STREQ(again->shadow_objs[1].path, "second.obj");
+  ASSERT_EQ(again->trace_obj_count, 1u);
+  EXPECT_STREQ(again->trace_objs[0].path, "trace.obj");
+  gmdl_obj_free(again);
   gmdl_obj_free(obj);
 }
 
@@ -2661,6 +2744,10 @@ const LimitCase kLimitCases[] = {
     // one attribute back and forth would reuse two records for ever.
     {offsetof(GMDL_Limits, max_render_states), "max_render_states",
         {"lod 1\nlod 2\nlod 3\n"}},
+    {offsetof(GMDL_Limits, max_shadow_objs), "max_shadow_objs",
+        {"shadow_obj a.obj\nshadow_obj b.obj\nshadow_obj c.obj\n"}},
+    {offsetof(GMDL_Limits, max_trace_objs), "max_trace_objs",
+        {"trace_obj a.obj\ntrace_obj b.obj\ntrace_obj c.obj\n"}},
 };
 
 } // namespace
