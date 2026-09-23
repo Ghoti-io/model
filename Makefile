@@ -967,7 +967,49 @@ endif
 # integer field, and neither half of the gate was watching. The same reasoning
 # does not extend to float-divide-by-zero, which IEEE defines.
 UBSAN_CHECKS := undefined,float-cast-overflow
-ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) -fno-sanitize-recover=$(UBSAN_CHECKS) -fno-omit-frame-pointer -g
+# The gate's own -O, pinned rather than inherited. ASAN_CFLAGS starts from
+# $(CFLAGS), so without this the sanitizer tree silently tracks the release
+# level - it is -O2 today because the release build is, and it would become
+# -O3 the day that did, with nobody deciding it.
+#
+# The argument for inheriting is that strict-aliasing and signed-overflow
+# assumptions are inert at -O0 and live at -O2, so a UB gate should run at the
+# level that ships. That is true about the *optimiser* and says nothing about
+# what the *sanitizer sees*, and the two weld into one sentence very easily.
+# The text session made that argument, measured it, and withdrew it. Measured
+# again here on this library's own ASAN_CFLAGS, one defect per program so
+# that halting at the first finding cannot hide a later one:
+#
+#                          -O1         -O2
+#   heap-use-after-free    caught      caught
+#   heap-buffer-overflow   caught      caught
+#   stack-buffer-overflow  caught      caught
+#   use-after-scope        caught      caught
+#   signed overflow        caught      caught
+#   float-cast overflow    caught      caught
+#   strict aliasing        NOT caught  NOT caught
+#
+# Nothing the sanitizer can see depends on the level, so inheriting never
+# bought the coverage the argument implied. The last row is the one that
+# decides it: aliasing is the hazard the argument names, and no sanitizer in
+# this toolchain reports it at any level - check-aliasing exists because of
+# that, and it rejected the planted violation here at compile time, which is
+# where that class has to be caught.
+#
+# use-after-scope was tested because the optimiser can dissolve the scope it
+# depends on; it did not differ. That row is the reason to have measured
+# rather than copied text's table.
+#
+# What pinning buys, both specific to this library. FUZZ_SAN is -O1, so the
+# gate and the fuzzers now share one codegen and a fuzz artifact reproduces
+# under test-asan without a level change in between. And the gate stops
+# moving silently when the release level moves.
+#
+# For a trace that needs reading, `make test-asan BUILD=debug
+# CUTIL_PC=ghoti.io-cutil-0` gives -O0. Trace quality is NOT the argument
+# here: text measured the reports identical frame for frame and did not claim
+# it, and neither does this.
+ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) -fno-sanitize-recover=$(UBSAN_CHECKS) -fno-omit-frame-pointer -g -O1
 # The instrumented-coverage tree, kept apart from the release objects for the
 # same reason the sanitizer ones are: a plain `make` must never be able to
 # find an object built with flags it did not ask for.
