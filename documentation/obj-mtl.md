@@ -493,14 +493,64 @@ each would become a field on every face, describing something no consumer of
 this library asks about. `shadow_obj` and `trace_obj` are the two carrying
 real data - paths - and section 12 keeps the question open.
 
-**Texture map libraries**: `maplib` and `usemap`. These stand to texture maps
-as `mtllib` and `usemtl` do to materials, and almost nothing writes them -
-exporters put the map in the `.mtl` instead (4.5). Reading them means a
-second name-to-index mapping beside the material one, for a feature with no
-observed users.
+`maplib` and `usemap` were a third group here until 2026-09-23. They are
+read now; 3.15 is what they do and why the argument for leaving them out did
+not survive being written down.
 
-A line whose directive is none of the above and none of 3.1-3.13 is skipped,
-which is how a file carrying an exporter's private extension still loads.
+A line whose directive is none of the above and none of 3.1-3.13 or 3.15 is
+skipped, which is how a file carrying an exporter's private extension still
+loads.
+
+### 3.15 `maplib path` and `usemap name`
+
+The texture-map pair, standing to texture maps as `mtllib` and `usemtl` do
+to materials. Both are read, and each mirrors its material counterpart
+exactly.
+
+`maplib` keeps the **whole of each line** as one path, blanks at either end
+dropped, and keeps **every line** in order, in `GMDL_Obj.maplibs` with
+`GMDL_Obj.maplib_count`. A bare `maplib` names no library and contributes no
+entry, so the dump does not write back a line the document never had. There
+is no compatibility scalar beside the list, because this list had no
+predecessor to be compatible with.
+
+`usemap` sets the texture map for the elements that follow - faces,
+polylines and points alike, the same three `usemtl` reaches. The whole line
+is the name (3.7), a bare `usemap` is `GMDL_ERR_FORMAT`, and an over-long one
+is `GMDL_ERR_LIMIT` (3.9). Each distinct name gets an index in order of first
+use, recorded in `GMDL_Obj.map_mappings`; a repeated name reuses its index;
+elements carry the index in `map_index` and the consumer resolves the name.
+This parser opens nothing.
+
+**`usemap off` is the one thing `usemtl` has no equivalent for.** It returns
+the state to "no map", which is `map_index == -1` - the same value an element
+declared before any `usemap` carries, because the format cannot tell those
+two apart either. `off` is reserved, so a texture map genuinely called `off`
+cannot be named; that is the trade `s off` already makes for smoothing
+groups (3.11), and it is the format's own. It also makes the dump simpler
+than the material one: section 9 writes polylines and points in two passes
+because OBJ cannot turn a *material* off, and maps need none of that, since
+every state a parse can produce has a spelling.
+
+**No reference reads either directive.** Measured 2026-09-23: Blender 4.3.2
+given a file carrying `maplib a.map b.map`, `usemap chrome` and `usemap off`
+prints `OBJ element not recognized` for all three and loads the geometry
+without them. So the documentation's several-paths-on-one-`maplib`-line
+reading is settled here by this library's own rule rather than by a
+reference, which is the difference from 3.8 - there, Blender's handling of
+`mtllib a.mtl b.mtl` was the evidence.
+
+**The reason for leaving them out did not hold.** 3.14 gave two: "almost
+nothing writes them", and that reading them "means a second name-to-index
+mapping beside the material one". The first is a claim about the corpus, and
+the corpus is one exporter's output; the second is a description of the work,
+and the work is one array and one `int32_t` per element, reusing the shape
+`usemtl` already has. Neither is a reason a file that carries them should
+lose them.
+
+`GMDL_Limits.max_maplibs` and `GMDL_Limits.max_maps` cap the two counts, and
+like every other record cap they default to 0, meaning the size of the input
+is the bound.
 
 ---
 
@@ -780,6 +830,8 @@ assuming a surface would record something the file never said.
 | `max_materials` | 0 | distinct `usemtl` names in OBJ; `newmtl` in MTL |
 | `max_statements` | 0 | `call` and `csh` records |
 | `max_mtllibs` | 0 | `mtllib` records |
+| `max_maplibs` | 0 | `maplib` records |
+| `max_maps` | 0 | distinct `usemap` names |
 
 `0` means no limit. When a record would take a count from `limit` to
 `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
@@ -994,9 +1046,9 @@ wrong; it cannot preserve an order it does not keep, and of the two answers
 it lands on the one a single-texture renderer wants. A test pins the order
 so it stays deliberate.
 
-The dump writes `usemtl` when the material changes, `s` when the smoothing
-group does, `g` for each group before its faces, and relative indices as
-absolute ones.
+The dump writes `usemtl` when the material changes, `usemap` when the
+texture map does, `s` when the smoothing group does, `g` for each group
+before its faces, and relative indices as absolute ones.
 
 Polylines and points are written in two passes, before the faces and after,
 split on whether they name a material. OBJ can change the material in force
@@ -1027,6 +1079,16 @@ That last one is not a state a parse can reach: `material_index` moves from
 -1 to a mapping and never back, because OBJ can change the material in force
 but cannot turn it off. A model built by hand can hold it, and the dump then
 writes nothing, so the reload gives the element the previous material.
+
+**None of that applies to texture maps**, which is worth saying because the
+two look alike everywhere else. `usemap off` is a spelling for "no map", so
+an element naming none while one is in force writes correctly, the two-pass
+split buys maps nothing, and `map_index` moving back to -1 is an ordinary
+state rather than an unwritable one. The one arm with no parse that reaches
+it is a `map_index` naming no mapping, which a hand-built model can hold and
+the dump writes as `usemap off` - the honest answer, where the material
+fallback can write `usemtl white` only because the format says what an
+unnamed material looks like.
 
 ---
 

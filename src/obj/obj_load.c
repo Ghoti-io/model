@@ -67,8 +67,10 @@ typedef struct {
   GCU_Array points;
   GCU_Array groups;
   GCU_Array material_mappings;
+  GCU_Array map_mappings;
   GCU_Array statements;
   GCU_Array mtllibs;
+  GCU_Array maplibs;
   const GMDL_Allocator * allocator;
 } obj_builder_t;
 
@@ -98,8 +100,12 @@ static bool obj_builder_init(
           sizeof(GMDL_Obj_Material_Mapping), 4, allocator)
       && gcu_array_create_in_place(
           &b->statements, sizeof(GMDL_Obj_Statement), 4, allocator)
+      && gcu_array_create_in_place(&b->map_mappings,
+          sizeof(GMDL_Obj_Map_Mapping), 4, allocator)
       && gcu_array_create_in_place(
-          &b->mtllibs, sizeof(GMDL_Obj_Mtllib), 4, allocator);
+          &b->mtllibs, sizeof(GMDL_Obj_Mtllib), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->maplibs, sizeof(GMDL_Obj_Maplib), 4, allocator);
 }
 
 /**
@@ -118,6 +124,7 @@ static void obj_builder_destroy(obj_builder_t * b) {
     gcu_allocator_free(b->allocator, statement->text);
   }
   gcu_array_destroy_in_place(&b->mtllibs);
+  gcu_array_destroy_in_place(&b->maplibs);
   gcu_array_destroy_in_place(&b->vertices);
   gcu_array_destroy_in_place(&b->colors);
   gcu_array_destroy_in_place(&b->texcoords);
@@ -128,6 +135,7 @@ static void obj_builder_destroy(obj_builder_t * b) {
   gcu_array_destroy_in_place(&b->points);
   gcu_array_destroy_in_place(&b->groups);
   gcu_array_destroy_in_place(&b->material_mappings);
+  gcu_array_destroy_in_place(&b->map_mappings);
   gcu_array_destroy_in_place(&b->statements);
 }
 
@@ -438,6 +446,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
 
   long current_group = -1;          // Index of the active group.
   int32_t current_material = -1;    // Material set by the last "usemtl".
+  // Texture map set by the last "usemap"; -1 is "none", which is both the
+  // state a file starts in and what "usemap off" returns it to.
+  int32_t current_map = -1;
   // Smoothing group set by the last "s"; 0 is the format's own default, so a
   // file with no "s" line leaves every face at 0 and writes none back.
   int32_t current_smoothing = 0;
@@ -546,6 +557,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       memset(&face, 0, sizeof(face));
       face.count = 0;
       face.material_index = current_material;
+      face.map_index = current_map;
       face.smoothing_group = current_smoothing;
       face.overflow = NULL;
 
@@ -694,6 +706,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       element.start = gcu_array_count(&builder.line_vertices);
       element.count = 0;
       element.material_index = current_material;
+      element.map_index = current_map;
 
       const char * cursor = rest;
       while (*cursor) {
@@ -787,6 +800,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         }
         stored->vertex = obj_index(v, vertex_count);
         stored->material_index = current_material;
+        stored->map_index = current_map;
         declared++;
       }
 
@@ -884,6 +898,53 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       }
       current_material = mapped;
     }
+    else if (gmdl_line_is(line_text, "usemap", &rest)) {
+      // `usemap` is `usemtl` for texture maps (3.15): the whole line is the
+      // name, a bare one is GMDL_ERR_FORMAT, and an over-long one is
+      // GMDL_ERR_LIMIT. The one thing it has that `usemtl` does not is a
+      // spelling for "none".
+      char map_name[GMDL_OBJ_MAX_NAME_LENGTH];
+      GMDL_Result named = gmdl_rest_of_line(rest, map_name, sizeof(map_name));
+      if (named != GMDL_OK) {
+        result = named;
+        goto cleanup;
+      }
+
+      if (strcmp(map_name, "off") == 0) {
+        // The format reserves the word, so a map really called "off" cannot
+        // be named - the same trade `s off` already makes for smoothing.
+        current_map = -1;
+      }
+      else {
+        int32_t mapped = -1;
+        for (size_t i = 0; i < gcu_array_count(&builder.map_mappings); i++) {
+          GMDL_Obj_Map_Mapping * mapping =
+              (GMDL_Obj_Map_Mapping *)gcu_array_at(&builder.map_mappings, i);
+          if (strcmp(mapping->name, map_name) == 0) {
+            mapped = mapping->index;
+            break;
+          }
+        }
+        if (mapped < 0) {
+          if (gmdl_limit_reached(
+                  gcu_array_count(&builder.map_mappings), limits->max_maps)) {
+            result = GMDL_ERR_LIMIT;
+            goto cleanup;
+          }
+          GMDL_Obj_Map_Mapping * mapping =
+              (GMDL_Obj_Map_Mapping *)gcu_array_emplace(&builder.map_mappings);
+          if (!mapping) {
+            result = GMDL_ERR_OOM;
+            goto cleanup;
+          }
+          memset(mapping, 0, sizeof(*mapping));
+          memcpy(mapping->name, map_name, strlen(map_name) + 1);
+          mapping->index = (int32_t)gcu_array_count(&builder.map_mappings) - 1;
+          mapped = mapping->index;
+        }
+        current_map = mapped;
+      }
+    }
     else if (gmdl_line_is(line_text, "mtllib", &rest)) {
       // The whole line is the path, spaces included - Blender exports
       // `mtllib my model.mtl` for a document saved under that name, and
@@ -918,6 +979,33 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // end of this function says what happened and why the field is
       // derived now.
     }
+    else if (gmdl_line_is(line_text, "maplib", &rest)) {
+      // Read exactly as `mtllib` is, whole line and all, and kept in a list
+      // for the same reason. The documentation allows several paths on one
+      // `maplib` line just as it does for `mtllib`; no reference settles
+      // which reading is right, because no reference implements the
+      // directive (3.15), so this follows the rule the library already has.
+      // A bare `maplib` names no library and contributes no entry, so the
+      // dump does not write back a line the document never had.
+      GMDL_Obj_Maplib entry;
+      GMDL_Result named =
+          gmdl_rest_of_line(rest, entry.path, sizeof(entry.path));
+      if (named == GMDL_OK) {
+        if (gmdl_limit_reached(
+                gcu_array_count(&builder.maplibs), limits->max_maplibs)) {
+          result = GMDL_ERR_LIMIT;
+          goto cleanup;
+        }
+        if (!gcu_array_append(&builder.maplibs, &entry)) {
+          result = GMDL_ERR_OOM;
+          goto cleanup;
+        }
+      }
+      else if (named != GMDL_ERR_FORMAT) {
+        result = named;
+        goto cleanup;
+      }
+    }
     // Anything else - comments, unsupported directives - is ignored, which is
     // what the OBJ specification asks readers to do.
   }
@@ -945,7 +1033,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         &builder.material_mappings, &obj->material_mapping_count);
     obj->statements =
         obj_steal_into(&builder.statements, &obj->statement_count);
+    obj->map_mappings =
+        obj_steal_into(&builder.map_mappings, &obj->map_mapping_count);
     obj->mtllibs = obj_steal_into(&builder.mtllibs, &obj->mtllib_count);
+    obj->maplibs = obj_steal_into(&builder.maplibs, &obj->maplib_count);
 
     // The compatibility field is derived from the list rather than
     // maintained alongside it, so the two cannot disagree. They did: a bare
@@ -1013,6 +1104,7 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   const GMDL_Allocator * allocator = obj->allocator;
 
   gcu_allocator_free(allocator, obj->mtllibs);
+  gcu_allocator_free(allocator, obj->maplibs);
   gcu_allocator_free(allocator, obj->vertices);
   gcu_allocator_free(allocator, obj->colors);
   gcu_allocator_free(allocator, obj->texcoords);
@@ -1028,6 +1120,7 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   gcu_allocator_free(allocator, obj->points);
   gcu_allocator_free(allocator, obj->groups);
   gcu_allocator_free(allocator, obj->material_mappings);
+  gcu_allocator_free(allocator, obj->map_mappings);
   if (obj->statements) {
     for (size_t i = 0; i < obj->statement_count; i++) {
       gcu_allocator_free(allocator, obj->statements[i].text);

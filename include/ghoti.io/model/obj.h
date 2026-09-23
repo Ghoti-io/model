@@ -60,6 +60,17 @@ typedef struct {
 } GMDL_Obj_Mtllib;
 
 /**
+ * @brief One `maplib` path.
+ *
+ * The same shape as ::GMDL_Obj_Mtllib and a separate type on purpose: the
+ * two lists name different kinds of library, and a function that took either
+ * would let a caller hand it the wrong one and get no complaint.
+ */
+typedef struct {
+  char path[GMDL_OBJ_MAX_PATH_LENGTH]; ///< The path, whole line, NUL-terminated.
+} GMDL_Obj_Maplib;
+
+/**
  * @brief A 3D vertex.
  */
 typedef struct {
@@ -140,6 +151,15 @@ typedef struct {
   size_t count;        ///< Number of vertices in the face.
   int32_t material_index; ///< Index into the material mappings, or -1.
   /**
+   * Index into the map mappings (`usemap`), or -1 for none.
+   *
+   * State exactly as `usemtl` is, with one difference that matters to the
+   * dump: -1 is a value the file can *write*. `usemap off` turns texture
+   * mapping off, so an element naming no map after one that named a map has
+   * an OBJ spelling, which is not true of materials (3.15, 9).
+   */
+  int32_t map_index;
+  /**
    * Smoothing group in force for this face, or 0 for none.
    *
    * `s` is state, like `usemtl`: it applies to every face after it until the
@@ -175,6 +195,7 @@ typedef struct {
   size_t start; ///< Index of this line's first entry in `line_vertices`.
   size_t count; ///< Number of entries.
   int32_t material_index; ///< Index into the material mappings, or -1.
+  int32_t map_index;      ///< Index into the map mappings, or -1.
 } GMDL_Obj_Line;
 
 /**
@@ -186,6 +207,7 @@ typedef struct {
 typedef struct {
   int32_t vertex;         ///< Vertex index (0-based).
   int32_t material_index; ///< Index into the material mappings, or -1.
+  int32_t map_index;      ///< Index into the map mappings, or -1.
 } GMDL_Obj_Point;
 
 /**
@@ -215,6 +237,19 @@ typedef struct {
   char name[GMDL_OBJ_MAX_NAME_LENGTH]; ///< Material name.
   int32_t index;                       ///< Index assigned to the material.
 } GMDL_Obj_Material_Mapping;
+
+/**
+ * @brief The association between a `usemap` name and the index elements use.
+ *
+ * The same shape ::GMDL_Obj_Material_Mapping has, because `usemap` is the
+ * same kind of directive as `usemtl`: a name, in force until the next one,
+ * resolved by the consumer against a library this parser does not open
+ * (3.15). Kept as its own type for the reason ::GMDL_Obj_Maplib is.
+ */
+typedef struct {
+  char name[GMDL_OBJ_MAX_NAME_LENGTH]; ///< Texture map name.
+  int32_t index;                       ///< Index assigned to the map.
+} GMDL_Obj_Map_Mapping;
 
 /**
  * @brief Which general statement a ::GMDL_Obj_Statement holds.
@@ -299,6 +334,16 @@ typedef struct {
   size_t material_mapping_count;                 ///< Number of mappings.
 
   /**
+   * `usemap` name-to-index mappings, or NULL when the file named no map.
+   *
+   * Assigned in order of first use, the way ::material_mappings are, and
+   * read the same way: elements carry the index, the consumer resolves the
+   * name. `usemap off` names no map and assigns no index.
+   */
+  GMDL_Obj_Map_Mapping * map_mappings;
+  size_t map_mapping_count; ///< Number of map mappings.
+
+  /**
    * `call` and `csh` statements, in file order, or NULL.
    *
    * Recorded, never executed - see ::GMDL_Obj_Statement. Their position
@@ -328,6 +373,18 @@ typedef struct {
    * differs only for documents that were losing libraries anyway.
    */
   char mtllib[GMDL_OBJ_MAX_PATH_LENGTH];
+
+  /**
+   * Every `maplib` path the document named, in the order it named them.
+   *
+   * Read the way ::mtllibs is - the whole line is one path - and for the
+   * same reason, which is this library's rule rather than a reference's:
+   * measured 2026-09-23, Blender 4.3.2 does not implement `maplib` at all
+   * and prints "OBJ element not recognized" for it (3.15). There is no
+   * compatibility scalar here because this list had no predecessor.
+   */
+  GMDL_Obj_Maplib * maplibs;
+  size_t maplib_count; ///< Number of `maplib` paths.
 
   const GMDL_Allocator * allocator; ///< Allocator that owns the arrays above.
 } GMDL_Obj;

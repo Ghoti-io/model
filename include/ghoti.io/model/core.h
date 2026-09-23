@@ -81,6 +81,8 @@ typedef struct GMDL_Limits {
                           ///< mappings.
   size_t max_statements;  ///< Cap on `call` and `csh` records.
   size_t max_mtllibs;     ///< Cap on `mtllib` records.
+  size_t max_maplibs;     ///< Cap on `maplib` records.
+  size_t max_maps;        ///< Cap on `usemap` name-to-index mappings.
 } GMDL_Limits;
 
 /**

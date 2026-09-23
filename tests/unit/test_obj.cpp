@@ -1303,6 +1303,12 @@ TEST(ObjNames, OverLongMtllibPathIsRefused) {
       GMDL_ERR_LIMIT);
 }
 
+TEST(ObjNames, AMaplibPathTooLongIsRefused) {
+  std::string path(GMDL_OBJ_MAX_PATH_LENGTH, 'p');
+  EXPECT_EQ(load_text_expecting_failure("maplib " + path + "\n"),
+      GMDL_ERR_LIMIT);
+}
+
 TEST(ObjNames, AMtllibPathThatExactlyFitsIsAccepted) {
   std::string path(GMDL_OBJ_MAX_PATH_LENGTH - 1, 'p');
   GMDL_Obj * obj = load_text("mtllib " + path + "\n");
@@ -1504,12 +1510,15 @@ namespace {
  *  is set and then turned off, polylines with and without texture
  *  references, points, and a material change at the polylines and again
  *  at the points, a polyline and a point declared before any material -
- *  which the dumper writes in a pass of its own - and a recorded call and
+ *  which the dumper writes in a pass of its own - a maplib, a usemap, the
+ *  usemap off that turns it back around, a map change at a polyline and at a
+ *  point, and a recorded call and
  *  csh. A directive the model
  *  does not carry has its
  *  failure arm go unexecuted, which is how this sweep quietly stops covering
  *  the writer whenever the format grows. */
 const char * kRichModel = "mtllib m.mtl\n"
+                          "maplib maps.map\n"
                           "call parts.obj 1\n"
                           "csh -date\n"
                           "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
@@ -1523,7 +1532,9 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "l 1 2\n"
                           "p 3\n"
                           "usemtl red\n"
+                          "usemap chrome\n"
                           "f 1 2 3\n"
+                          "usemap off\n"
                           "g first\n"
                           "usemtl blue\n"
                           "f 1/1 2/2 3/1\n"
@@ -1535,9 +1546,15 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "s off\n"
                           "f 1 2 3\n"
                           "usemtl green\n"
+                          // A map change at a polyline and again at a point.
+                          // The dumper writes each in a pass of its own, and
+                          // a map that never changes there leaves the write
+                          // failure arm of each unreachable.
+                          "usemap etched\n"
                           "l 1 2 3\n"
                           "l 1/1 2/2\n"
                           "usemtl red\n"
+                          "usemap brushed\n"
                           "p 1 2\n";
 
 /** The same lines with no group, so the dumper writes every face in one
@@ -1642,6 +1659,41 @@ TEST(ObjDump, AHandSetMtllibFieldWithNoListIsStillWritten) {
   EXPECT_STREQ(again->mtllibs[0].path, path);
   EXPECT_STREQ(again->mtllib, path);
   gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjDump, AFaceNamingAMapWithNoMappingWritesUsemapOff) {
+  // The map fallback, reached the way the material one below is: by moving
+  // the mapping out from under the face. It writes `usemap off` rather than
+  // inventing a name, because "a map this model cannot name" and "no map"
+  // read back identically and only one of them has a spelling - which is the
+  // difference from the material fallback, where the format defines what an
+  // unnamed material looks like.
+  GMDL_Obj * obj = load_text("v 0 0 0\nusemap chrome\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->map_mapping_count, 1u);
+  ASSERT_EQ(obj->face_count, 1u);
+  ASSERT_EQ(obj->faces[0].map_index, obj->map_mappings[0].index);
+  obj->map_mappings[0].index += 100;
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  EXPECT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  std::string text;
+  FILE * back = fopen(out.path(), "rb");
+  ASSERT_NE(back, nullptr);
+  char buf[256];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), back)) > 0) text.append(buf, n);
+  fclose(back);
+  EXPECT_NE(text.find("usemap off"), std::string::npos) << text;
+  EXPECT_EQ(text.find("usemap chrome"), std::string::npos)
+      << "the name belongs to a mapping the face no longer reaches:\n"
+      << text;
   gmdl_obj_free(obj);
 }
 
@@ -2010,8 +2062,9 @@ TEST(ObjLine, AMaterialAlreadyInForceIsNotRepeated) {
 }
 
 TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
-  // 3.14: the free-form sub-language, the render attributes and the
-  // texture map library pair. A file carrying them still loads.
+  // 3.14: the free-form sub-language and the render attributes. A file
+  // carrying them still loads. `maplib` and `usemap` used to be here too and
+  // are read now (3.15), which is why they are not in this list.
   GMDL_Obj * obj = load_text("v 0 0 0\n"
                              "vp 0.5\n"
                              "cstype bezier\n"
@@ -2021,13 +2074,135 @@ TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
                              "lod 4\n"
                              "shadow_obj shadow.obj\n"
                              "trace_obj trace.obj\n"
-                             "maplib maps.mtl\n"
-                             "usemap chrome\n"
                              "f 1 1 1\n");
   ASSERT_NE(obj, nullptr);
   EXPECT_EQ(obj->vertex_count, 1u);
   EXPECT_EQ(obj->face_count, 1u);
   EXPECT_EQ(obj->statement_count, 0u);
+  gmdl_obj_free(obj);
+}
+
+//
+// `maplib` and `usemap` (3.15). The texture-map pair, standing to texture
+// maps as `mtllib` and `usemtl` do to materials. Measured 2026-09-23:
+// Blender 4.3.2 implements neither, printing "OBJ element not recognized"
+// and skipping the line, so nothing here follows a reference - it follows
+// the readings this library already made for the material pair.
+//
+
+TEST(ObjMap, EveryMaplibLineIsKeptInOrder) {
+  GMDL_Obj * obj = load_text(
+      "maplib first.map\nmaplib second one.map\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->maplib_count, 2u);
+  EXPECT_STREQ(obj->maplibs[0].path, "first.map");
+  // The whole line is the path, as it is for `mtllib` (3.8). No reference
+  // settles the several-paths-per-line reading because no reference reads
+  // the directive; this is the library's own rule applied consistently.
+  EXPECT_STREQ(obj->maplibs[1].path, "second one.map");
+  gmdl_obj_free(obj);
+}
+
+// A bare `maplib` names no library, so it must not append an empty entry -
+// the dump would write back a `maplib ` line the document never had.
+TEST(ObjMap, BareMaplibAddsNoEntryAndClearsNothing) {
+  GMDL_Obj * obj = load_text("maplib a.map\nmaplib\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->maplib_count, 1u);
+  EXPECT_STREQ(obj->maplibs[0].path, "a.map");
+  gmdl_obj_free(obj);
+}
+
+// Indices are assigned in order of first use and a repeated name reuses its
+// own, which is what `usemtl` does (3.7).
+TEST(ObjMap, NamesAreAssignedIndicesInOrderOfFirstUse) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "usemap chrome\nf 1 1 1\n"
+                             "usemap rust\nf 1 1 1\n"
+                             "usemap chrome\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->map_mapping_count, 2u);
+  EXPECT_STREQ(obj->map_mappings[0].name, "chrome");
+  EXPECT_STREQ(obj->map_mappings[1].name, "rust");
+  ASSERT_EQ(obj->face_count, 3u);
+  EXPECT_EQ(obj->faces[0].map_index, 0);
+  EXPECT_EQ(obj->faces[1].map_index, 1);
+  EXPECT_EQ(obj->faces[2].map_index, 0) << "a repeated name reuses its index";
+  gmdl_obj_free(obj);
+}
+
+// The one thing `usemap` has that `usemtl` does not: a spelling for "none".
+// A face before any `usemap` carries -1 as well, so the two are the same
+// state and the dump cannot tell them apart - which is correct, because the
+// format cannot either.
+TEST(ObjMap, OffReturnsToNoMapAndAssignsNoIndex) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "f 1 1 1\n"
+                             "usemap chrome\nf 1 1 1\n"
+                             "usemap off\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 3u);
+  EXPECT_EQ(obj->faces[0].map_index, -1) << "nothing is in force to begin";
+  EXPECT_EQ(obj->faces[1].map_index, 0);
+  EXPECT_EQ(obj->faces[2].map_index, -1);
+  EXPECT_EQ(obj->map_mapping_count, 1u) << "\"off\" is not a map name";
+  gmdl_obj_free(obj);
+}
+
+// `usemap` applies to every element `usemtl` applies to, so `l` and `p`
+// carry it too. Faces alone would pass a test that only looked at faces.
+TEST(ObjMap, AppliesToPolylinesAndPointsAsWell) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\n"
+                             "usemap chrome\n"
+                             "l 1 2\n"
+                             "p 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->line_count, 1u);
+  ASSERT_EQ(obj->point_count, 1u);
+  EXPECT_EQ(obj->lines[0].map_index, 0);
+  EXPECT_EQ(obj->points[0].map_index, 0);
+  gmdl_obj_free(obj);
+}
+
+// A bare `usemap` names nothing, and there is nothing sensible to do with
+// it: GMDL_ERR_FORMAT, the reading `usemtl` uses (3.7).
+TEST(ObjMap, BareUsemapIsAFormatError) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nusemap\nf 1 1 1\n"),
+      GMDL_ERR_FORMAT);
+}
+
+// The round trip is the half the loader cannot show. Both directives and
+// both states - a named map and the return to none - have to survive, and
+// the "none" half is the one materials cannot do at all (9).
+TEST(ObjMap, TheWholePairSurvivesARoundTrip) {
+  GMDL_Obj * obj = load_text("maplib first.map\nmaplib second one.map\n"
+                             "v 0 0 0\n"
+                             "f 1 1 1\n"
+                             "usemap chrome\nf 1 1 1\n"
+                             "usemap off\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->maplib_count, 2u);
+  EXPECT_STREQ(again->maplibs[0].path, "first.map");
+  EXPECT_STREQ(again->maplibs[1].path, "second one.map");
+  ASSERT_EQ(again->map_mapping_count, 1u);
+  EXPECT_STREQ(again->map_mappings[0].name, "chrome");
+  ASSERT_EQ(again->face_count, 3u);
+  EXPECT_EQ(again->faces[0].map_index, -1);
+  EXPECT_EQ(again->faces[1].map_index, 0);
+  EXPECT_EQ(again->faces[2].map_index, -1)
+      << "`usemap off` is the spelling that makes this writable";
+  gmdl_obj_free(again);
   gmdl_obj_free(obj);
 }
 
@@ -2170,6 +2345,10 @@ const LimitCase kLimitCases[] = {
         {"call a\ncall b\ncall c\n", "csh a\ncsh b\ncsh c\n"}},
     {offsetof(GMDL_Limits, max_mtllibs), "max_mtllibs",
         {"mtllib a.mtl\nmtllib b.mtl\nmtllib c.mtl\n"}},
+    {offsetof(GMDL_Limits, max_maplibs), "max_maplibs",
+        {"maplib a.map\nmaplib b.map\nmaplib c.map\n"}},
+    {offsetof(GMDL_Limits, max_maps), "max_maps",
+        {"usemap a\nusemap b\nusemap c\n"}},
 };
 
 } // namespace

@@ -1,0 +1,15 @@
+maplib a.map
+maplib two words.map
+mtllib a.mtl
+mtllib b.mtl
+v 0 0 0
+v 1 0 0
+usemap chrome
+l 1 2
+p 1
+usemtl red
+f 1 1 1
+usemap off
+f 1 1 1
+usemap chrome
+f 1 1 1

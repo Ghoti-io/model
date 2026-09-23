@@ -109,6 +109,7 @@ static int obj_dump_face(FILE * fd, const GMDL_Obj_Face * face) {
  */
 typedef struct {
   int32_t material;  ///< Material index the file currently names.
+  int32_t map;       ///< Texture map index the file currently names.
   int32_t smoothing; ///< Smoothing group currently in force.
 } obj_dump_state_t;
 
@@ -159,6 +160,44 @@ static int obj_dump_material_change(
 }
 
 /**
+ * Move the file's texture map to @p wanted, writing a `usemap` if that
+ * changes it.
+ *
+ * This is obj_dump_material_change() without its hard case. A map **can** be
+ * turned off - `usemap off` is the format's own spelling for it - so an
+ * element naming none after one that named a map is writable, and the
+ * lines-and-points split that materials need (below) buys maps nothing.
+ *
+ * An index naming no mapping is written as `usemap off`, because "a map this
+ * model cannot name" and "no map" read back identically and only one of them
+ * has a spelling. That differs from the material fallback, which writes
+ * `usemtl white`: the format gives an unnamed material a defined appearance
+ * and gives an unnamed map nothing.
+ *
+ * @param fd Destination.
+ * @param obj The model.
+ * @param wanted The map the element names.
+ * @param state Carried state, updated.
+ * @return 0, or -1 on a write failure.
+ */
+static int obj_dump_map_change(
+    FILE * fd, const GMDL_Obj * obj, int32_t wanted, obj_dump_state_t * state) {
+  if (wanted == state->map) {
+    return 0;
+  }
+  state->map = wanted;
+  if (wanted != -1) {
+    for (size_t j = 0; j < obj->map_mapping_count; j++) {
+      if (obj->map_mappings[j].index == wanted) {
+        return fprintf(fd, "usemap %s\n", obj->map_mappings[j].name) < 0 ? -1
+                                                                        : 0;
+      }
+    }
+  }
+  return fprintf(fd, "usemap off\n") < 0 ? -1 : 0;
+}
+
+/**
  * Print a run of faces, emitting "usemtl" and "s" whenever they change.
  *
  * @param fd Destination.
@@ -176,6 +215,9 @@ static int obj_dump_face_range(FILE * fd, const GMDL_Obj * obj, size_t start,
   for (size_t i = start; i < start + count && i < obj->face_count; i++) {
     if (obj_dump_material_change(fd, obj, obj->faces[i].material_index, state)
         < 0) {
+      return -1;
+    }
+    if (obj_dump_map_change(fd, obj, obj->faces[i].map_index, state) < 0) {
       return -1;
     }
     if (obj->faces[i].smoothing_group != state->smoothing) {
@@ -231,6 +273,9 @@ static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
         < 0) {
       return -1;
     }
+    if (obj_dump_map_change(fd, obj, obj->lines[i].map_index, state) < 0) {
+      return -1;
+    }
     if (fprintf(fd, "l") < 0) {
       return -1;
     }
@@ -261,6 +306,9 @@ static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
         < 0) {
       return -1;
     }
+    if (obj_dump_map_change(fd, obj, obj->points[i].map_index, state) < 0) {
+      return -1;
+    }
     if (fprintf(fd, "p %lld\n", (long long)obj->points[i].vertex + 1) < 0) {
       return -1;
     }
@@ -286,6 +334,14 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
   if (obj->mtllib_count == 0 && obj->mtllib[0] != '\0'
       && fprintf(fd, "mtllib %s\n", obj->mtllib) < 0) {
     return GMDL_ERR_IO;
+  }
+
+  // The texture map libraries, read and written the way the material ones
+  // are (3.15).
+  for (size_t i = 0; i < obj->maplib_count; i++) {
+    if (fprintf(fd, "maplib %s\n", obj->maplibs[i].path) < 0) {
+      return GMDL_ERR_IO;
+    }
   }
 
   for (size_t i = 0; i < obj->vertex_count; i++) {
@@ -319,9 +375,10 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     }
   }
 
-  // The parser starts with no material and no smoothing group in force, so
-  // the dump does too; a model whose faces all say zero writes no "s" at all.
-  obj_dump_state_t state = {-1, 0};
+  // The parser starts with no material, no texture map and no smoothing
+  // group in force, so the dump does too; a model whose faces all say zero
+  // writes no "s" at all.
+  obj_dump_state_t state = {-1, -1, 0};
 
   // The general statements lead, in file order. Their position relative to
   // the geometry is not recorded - nothing else in this model is ordered

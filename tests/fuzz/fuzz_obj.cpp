@@ -129,6 +129,16 @@ bool names_are_representable(const GMDL_Obj * obj) {
       return false;
     }
   }
+  for (size_t i = 0; i < obj->maplib_count; i++) {
+    if (ends_with_backslash(obj->maplibs[i].path)) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < obj->map_mapping_count; i++) {
+    if (ends_with_backslash(obj->map_mappings[i].name)) {
+      return false;
+    }
+  }
   for (size_t i = 0; i < obj->group_count; i++) {
     if (ends_with_backslash(obj->groups[i].name)) {
       return false;
@@ -164,6 +174,28 @@ const char * material_name(const GMDL_Obj * obj, int32_t index) {
   for (size_t i = 0; i < obj->material_mapping_count; i++) {
     if (obj->material_mappings[i].index == index) {
       return obj->material_mappings[i].name;
+    }
+  }
+  return "?unmapped";
+}
+
+/**
+ * The texture map an element uses, by name.
+ *
+ * By name for the reason material_name() is, and with one extra: a mapping
+ * no element uses is never written, so map_mapping_count is not stable
+ * across a round trip either. An index naming no mapping cannot come from a
+ * parse - every index the parser hands out comes from a mapping it made -
+ * so "?unmapped" here means the parser is wrong, and the reparse would
+ * answer "" because the dump writes `usemap off` for that state.
+ */
+const char * map_name(const GMDL_Obj * obj, int32_t index) {
+  if (index < 0) {
+    return "";
+  }
+  for (size_t i = 0; i < obj->map_mapping_count; i++) {
+    if (obj->map_mappings[i].index == index) {
+      return obj->map_mappings[i].name;
     }
   }
   return "?unmapped";
@@ -232,6 +264,11 @@ void check_round_trip(const GMDL_Obj * obj) {
     REQUIRE(strcmp(obj->mtllibs[i].path, again->mtllibs[i].path) == 0,
         "mtllib path");
   }
+  REQUIRE(obj->maplib_count == again->maplib_count, "maplib_count");
+  for (size_t i = 0; i < obj->maplib_count; i++) {
+    REQUIRE(strcmp(obj->maplibs[i].path, again->maplibs[i].path) == 0,
+        "maplib path");
+  }
 
   for (size_t i = 0; i < obj->vertex_count; i++) {
     REQUIRE(same_float(obj->vertices[i].x, again->vertices[i].x)
@@ -279,6 +316,13 @@ void check_round_trip(const GMDL_Obj * obj) {
     // group rather than carrying it would drift exactly here.
     REQUIRE(obj->faces[i].smoothing_group == again->faces[i].smoothing_group,
         "face smoothing group");
+    // `usemap` is state written between faces exactly as `usemtl` is, and
+    // unlike it can go back to naming nothing - so a dumper that forgot the
+    // `usemap off` would drift here and nowhere else.
+    REQUIRE(strcmp(map_name(obj, obj->faces[i].map_index),
+                map_name(again, again->faces[i].map_index))
+            == 0,
+        "face map");
   }
   for (size_t i = 0; i < obj->line_count; i++) {
     REQUIRE(obj->lines[i].count == again->lines[i].count, "line span");
@@ -286,12 +330,20 @@ void check_round_trip(const GMDL_Obj * obj) {
                 material_name(again, again->lines[i].material_index))
             == 0,
         "line material");
+    REQUIRE(strcmp(map_name(obj, obj->lines[i].map_index),
+                map_name(again, again->lines[i].map_index))
+            == 0,
+        "line map");
   }
   for (size_t i = 0; i < obj->point_count; i++) {
     REQUIRE(strcmp(material_name(obj, obj->points[i].material_index),
                 material_name(again, again->points[i].material_index))
             == 0,
         "point material");
+    REQUIRE(strcmp(map_name(obj, obj->points[i].map_index),
+                map_name(again, again->points[i].map_index))
+            == 0,
+        "point map");
   }
   for (size_t i = 0; i < obj->statement_count; i++) {
     REQUIRE(obj->statements[i].kind == again->statements[i].kind,

@@ -226,13 +226,14 @@ const size_t kGrow = 160;
  * nobody is checking.
  */
 std::string rich_obj() {
-  // Several library lines, not one. The list starts with room for four, so
-  // a single line never makes the array grow and the arm that reports that
-  // growth failing is not in the sweep at all - measured: 5446 appends, none
-  // of them refused, because none of them allocated.
+  // Several of each library line, not one. Both lists start with room for
+  // four, so a single line never makes the array grow and the arm that
+  // reports that growth failing is not in the sweep at all - measured: 5446
+  // appends, none of them refused, because none of them allocated.
   std::string t;
   for (size_t i = 0; i < 6; i++) {
     t += "mtllib library " + std::to_string(i) + ".mtl\n";
+    t += "maplib maps " + std::to_string(i) + ".map\n";
   }
   // Plain vertices first and coloured ones after, so the colour array is
   // padded across a growth as well as appended to - obj_color_append() has an
@@ -258,13 +259,26 @@ std::string rich_obj() {
     }
     if (i % 10 == 0) {
       t += "usemtl a material " + std::to_string(i) + "\n";
+      // Distinct names, so the map mappings grow the way the material ones
+      // do; `off` among them so the dumper's return-to-nothing is swept too.
+      t += (i % 20 ? "usemap a map " + std::to_string(i) : "usemap off");
+      t += "\n";
     }
     t += "f 1/1/1 2/2/1 3/1/1 4/1/1 5/1/1\n";
   }
+  // A map change at a polyline and again at a point: the dumper writes both
+  // in passes of their own, and a state that never changes there leaves the
+  // write-failure arm of each unreachable.
   for (size_t i = 0; i < kGrow; i++) {
+    if (i % 10 == 0) {
+      t += "usemap a map for lines " + std::to_string(i) + "\n";
+    }
     t += "l 1 2 3\n";
   }
   for (size_t i = 0; i < kGrow; i++) {
+    if (i % 10 == 0) {
+      t += "usemap a map for points " + std::to_string(i) + "\n";
+    }
     t += "p 1 2\n";
   }
   for (size_t i = 0; i < kGrow; i++) {
@@ -311,6 +325,7 @@ std::string regrow_obj() {
   std::string t;
   for (size_t i = 0; i < 6; i++) {
     t += "mtllib library " + std::to_string(i) + ".mtl\n";
+    t += "maplib maps " + std::to_string(i) + ".map\n";
   }
   for (size_t i = 0; i < kRegrow; i++) {
     t += "v " + std::to_string(i) + " 0 0\n";
@@ -331,6 +346,8 @@ std::string regrow_obj() {
     }
     if (i % 10 == 0) {
       t += "usemtl a material " + std::to_string(i) + "\n";
+      t += (i % 20 ? "usemap a map " + std::to_string(i) : "usemap off");
+      t += "\n";
     }
     t += "f 1/1/1 2/2/1 3/1/1 4/1/1 5/1/1\n";
   }
