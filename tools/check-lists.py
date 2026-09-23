@@ -279,10 +279,30 @@ recorded_anywhere = set().union(*stamp_recipes.values())
 # rule whose recipe uses $^ is handed to the linker as an input, and it fails
 # with "file format not recognized" - a prerequisite audit stays green
 # through that, and only a build catches it.
+# A rule's recipe does not have to start on the line after its target: this
+# Makefile's house style for a gate is `name: ## help`, then a comment block
+# explaining it, then the recipe.  A pattern that demands adjacency drops
+# every such rule from the population silently - the same "not counted in
+# anything" failure as a wrapped marker, from a different assumption about
+# spelling.  No object rule is written that way today, which is exactly why
+# it would go unnoticed if one were.
+#
+# .PHONY targets are then excluded on purpose rather than by accident. A
+# phony target runs every time, so it has no object that can go stale and
+# needs no stamp - check-aliasing compiles a probe and is correctly out.
+# Excluding it because of the comment lines above its recipe would have been
+# the right answer for the wrong reason, and would have stopped being right
+# the moment someone wrote an object rule in the same style.
+RULE = (r"^([^\s#][^\n:=]*):([^\n]*)\n(?:(?:#[^\n]*|[ \t]*)\n)*"
+        r"((?:\t.*\n)+)")
+phony = set()
+for names in re.findall(r"^\.PHONY:([^\n]*)$", makefile, re.M):
+    phony.update(names.split())
+
 compile_rules = [
     (target, prereqs, body)
-    for target, prereqs, body in re.findall(
-        r"^([^\s#][^\n:=]*):([^\n]*)\n((?:\t.*\n)+)", makefile, re.M)
+    for target, prereqs, body in re.findall(RULE, makefile, re.M)
+    if target.strip() not in phony
     if re.search(r"^\t@?\$+\(\w*C(?:C|XX)\)[^\n]*(?:\s-c\s|\$<|\.c\b|\.cpp\b)",
                  body, re.M)]
 if not compile_rules:
@@ -346,8 +366,9 @@ for stamp, prereqs, body in guarded:
 # check above wrong.
 link_problems = []
 link_lines = 0
-for target, prereqs, body in re.findall(
-        r"^([^\s#][^\n:=]*):([^\n]*)\n((?:\t.*\n)+)", makefile, re.M):
+for target, prereqs, body in re.findall(RULE, makefile, re.M):
+    if target.strip() in phony:
+        continue
     for line in body.splitlines():
         if not re.match(r"\t@?\$+\(\w*C(?:C|XX)\)", line):
             continue
