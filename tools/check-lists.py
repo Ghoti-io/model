@@ -211,7 +211,13 @@ for source, name, count in capacities:
 # not happen is invisible - it looks exactly like a build already current -
 # which is why this is checked here rather than left to a comment.
 
-makefile = read("Makefile")
+# Join backslash continuations first. A wrapped prerequisite list is
+# indented with tabs, so without this the continuation lines read as
+# recipe lines and the rule appears to expand whatever appears in them -
+# order-only prerequisites like $(BUILD_DIR), which are paths and not
+# flags. No rule here is wrapped today; cutil's are, and a gate that
+# cries wolf the first time someone wraps a long line gets switched off.
+makefile = re.sub(r"\\\n", " ", read("Makefile"))
 
 stamp_recipes = {}
 for name, body in re.findall(
