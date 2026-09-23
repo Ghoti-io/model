@@ -380,7 +380,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # coverage target does, because --coverage links the gcov runtime, whose
 # mangle_path check-symbols is right to reject in a shipping library and
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
-TEST_GATES ?= check-symbols check-lists
+TEST_GATES ?= check-symbols check-lists check-aliasing
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -565,7 +565,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-lists
+.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-lists check-aliasing
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -628,6 +628,50 @@ TEST_LD_PATH := $(APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)
 ####################################################################
 # Symbol namespace check
 ####################################################################
+
+check-aliasing: ## Fail if the strict-aliasing warning is not actually armed
+# CFLAGS names -fstrict-aliasing and -Wstrict-aliasing=1, and neither spelling
+# tells you the level that results. -Wall sets the level to 3 on its own, an
+# explicit level beats it from either side, and a later explicit level beats
+# that - so the resolved level depends on the whole command line, and
+# $(EXTRA_CFLAGS) sits at the end of it. `make EXTRA_CFLAGS=-Wstrict-aliasing=3`
+# builds this library with the aliasing optimisation armed and the warning
+# silent, every flag still present and every comment about them still true.
+# The CFLAGS comment has the measured precedence table.
+#
+# So ask the compiler instead of the flag list: compile a violation with the
+# real $(CFLAGS) and require the diagnostic. That reads the level the command
+# line resolves to, which no review of the spelling can do. The design is the
+# chron session's.
+#
+# The probe pins the level at exactly 1. Measured on it: level 1 reports it,
+# and levels 0, 2 and 3 are all silent - so a failure here means the level is
+# wrong, not that the warning is missing, and the message says so. A gate
+# whose diagnosis is one step off sends the next reader after the wrong
+# cause; chron's equivalent blamed a regression that had not happened.
+#
+# The clean file is the control and it does two jobs. It must compile *and* be
+# silent: if both files failed for an unrelated reason - a bad -I, a missing
+# header - the probe's grep would find nothing, and a gate that only asked
+# "no diagnostic on the clean one" would pass while measuring nothing.
+	@mkdir -p $(BUILD_DIR)
+	@printf 'int gmdl_alias_probe(float * f);\nint gmdl_alias_probe(float * f) { int * i = (int *)f; *i = 7; return *i; }\n' > $(BUILD_DIR)/alias_probe.c
+	@printf 'int gmdl_alias_clean(int * i);\nint gmdl_alias_clean(int * i) { *i = 7; return *i; }\n' > $(BUILD_DIR)/alias_clean.c
+	@probe=$$($(CC) $(CFLAGS) -Wno-error -c $(BUILD_DIR)/alias_probe.c -o $(BUILD_DIR)/alias_probe.o 2>&1); \
+	ctl=$$($(CC) $(CFLAGS) -Wno-error -c $(BUILD_DIR)/alias_clean.c -o $(BUILD_DIR)/alias_clean.o 2>&1); ctlrc=$$?; \
+	if [ $$ctlrc -ne 0 ]; then \
+		printf '\033[0;31mcheck-aliasing: the control file did not compile, so this gate is measuring nothing:\033[0m\n%s\n' "$$ctl" >&2; \
+		exit 1; \
+	fi; \
+	if printf '%s' "$$ctl" | grep -q 'strict-aliasing'; then \
+		printf '\033[0;31mcheck-aliasing: the control file drew a strict-aliasing diagnostic, so the probe proves nothing:\033[0m\n%s\n' "$$ctl" >&2; \
+		exit 1; \
+	fi; \
+	if ! printf '%s' "$$probe" | grep -q 'strict-aliasing'; then \
+		printf '\033[0;31mcheck-aliasing: a plain type-punned store drew no strict-aliasing diagnostic, so CFLAGS does not resolve to -Wstrict-aliasing=1. Measured on this probe, only level 1 reports it: 0, 2 and 3 are all silent, so this says the level is wrong and NOT that the warning is absent. Read the resolved level with: gcc -Q --help=warnings <the real CFLAGS>\033[0m\n' >&2; \
+		exit 1; \
+	fi; \
+	printf 'check-aliasing: the planted violation is reported; the warning is armed at the level CFLAGS resolves to\n'
 
 check-lists: ## Fail if a map or array is missing from a list that names it
 # Every map in GMDL_Mtl_Material is named in a free list, a defaults list, a
