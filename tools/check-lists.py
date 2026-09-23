@@ -230,6 +230,7 @@ for name, body in re.findall(
     stamp_recipes[name] = set(re.findall(r"\$\((\w+)\)", printf.group(1)))
 if not stamp_recipes:
     fail("found no flag stamps at all; the pattern must have rotted")
+recorded_anywhere = set().union(*stamp_recipes.values())
 
 # Find the compile rules by what their recipes DO, not by how their targets
 # are spelled.  The first version of this check took every rule whose target
@@ -307,6 +308,51 @@ for stamp, prereqs, body in guarded:
             % (stamp, ", ".join("$(%s)" % m for m in missing), stamp,
                "them" if len(missing) > 1 else "it"))
 
+# The link lines, which the population above deliberately excludes.
+#
+# A link rule cannot always take a stamp as a prerequisite: where its recipe
+# uses $^ the stamp is handed to the linker as an input and the build fails
+# with "file format not recognized", and a prerequisite audit stays green
+# through that.  So link rules are covered transitively instead - a stamp
+# change rebuilds the objects, and rebuilt objects relink whatever uses them.
+#
+# That only works if the link line's flags are recorded in some stamp at all,
+# and three here were recorded in none: $(TESTFLAGS) on both the release and
+# ASan test links, $(OS_SPECIFIC_LIBRARY_NAME_FLAG) on the shared library, and
+# $(ASAN_MODELLIBRARY).  Measured: changing TESTFLAGS relinked 0 of 6 test
+# binaries, with the counter armed by touching a test source to show it could
+# move.  chron had the same class on $(TESTFLAGS), $(CUTIL_LIBS) and
+# $(ICU_LIBS) and measured 0 of 30.
+#
+# This check is deliberately weaker than the one above: it asks whether a
+# variable is in ANY stamp, not the right one.  Pinning a link rule to a
+# particular tree's stamp means deriving the pairing from naming, which is an
+# assumption about how a Makefile spells things rather than about what it
+# does - exactly the kind of thing that made the first two versions of the
+# check above wrong.
+link_problems = []
+link_lines = 0
+for target, prereqs, body in re.findall(
+        r"^([^\s#][^\n:=]*):([^\n]*)\n((?:\t.*\n)+)", makefile, re.M):
+    for line in body.splitlines():
+        if not re.match(r"\t@?\$+\(\w*C(?:C|XX)\)", line):
+            continue
+        if re.search(r"\s-c\s|\$<|\.c\b|\.cpp\b", line):
+            continue                      # a compile; checked above
+        link_lines += 1
+        used = set(re.findall(r"\$\((\w+)\)", line)) - AUTOMATIC - {"^"}
+        used -= set(re.findall(r"\$\((\w+)\)", prereqs))
+        missing = sorted(used - recorded_anywhere)
+        if missing:
+            link_problems.append(
+                "the link line for %s expands %s, which no flag stamp "
+                "records, so changing %s relinks nothing"
+                % (target.strip(), ", ".join("$(%s)" % m for m in missing),
+                   "them" if len(missing) > 1 else "it"))
+problems.extend(link_problems)
+if not link_lines:
+    fail("found no link lines at all; this check would pass vacuously")
+
 if problems:
     for problem in problems:
         print("check-lists: %s" % problem, file=sys.stderr)
@@ -314,9 +360,10 @@ if problems:
 
 print("check-lists: %d maps in %d lists, %d arrays in %d lists, all present"
       % (len(scalar), len(lists), len(arrays_obj), len(obj_lists)))
-print("check-lists: %d flag stamps guarding %d object rules, each recording "
-      "every variable its recipes expand"
-      % (len(stamp_recipes), len(guarded)))
+print("check-lists: %d flag stamps guarding %d compile rules, each recording "
+      "every variable its recipes expand; %d link lines, every flag on them "
+      "recorded somewhere"
+      % (len(stamp_recipes), len(guarded), link_lines))
 print("check-lists: %d builder capacities, largest %d, all under the sweep's "
       "kGrow of %d; %d deliberately empty"
       % (len(capacities), max(c for _, _, c in capacities), grow, len(empty)))
