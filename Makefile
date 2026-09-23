@@ -250,9 +250,11 @@ CC := cc
 # that is measured rather than given, and a library adding the flag should
 # measure it rather than inherit the claim.
 #
-# The fuzz tree is the exception and stays one: it builds with clang on a
-# command line of its own, at -O1 and with -w, so it reports nothing by
-# design. It is not a warning gate and this flag does not reach it.
+# The fuzz tree does not read CFLAGS - it builds with clang on a command line
+# of its own, at -O1 and with -w, so it reports nothing and is not a warning
+# gate. FUZZ_SAN names -fstrict-aliasing separately so its codegen assumption
+# is stated rather than inherited from a compiler default; see the comment
+# there for why that is a no-op on clang and kept anyway.
 CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -fstrict-aliasing -Wstrict-aliasing=1 -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GMDL_BUILD enables DLL export on Windows (checked by GMDL_API macro)
@@ -878,7 +880,22 @@ test-asan: $(ASAN_TEST_EXECUTABLES)
 FUZZ_CC ?= clang
 FUZZ_CXX ?= clang++
 FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
-FUZZ_SAN := -fsanitize=address,$(UBSAN_CHECKS) -fno-omit-frame-pointer -g -O1
+# -fstrict-aliasing is named here for the same reason it is named in CFLAGS,
+# and it is a no-op today rather than a fix. This line does not read CFLAGS,
+# so without it the fuzz tree's aliasing assumption would be whatever the
+# fuzzing compiler happens to default to - and that default is not the same
+# as gcc's. Measured, clang 19.1.7: the assumption is already on at -O1 and
+# -O2 and off at -O0, where gcc has it off until -O2, so naming it changes
+# none of the 9 fuzz objects. That zero is controlled: the same comparison on
+# an aliasing-sensitive file at clang -O1 does produce different objects.
+#
+# It stays because the alternative is a tree whose codegen assumption is
+# inherited from a compiler default, differs between the two compilers this
+# Makefile can use, and is invisible on the command line. The warning half is
+# deliberately absent: this line carries -w, so the fuzz tree reports nothing
+# and is not a warning gate. Matching the assumption is the point; matching
+# the diagnostics is not.
+FUZZ_SAN := -fsanitize=address,$(UBSAN_CHECKS) -fno-omit-frame-pointer -g -O1 -fstrict-aliasing
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
 FUZZ_DIR := $(BUILD_DIR)/fuzz
