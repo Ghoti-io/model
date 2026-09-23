@@ -647,6 +647,35 @@ check-aliasing: ## Fail if the strict-aliasing warning is not actually armed
 # The probe pins the level at exactly 1. Measured on it: level 1 reports it,
 # and levels 0, 2 and 3 are all silent.
 #
+# ---- Do not simplify the probe. Its shape is what makes it discriminating.
+#
+# Diagnostics at -O2, counted across five violation shapes:
+#
+#                                                      L0  L1  L2  L3
+#   cast of a pointer PARAMETER      <- this probe       0   1   0   0
+#   struct-to-struct cast of a parameter                 0   1   0   0
+#   a void * stored through a typed lvalue               0   1   1   0
+#   *(int *)&local, *(long *)&s->member                  0   2   2   2
+#   laundered through a `void * v = p` variable          0   0   0   0
+#
+# Written the obvious way, `*(int *)&local`, this gate would pass with the
+# warning at level 3 and certify nothing - row four is reported at every
+# level from 1 up. A later tidy-up that "simplifies" the probe therefore
+# silently removes the only thing it measures. The chron session hit this as
+# a live near-miss in their own control. Measured here rather than argued:
+# with the probe rewritten as `*(int *)&l`, `make
+# EXTRA_CFLAGS=-Wstrict-aliasing=3 check-aliasing` exits 0 - the one case the
+# gate exists to catch, passing green.
+#
+# Two limits follow, and they bound what a green run here may be said to mean.
+# Level 3 is not blind in general - it catches row four - so this library's
+# seven-of-nine sibling libraries sitting at 3 are not uninstrumented, they
+# are blind to rows one to three. Row three is the shape obj_load.c actually
+# had, eleven times. And nothing catches row five at any level, including 1:
+# a clean run here is not evidence about punning laundered through a void *
+# variable, which is the spelling real code reaches for most readily.
+# Enumerated by the chron session, reproduced here.
+#
 # So a silent probe has three different causes and they want opposite fixes,
 # which is why the failure branch *measures* the cause rather than naming the
 # likeliest one. A gate whose diagnosis is one step off sends the next reader
