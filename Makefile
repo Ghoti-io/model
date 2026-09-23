@@ -667,7 +667,27 @@ check-aliasing: ## Fail if the strict-aliasing warning is not actually armed
 # EXTRA_CFLAGS=-Wstrict-aliasing=3 check-aliasing` exits 0 - the one case the
 # gate exists to catch, passing green.
 #
-# Two limits follow, and they bound what a green run here may be said to mean.
+# Two axes decide those rows, and they matter if this library ever moves off
+# level 1. Isolated pairwise at -O2:
+#
+#                                              L0  L1  L2  L3
+#   *(int *)&g          known object, direct    0   1   1   1
+#   int * p = (int *)&g known object, via var   0   1   1   0
+#   *(int *)d           PARAMETER, direct       0   1   0   0
+#   int * p = (int *)d  parameter, via var      0   1   0   0   <- this probe
+#
+# Taking the address of an object the compiler can see is what level 2 needs;
+# routing the cast through a separate pointer variable is what defeats level
+# 3. It is not about storage class - a local is a known object too.
+#
+# So this probe certifies level 1 and **would be vacuous at level 2**: green,
+# asserting nothing. A gate meant to certify "1 or 2, but not 3" needs the
+# second row - a known object through a variable. The first row is no use as a
+# probe at all, since it fires at every level from 1 up. Change the probe if
+# the level ever changes, or the gate silently stops measuring. Axes isolated
+# by the chron and image sessions, reproduced here.
+#
+# Two further limits bound what a green run may be said to mean.
 # Level 3 is not blind in general - it catches row four - so this library's
 # seven-of-nine sibling libraries sitting at 3 are not uninstrumented, they
 # are blind to rows one to three. Row three is the shape obj_load.c actually
