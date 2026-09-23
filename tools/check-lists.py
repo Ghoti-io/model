@@ -223,14 +223,25 @@ stamp_recipes = {}
 for name, body in re.findall(
         r"^\$\((\w*FLAGS_STAMP)\): force-flags\n((?:\t.*\n)+)",
         makefile, re.M):
-    # Tolerate whitespace between the format and the string: joining a
-    # backslash continuation leaves the recipe's indentation behind, so a
-    # stamp whose printf is wrapped would otherwise read as having none.
-    printf = re.search(r"printf '%s\\n'\s*'([^']*)'", body)
-    if not printf:
+    # Find the printf line, then harvest every $(VAR) on it - rather than
+    # matching the format and the flag string as one adjacent pattern.
+    # Adjacency is an assumption about spelling, and it was wrong twice: a
+    # wrapped recipe leaves the continuation's indentation between the two
+    # (joining turns "printf '%s\\n' \\" into "printf '%s\\n'  \t\t'..."),
+    # and a string split across two quoted arguments puts half the flags
+    # outside the first quoted run.  The second under-records SILENTLY, which
+    # is the bad direction: variables that ARE recorded get reported as
+    # missing, and the fix for that report is to break a stamp that is
+    # correct.  Measured: splitting this file's release stamp across two
+    # quoted arguments made the gate report six recorded variables as
+    # unrecorded.  Scanning the whole line has no adjacency to get wrong.
+    # The design is chron's, whose copy did not have either defect.
+    printf_lines = [l for l in body.splitlines() if "printf" in l]
+    if not printf_lines:
         fail("the %s recipe does not printf a flag string; this gate is "
              "measuring nothing" % name)
-    stamp_recipes[name] = set(re.findall(r"\$\((\w+)\)", printf.group(1)))
+    stamp_recipes[name] = set(
+        re.findall(r"\$\((\w+)\)", " ".join(printf_lines)))
 if not stamp_recipes:
     fail("found no flag stamps at all; the pattern must have rotted")
 recorded_anywhere = set().union(*stamp_recipes.values())
