@@ -105,6 +105,76 @@ GMDL_INTERNAL_API bool gmdl_numeric_pin_is_thread_local(void) {
   return true;
 }
 
+#elif defined(_WIN32)
+
+// The Windows CRT has no uselocale(), but _configthreadlocale() gives the
+// calling thread a locale of its own, after which setlocale() changes only
+// that thread's. That is the same promise uselocale() makes, reached another
+// way: switch the thread to its own locale, set LC_NUMERIC to "C" in it, and
+// put back both the category and the thread's mode afterwards.
+//
+// The mode is saved as well as the name because a thread that was already
+// per-thread must stay so - switching it back to the global locale would
+// discard whatever the caller had set in it.
+//
+// TODO(windows): the notes/suite/WINDOWS-TODO.md entry for the model library
+// asks for this to be run, not assumed: the thread-locality test exercises it,
+// and it passing under MINGW64 is what verifies it.
+typedef struct {
+  int mode;    // _configthreadlocale()'s previous setting.
+  char name[]; // LC_NUMERIC as it was, in the thread's own locale.
+} GMDL_Numeric_Saved;
+
+GMDL_INTERNAL_API void gmdl_numeric_scope_begin(GMDL_Numeric_Scope * scope) {
+  scope->applied = NULL;
+  scope->previous = NULL;
+
+  int mode = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+  if (mode == -1) {
+    // Inert, as the POSIX arm is when newlocale() fails.
+    return;
+  }
+
+  const char * current = setlocale(LC_NUMERIC, NULL);
+  if (!current) {
+    current = "C";
+  }
+  size_t length = strlen(current);
+  GMDL_Numeric_Saved * saved =
+      (GMDL_Numeric_Saved *)malloc(sizeof(*saved) + length + 1);
+  if (!saved) {
+    _configthreadlocale(mode);
+    return;
+  }
+  saved->mode = mode;
+  memcpy(saved->name, current, length + 1);
+
+  if (!setlocale(LC_NUMERIC, "C")) {
+    _configthreadlocale(mode);
+    free(saved);
+    return;
+  }
+  scope->previous = saved;
+  // Non-NULL marks a pin in force; see the process-wide arm below.
+  scope->applied = scope;
+}
+
+GMDL_INTERNAL_API void gmdl_numeric_scope_end(GMDL_Numeric_Scope * scope) {
+  if (!scope->applied) {
+    return;
+  }
+  GMDL_Numeric_Saved * saved = (GMDL_Numeric_Saved *)scope->previous;
+  setlocale(LC_NUMERIC, saved->name);
+  _configthreadlocale(saved->mode);
+  free(saved);
+  scope->applied = NULL;
+  scope->previous = NULL;
+}
+
+GMDL_INTERNAL_API bool gmdl_numeric_pin_is_thread_local(void) {
+  return true;
+}
+
 #elif defined(GMDL_ALLOW_PROCESS_WIDE_LOCALE)
 
 // The caller has accepted a process-wide pin, so give them the best version
