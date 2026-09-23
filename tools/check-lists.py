@@ -243,11 +243,33 @@ if not stamp_recipes:
 # Measured on a clone with the helper source present: editing CXXFLAGS
 # rebuilt 9 library objects and 5 test objects and 0 helper objects, and the
 # stale helper links into every test executable.  With the stamp named, 1.
+#
+# The second version keyed on `-c`, which is the same mistake one level down:
+# a rule that compiles a source straight to an executable has no `-c` and was
+# missing from the population again.  Two of them here, the examples rule and
+# the fuzz harness.  Both turned out to be covered already, but only by
+# accident - examples through the static archive it links, the fuzz harness
+# through the stamp its objects share with it - and an accident is removed by
+# an ordinary edit without anything failing.  So: a compiler variable plus any
+# sign of a source, `-c` or not.  A pure link names its inputs with $^ or an
+# object list and stays out.
+#
+# Adding them to the population is what surfaced $(CUTIL_LIBS), which is not
+# incidental at all: it is pkg-config's `--libs` for a dependency, it appears
+# on no compile line, and nothing recorded it.  Measured by overriding it on
+# the command line - 0 of 9 objects rebuilt before, 9 of 9 after.  A
+# dependency changing its link line used to relink nothing.
+#
+# Do not be tempted to demand a stamp on link rules as well.  A stamp on a
+# rule whose recipe uses $^ is handed to the linker as an input, and it fails
+# with "file format not recognized" - a prerequisite audit stays green
+# through that, and only a build catches it.
 compile_rules = [
     (target, prereqs, body)
     for target, prereqs, body in re.findall(
         r"^([^\s#][^\n:=]*):([^\n]*)\n((?:\t.*\n)+)", makefile, re.M)
-    if re.search(r"\$\(\w*C(?:C|XX)\)[^\n]*\s-c\s", body)]
+    if re.search(r"^\t@?\$+\(\w*C(?:C|XX)\)[^\n]*(?:\s-c\s|\$<|\.c\b|\.cpp\b)",
+                 body, re.M)]
 if not compile_rules:
     fail("found no compile rules at all; the pattern must have rotted")
 
@@ -255,7 +277,7 @@ guarded = []
 for target, prereqs, body in compile_rules:
     stamp = re.search(r"\$\((\w*FLAGS_STAMP)\)", prereqs)
     if stamp:
-        guarded.append((stamp.group(1), body))
+        guarded.append((stamp.group(1), prereqs, body))
     else:
         problems.append(
             "the rule for %s compiles but names no flag stamp, so it keeps "
@@ -266,8 +288,17 @@ for target, prereqs, body in compile_rules:
 
 # $(@D), $@ and $< are make's own automatic variables, not flags.
 AUTOMATIC = {"@D", "@", "<", "CURDIR", "MAKE"}
-for stamp, body in guarded:
-    used = set(re.findall(r"\$\((\w+)\)", body)) - AUTOMATIC
+for stamp, prereqs, body in guarded:
+    # Only the compiler's own command line.  A recipe's mkdir and its shell
+    # guards mention variables that are paths and probes, not flags, and a
+    # compile-and-link line names its link inputs - which are already file
+    # prerequisites, so make's mtimes cover them and the stamp need not.
+    used = set()
+    for line in body.splitlines():
+        if re.match(r"\t@?\$+\(\w*C(?:C|XX)\)", line):
+            used |= set(re.findall(r"\$\((\w+)\)", line))
+    used -= AUTOMATIC
+    used -= set(re.findall(r"\$\((\w+)\)", prereqs))
     missing = sorted(used - stamp_recipes.get(stamp, set()))
     if missing:
         problems.append(
