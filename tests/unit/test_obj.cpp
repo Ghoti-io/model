@@ -615,6 +615,63 @@ TEST(ObjParse, MtllibRecorded) {
   GMDL_Obj * obj = load_text("mtllib materials.mtl\nv 0 0 0\n");
   ASSERT_NE(obj, nullptr);
   EXPECT_STREQ(obj->mtllib, "materials.mtl");
+  ASSERT_EQ(obj->mtllib_count, 1u);
+  EXPECT_STREQ(obj->mtllibs[0].path, "materials.mtl");
+  gmdl_obj_free(obj);
+}
+
+// A document may name several libraries and both references load every one.
+// This used to keep the last line only, so a file asking for two got one and
+// nothing said so.
+TEST(ObjParse, EveryMtllibLineIsKeptInOrder) {
+  GMDL_Obj * obj = load_text(
+      "mtllib first.mtl\nmtllib second one.mtl\nmtllib third.mtl\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->mtllib_count, 3u);
+  EXPECT_STREQ(obj->mtllibs[0].path, "first.mtl");
+  EXPECT_STREQ(obj->mtllibs[1].path, "second one.mtl");
+  EXPECT_STREQ(obj->mtllibs[2].path, "third.mtl");
+  // The compatibility field is the first, not the last.
+  EXPECT_STREQ(obj->mtllib, "first.mtl");
+  gmdl_obj_free(obj);
+}
+
+// A bare `mtllib` names no library (3.8). It must not append an empty entry,
+// or the dump writes back a `mtllib ` line the document never had.
+TEST(ObjParse, BareMtllibAddsNoEntry) {
+  GMDL_Obj * obj = load_text("mtllib a.mtl\nmtllib\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->mtllib_count, 1u);
+  EXPECT_STREQ(obj->mtllibs[0].path, "a.mtl");
+  EXPECT_STREQ(obj->mtllib, "");
+  gmdl_obj_free(obj);
+}
+
+// The round trip is the half that the loader alone cannot show: keeping
+// three paths is no use if the dump writes one.
+TEST(ObjDump, EveryMtllibLineIsWrittenBack) {
+  const char * text =
+      "mtllib first.mtl\nmtllib second one.mtl\nmtllib third.mtl\nv 0 0 0\n";
+  GMDL_Obj * obj = load_text(text);
+  ASSERT_NE(obj, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  // Reparsing the dump gives the same three, in the same order - which is
+  // the check that the dump wrote all of them and in order.
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->mtllib_count, 3u);
+  EXPECT_STREQ(again->mtllibs[0].path, "first.mtl");
+  EXPECT_STREQ(again->mtllibs[1].path, "second one.mtl");
+  EXPECT_STREQ(again->mtllibs[2].path, "third.mtl");
+  gmdl_obj_free(again);
   gmdl_obj_free(obj);
 }
 
@@ -2024,6 +2081,8 @@ const LimitCase kLimitCases[] = {
     // Read once for `call` and once for `csh`; only `call` was driven.
     {offsetof(GMDL_Limits, max_statements), "max_statements",
         {"call a\ncall b\ncall c\n", "csh a\ncsh b\ncsh c\n"}},
+    {offsetof(GMDL_Limits, max_mtllibs), "max_mtllibs",
+        {"mtllib a.mtl\nmtllib b.mtl\nmtllib c.mtl\n"}},
 };
 
 } // namespace

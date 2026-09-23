@@ -73,5 +73,6 @@ void gmdl_limits_default(GMDL_Limits * limits) {
     .max_groups = 0,
     .max_materials = 0,
     .max_statements = 0,
+    .max_mtllibs = 0,
   };
 }

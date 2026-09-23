@@ -273,7 +273,17 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     return GMDL_ERR_INVALID;
   }
 
-  if (obj->mtllib[0] != '\0'
+  // Every library the document named, in the order it named them. Writing
+  // only obj->mtllib here would drop the rest on a round trip, which is the
+  // same loss the single field used to cause on the way in.
+  for (size_t i = 0; i < obj->mtllib_count; i++) {
+    if (fprintf(fd, "mtllib %s\n", obj->mtllibs[i].path) < 0) {
+      return GMDL_ERR_IO;
+    }
+  }
+  // A model built by hand through the struct may set the compatibility field
+  // without building a list, so that case still writes a line.
+  if (obj->mtllib_count == 0 && obj->mtllib[0] != '\0'
       && fprintf(fd, "mtllib %s\n", obj->mtllib) < 0) {
     return GMDL_ERR_IO;
   }

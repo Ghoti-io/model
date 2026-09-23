@@ -306,9 +306,11 @@ names against an MTL library with `gmdl_mtl_find()`.
 
 ### 3.8 `mtllib path`
 
-Names the material library. This library keeps the **whole of the last
-`mtllib` line** as one path, blanks at either end dropped. A bare `mtllib`
-clears it.
+Names a material library. This library keeps the **whole of each `mtllib`
+line** as one path, blanks at either end dropped, and keeps **every line**
+the document carries, in order. A bare `mtllib` names no library: it clears
+the compatibility field below and contributes no entry, so a dump does not
+write back a line the document never had.
 
 The documentation allows several paths on one line, and Blender does not
 implement that: given `mtllib a.mtl b.mtl` it looks for a single file called
@@ -318,9 +320,19 @@ the reference *writes*: exporting a document saved as `my model.obj` produces
 `mtllib my model.mtl`, with no unusual settings involved. Taking the first
 token of that line named the file `my`.
 
-Several `mtllib` **lines** are a different matter - Blender loads all of
-them, and this library still keeps only the last. That one is unresolved and
-is in section 12, because it needs a list where the model has a fixed field.
+Several `mtllib` **lines** are loaded by both references, and this library
+now keeps all of them: `GMDL_Obj.mtllibs` is the list and
+`GMDL_Obj.mtllib_count` its length. It kept only the last until 2026-09-23,
+so a document naming two libraries lost one silently.
+
+`GMDL_Obj.mtllib` remains, as the **first** path or `""` when there is none -
+equivalent to `mtllibs[0].path`. It held the last path before the list
+existed, which differs only for documents that were losing libraries anyway.
+Keeping it is what made this a non-breaking change: the one consumer in the
+workspace reads that field, names one library, and did not have to move.
+
+`GMDL_Limits.max_mtllibs` caps the count, and like the other record caps it
+defaults to 0, meaning the size of the input is the bound.
 
 ### 3.9 Names and paths
 
@@ -1274,14 +1286,6 @@ section 12 is where they are written down.
 
 ## 12. Open questions
 
-- **Several `mtllib` lines.** Not the question it used to be: "keep a list,
-  or keep one path including spaces" turned out to be a false choice, because
-  Blender does both - one path per line, spaces and all, and every line's
-  library loaded. The spaces half is fixed (3.8). What is left is that this
-  library keeps only the last line's path, so a file naming two libraries
-  silently loses one. Fixing it needs `GMDL_Obj.mtllib` to become a list,
-  which is a breaking change to a published field with a consumer in the
-  workspace (`libs/cjelly`), so it is a decision rather than an oversight.
 - **Multiple group names per `g` line.** The documentation allows `g a b`.
   Measured since: neither reference implements it - Blender reads the line as
   one group named `a b` - so the conflict with the contiguous range model is

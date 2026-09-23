@@ -68,6 +68,7 @@ typedef struct {
   GCU_Array groups;
   GCU_Array material_mappings;
   GCU_Array statements;
+  GCU_Array mtllibs;
   const GMDL_Allocator * allocator;
 } obj_builder_t;
 
@@ -96,7 +97,9 @@ static bool obj_builder_init(
       && gcu_array_create_in_place(&b->material_mappings,
           sizeof(GMDL_Obj_Material_Mapping), 4, allocator)
       && gcu_array_create_in_place(
-          &b->statements, sizeof(GMDL_Obj_Statement), 4, allocator);
+          &b->statements, sizeof(GMDL_Obj_Statement), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->mtllibs, sizeof(GMDL_Obj_Mtllib), 4, allocator);
 }
 
 /**
@@ -114,6 +117,7 @@ static void obj_builder_destroy(obj_builder_t * b) {
         (GMDL_Obj_Statement *)gcu_array_at(&b->statements, i);
     gcu_allocator_free(b->allocator, statement->text);
   }
+  gcu_array_destroy_in_place(&b->mtllibs);
   gcu_array_destroy_in_place(&b->vertices);
   gcu_array_destroy_in_place(&b->colors);
   gcu_array_destroy_in_place(&b->texcoords);
@@ -889,13 +893,37 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // A bare "mtllib" clears the path (3.8); one too long for the field is
       // GMDL_ERR_LIMIT (3.9), since a path cut at 255 bytes names a
       // different file, or none.
-      GMDL_Result named = gmdl_rest_of_line(rest, mtllib, sizeof(mtllib));
+      GMDL_Obj_Mtllib entry;
+      GMDL_Result named =
+          gmdl_rest_of_line(rest, entry.path, sizeof(entry.path));
       if (named == GMDL_ERR_FORMAT) {
+        // A bare `mtllib` names no library. It clears the compatibility
+        // field and contributes no entry, which is what "no path" means -
+        // appending an empty one would put a library nobody asked for into
+        // the list and write it back out on the dump.
+        entry.path[0] = '\0';
         mtllib[0] = '\0';
       }
       else if (named != GMDL_OK) {
         result = named;
         goto cleanup;
+      }
+      else {
+        if (gmdl_limit_reached(
+                gcu_array_count(&builder.mtllibs), limits->max_mtllibs)) {
+          result = GMDL_ERR_LIMIT;
+          goto cleanup;
+        }
+        if (!gcu_array_append(&builder.mtllibs, &entry)) {
+          result = GMDL_ERR_OOM;
+          goto cleanup;
+        }
+        // The compatibility field is the FIRST path now, not the last: with
+        // the list present that is the only reading of it that does not
+        // depend on how many lines followed.
+        if (gcu_array_count(&builder.mtllibs) == 1) {
+          memcpy(mtllib, entry.path, strlen(entry.path) + 1);
+        }
       }
     }
     // Anything else - comments, unsupported directives - is ignored, which is
@@ -925,6 +953,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         &builder.material_mappings, &obj->material_mapping_count);
     obj->statements =
         obj_steal_into(&builder.statements, &obj->statement_count);
+    obj->mtllibs = obj_steal_into(&builder.mtllibs, &obj->mtllib_count);
 
     memcpy(obj->mtllib, mtllib, sizeof(obj->mtllib));
     obj->allocator = allocator;
@@ -982,6 +1011,7 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   }
   const GMDL_Allocator * allocator = obj->allocator;
 
+  gcu_allocator_free(allocator, obj->mtllibs);
   gcu_allocator_free(allocator, obj->vertices);
   gcu_allocator_free(allocator, obj->colors);
   gcu_allocator_free(allocator, obj->texcoords);

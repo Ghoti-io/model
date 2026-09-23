@@ -50,6 +50,16 @@ extern "C" {
 #define GMDL_OBJ_MAX_PATH_LENGTH 256
 
 /**
+ * @brief One `mtllib` path.
+ *
+ * A struct rather than a bare array so the model can hold a contiguous list
+ * of them the way it holds every other record.
+ */
+typedef struct {
+  char path[GMDL_OBJ_MAX_PATH_LENGTH]; ///< The path, whole line, NUL-terminated.
+} GMDL_Obj_Mtllib;
+
+/**
  * @brief A 3D vertex.
  */
 typedef struct {
@@ -298,7 +308,26 @@ typedef struct {
   GMDL_Obj_Statement * statements;
   size_t statement_count; ///< Number of statements.
 
-  char mtllib[GMDL_OBJ_MAX_PATH_LENGTH]; ///< `mtllib` path, or "" if absent.
+  /**
+   * Every `mtllib` path the document named, in the order it named them.
+   *
+   * A document may carry several `mtllib` lines and both references load
+   * every one of them, so keeping only the last silently dropped material
+   * libraries a file asked for. Each entry is a whole line including spaces
+   * (3.8).
+   */
+  GMDL_Obj_Mtllib * mtllibs;
+  size_t mtllib_count; ///< Number of `mtllib` paths.
+
+  /**
+   * The first `mtllib` path, or "" if the document named none.
+   *
+   * Equivalent to `mtllibs[0].path`, kept because a document naming one
+   * library is the overwhelming case and reaching for it should not require
+   * indexing. It held the *last* path before `mtllibs` existed, which
+   * differs only for documents that were losing libraries anyway.
+   */
+  char mtllib[GMDL_OBJ_MAX_PATH_LENGTH];
 
   const GMDL_Allocator * allocator; ///< Allocator that owns the arrays above.
 } GMDL_Obj;
