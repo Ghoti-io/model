@@ -245,16 +245,28 @@ CC := cc
 # this library it buys the optimiser nothing - all 9 objects are
 # instruction-identical with the flag and with -fno-strict-aliasing, at both
 # -O0 and -O1. That zero is a real zero rather than a measurement that could
-# not see: the same comparison at -O2 does report a difference in
-# obj_load.o. So here this changes what is checked and not what is built, but
-# that is measured rather than given, and a library adding the flag should
-# measure it rather than inherit the claim.
+# not see: the same comparison at -O2 does report a difference in obj_load.o.
+#
+# Compare the *disassembly*, not the object file. Debug info records the
+# command line, so the flag changes every object whether or not it changes
+# any code. On these 9 objects at -O1, the three comparisons disagree:
+#
+#   whole-object md5 differ   9 of 9    <- the confound; means nothing
+#   strip-debug md5 differ    0 of 9
+#   objdump -d text differ    0 of 9    <- what the numbers above are
+#
+# So here this changes what is checked and not what is built. That is
+# measured rather than given, and a library adding this flag runs the
+# comparison on its own code instead of inheriting the result: the same
+# measurement elsewhere in the suite found objects that do change at -O1.
 #
 # The fuzz tree does not read CFLAGS - it builds with clang on a command line
 # of its own, at -O1 and with -w, so it reports nothing and is not a warning
-# gate. FUZZ_SAN names -fstrict-aliasing separately so its codegen assumption
-# is stated rather than inherited from a compiler default; see the comment
-# there for why that is a no-op on clang and kept anyway.
+# gate - and clang implements nothing for -Wstrict-aliasing in any case,
+# accepting the option silently and reporting nothing where gcc reports one.
+# FUZZ_SAN names -fstrict-aliasing separately so its codegen assumption is
+# stated rather than inherited from a compiler default; see the comment there
+# for why that is a no-op on clang and kept anyway.
 CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -fstrict-aliasing -Wstrict-aliasing=1 -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GMDL_BUILD enables DLL export on Windows (checked by GMDL_API macro)
