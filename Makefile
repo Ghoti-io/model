@@ -226,11 +226,18 @@ CC := cc
 # sanitizer tree if it is ever pinned to -O1. Measured: the warning fires at
 # `-O0 -fstrict-aliasing`, and not at `-O0` or at `-O1`, so an optimised tree
 # is not automatically a checked one. Planting a violation was seen to fail
-# the release, asan and coverage trees; coverage is the -O0 one, and is the
-# evidence for that half. `BUILD=debug` could not be built to check, for a
-# reason of its own: BRANCH becomes `-debug`, so CUTIL_PC asks pkg-config for
-# ghoti.io-cutil-debug, which exists only after a `./bootstrap.sh BUILD=debug`
-# has installed the whole suite in debug.
+# all four trees CFLAGS reaches - release, asan, coverage and debug - and the
+# last two are the -O0 ones, which is the evidence for that half.
+#
+# Building the debug tree needs one flag, because BRANCH becomes `-debug` and
+# CUTIL_PC is derived from it, so pkg-config is asked for a
+# ghoti.io-cutil-debug that only a whole-suite debug bootstrap installs.
+# Override the name and a debug build runs against the ordinary release
+# prefix:
+#
+#   make BUILD=debug CUTIL_PC=ghoti.io-cutil-$(MAJOR_VERSION) test
+#
+# 262 tests pass there at -O0.
 #
 # Naming the flag is codegen-neutral where it is not already on - all 9
 # objects of an -O0 tree are instruction-identical with and without it - and

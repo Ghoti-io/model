@@ -1229,11 +1229,14 @@ can be present and mean nothing:
   is ever pinned to -O1. Naming it changes what is checked rather than what
   is built: all nine objects of an -O0 tree are instruction-identical with
   and without it.
-- **It was seen to fail.** Reinstating one of the eleven spellings fails the
-  release, asan and coverage builds with
-  `error: dereferencing type-punned pointer` under `-Werror`. Coverage is the
-  -O0 tree, which is the evidence that naming `-fstrict-aliasing` did what it
-  is there for.
+- **It was seen to fail.** Reinstating one of the eleven spellings fails all
+  four trees `CFLAGS` reaches - release, asan, coverage and debug - with
+  `error: dereferencing type-punned pointer` under `-Werror`. The last two
+  are the -O0 ones, which is the evidence that naming `-fstrict-aliasing` did
+  what it is there for. Building the debug tree takes one flag, since
+  `BRANCH` becomes `-debug` and the dependency's pkg-config name is derived
+  from it: `make BUILD=debug CUTIL_PC=ghoti.io-cutil-0 test` runs the whole
+  suite at -O0 against the ordinary release prefix, 262 passing.
 
 What the check does *not* establish is that the old code was miscompiled. It
 was not, measurably: building `obj_load.c` at -O2 with `-fstrict-aliasing`
