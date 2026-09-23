@@ -645,10 +645,33 @@ check-aliasing: ## Fail if the strict-aliasing warning is not actually armed
 # chron session's.
 #
 # The probe pins the level at exactly 1. Measured on it: level 1 reports it,
-# and levels 0, 2 and 3 are all silent - so a failure here means the level is
-# wrong, not that the warning is missing, and the message says so. A gate
-# whose diagnosis is one step off sends the next reader after the wrong
-# cause; chron's equivalent blamed a regression that had not happened.
+# and levels 0, 2 and 3 are all silent.
+#
+# So a silent probe has three different causes and they want opposite fixes,
+# which is why the failure branch *measures* the cause rather than naming the
+# likeliest one. A gate whose diagnosis is one step off sends the next reader
+# after something that is not wrong, and they will trust it because the gate
+# was right to fire - chron's earlier version blamed a regression that had not
+# happened, and this one's first version told a clang user their level was
+# wrong when it was 1 and correct:
+#
+#   $(CC) reports no level at all   a compiler that accepts the option and
+#                                   implements nothing. clang does this, so
+#                                   under clang there is no instrument here -
+#                                   and no sanitizer covers the class either.
+#   $(CC) reports 0, 2 or 3         the level is wrong; the flags are present.
+#                                   3 is also what -Wall implies, so it is an
+#                                   override or a removal and this cannot say
+#                                   which - it says so rather than guessing.
+#   $(CC) reports 1                 the level is right and it still did not
+#                                   fire, which nothing here explains. Suspect
+#                                   the probe or the compiler, not CFLAGS.
+#
+# Reading the level needs its own guard: an empty answer is not a level. clang
+# exits 1 and prints nothing, and a flag string gcc rejects produces the same
+# empty output from a zero-length variable - so the exit status and a
+# non-empty level are both checked before the number is believed. That trap
+# is the chron session's, hit twice in one hour from opposite directions.
 #
 # The clean file is the control and it does two jobs. It must compile *and* be
 # silent: if both files failed for an unrelated reason - a bad -I, a missing
@@ -667,12 +690,20 @@ check-aliasing: ## Fail if the strict-aliasing warning is not actually armed
 		printf '\033[0;31mcheck-aliasing: the control file drew a strict-aliasing diagnostic, so the probe proves nothing:\033[0m\n%s\n' "$$ctl" >&2; \
 		exit 1; \
 	fi; \
-	if ! printf '%s' "$$probe" | grep -q 'strict-aliasing'; then \
-		printf '\033[0;31mcheck-aliasing: a plain type-punned store drew no strict-aliasing diagnostic, so CFLAGS does not resolve to -Wstrict-aliasing=1. Measured on this probe, only level 1 reports it: 0, 2 and 3 are all silent, so this says the level is wrong and NOT that the warning is absent. Read the resolved level with: gcc -Q --help=warnings <the real CFLAGS>\033[0m\n' >&2; \
-		exit 1; \
+	if printf '%s' "$$probe" | grep -q 'strict-aliasing'; then \
+		printf 'check-aliasing: the planted violation is reported; the warning is armed at the level CFLAGS resolves to\n'; \
+		exit 0; \
 	fi; \
-	printf 'check-aliasing: the planted violation is reported; the warning is armed at the level CFLAGS resolves to\n'
-
+	qout=$$($(CC) -Q --help=warnings $(CFLAGS) 2>/dev/null); qrc=$$?; \
+	level=$$(printf '%s' "$$qout" | awk '/-Wstrict-aliasing=</{print $$2}'); \
+	if [ $$qrc -ne 0 ] || [ -z "$$level" ]; then \
+		printf '\033[0;31mcheck-aliasing: the planted violation drew no diagnostic, and $(CC) reports no -Wstrict-aliasing level at all. That is a compiler which accepts the option and implements nothing - clang does exactly this - so the flags are intact and there is no aliasing instrument behind them. No sanitizer covers this class at any -O, so under this compiler the library has none.\033[0m\n' >&2; \
+	elif [ "$$level" = 1 ]; then \
+		printf '\033[0;31mcheck-aliasing: $(CC) reports -Wstrict-aliasing=1 and the planted violation still drew no diagnostic. The level is right and the warning did not fire, which neither the flags nor the level explains - suspect the probe or the compiler version before touching CFLAGS.\033[0m\n' >&2; \
+	else \
+		printf '\033[0;31mcheck-aliasing: CFLAGS resolves to -Wstrict-aliasing=%s, and only level 1 reports the planted store - 0, 2 and 3 are all silent on it. The level is wrong; the flags are not missing. Note that 3 is also what -Wall implies, so it means either an explicit override later on the command line or ALIASING flags that stopped being passed, and this cannot tell which.\033[0m\n' "$$level" >&2; \
+	fi; \
+	exit 1
 check-lists: ## Fail if a map or array is missing from a list that names it
 # Every map in GMDL_Mtl_Material is named in a free list, a defaults list, a
 # dump list and the fuzzer's comparison; every owned array in GMDL_Obj is
