@@ -308,6 +308,14 @@ CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -fstrict-ali
 # No -DGMDL_TEST_BUILD: the shipped library exports its public API and nothing
 # else. Tests reach the internals by linking the static archive, which a static
 # link can do even for hidden symbols.
+ifeq ($(OS_NAME), Windows)
+# Everything built here but the library itself links the static archive, so
+# the headers must not say dllimport to it: an archive has no __imp_ thunks.
+# The library's own objects also get GMDL_BUILD, which the header tests first.
+# See GMDL_API in macros.h.
+CFLAGS += -DGMDL_STATIC
+CXXFLAGS += -DGMDL_STATIC
+endif
 LIB_CFLAGS := $(CFLAGS) -fvisibility=hidden -DGMDL_BUILD $(EXTRA_CFLAGS)
 LDFLAGS := -L /usr/lib -lstdc++ -lm $(EXTRA_LDFLAGS)
 ifdef PREFIX
