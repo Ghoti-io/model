@@ -202,6 +202,28 @@ const char * map_name(const GMDL_Obj * obj, int32_t index) {
 }
 
 /**
+ * The render attributes an element names, by value.
+ *
+ * By value for the reason material_name() compares names: a record no
+ * element uses is never written, so render_state_count is not stable across
+ * a round trip. An index naming no record is the all-defaults state, which
+ * is what -1 means and what the dump writes it back as.
+ */
+GMDL_Obj_Render_State render_state_of(const GMDL_Obj * obj, int32_t index) {
+  if (index >= 0 && (size_t)index < obj->render_state_count) {
+    return obj->render_states[index];
+  }
+  return GMDL_Obj_Render_State{false, false, false, 0};
+}
+
+/** Field by field: three bools and an int32_t leave padding memcmp reads. */
+bool same_render(const GMDL_Obj_Render_State & a,
+    const GMDL_Obj_Render_State & b) {
+  return a.bevel == b.bevel && a.c_interp == b.c_interp
+      && a.d_interp == b.d_interp && a.lod == b.lod;
+}
+
+/**
  * Dump the model, parse the dump, and check the two agree.
  *
  * Section 9 promises a structural round-trip and section 10 says this is the
@@ -323,6 +345,9 @@ void check_round_trip(const GMDL_Obj * obj) {
                 map_name(again, again->faces[i].map_index))
             == 0,
         "face map");
+    REQUIRE(same_render(render_state_of(obj, obj->faces[i].render_index),
+                render_state_of(again, again->faces[i].render_index)),
+        "face render attributes");
   }
   for (size_t i = 0; i < obj->line_count; i++) {
     REQUIRE(obj->lines[i].count == again->lines[i].count, "line span");
@@ -334,6 +359,9 @@ void check_round_trip(const GMDL_Obj * obj) {
                 map_name(again, again->lines[i].map_index))
             == 0,
         "line map");
+    REQUIRE(same_render(render_state_of(obj, obj->lines[i].render_index),
+                render_state_of(again, again->lines[i].render_index)),
+        "line render attributes");
   }
   for (size_t i = 0; i < obj->point_count; i++) {
     REQUIRE(strcmp(material_name(obj, obj->points[i].material_index),
@@ -344,6 +372,9 @@ void check_round_trip(const GMDL_Obj * obj) {
                 map_name(again, again->points[i].map_index))
             == 0,
         "point map");
+    REQUIRE(same_render(render_state_of(obj, obj->points[i].render_index),
+                render_state_of(again, again->points[i].render_index)),
+        "point render attributes");
   }
   for (size_t i = 0; i < obj->statement_count; i++) {
     REQUIRE(obj->statements[i].kind == again->statements[i].kind,

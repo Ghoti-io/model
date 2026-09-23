@@ -83,6 +83,7 @@ typedef struct GMDL_Limits {
   size_t max_mtllibs;     ///< Cap on `mtllib` records.
   size_t max_maplibs;     ///< Cap on `maplib` records.
   size_t max_maps;        ///< Cap on `usemap` name-to-index mappings.
+  size_t max_render_states; ///< Cap on distinct render-attribute states.
 } GMDL_Limits;
 
 /**

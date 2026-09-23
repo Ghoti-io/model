@@ -263,6 +263,15 @@ std::string rich_obj() {
       // do; `off` among them so the dumper's return-to-nothing is swept too.
       t += (i % 20 ? "usemap a map " + std::to_string(i) : "usemap off");
       t += "\n";
+      // A distinct render combination each time, so the render states grow
+      // the way the mappings do. A toggled switch would reuse two records
+      // for ever and never make the array reallocate. All four directives,
+      // because each appends through its own branch and the arm that
+      // reports THAT append failing is per-branch.
+      t += "lod " + std::to_string(i + 1) + "\n";
+      t += (i % 20 ? "bevel on\n" : "bevel off\n");
+      t += (i % 40 ? "c_interp on\n" : "c_interp off\n");
+      t += (i % 60 ? "d_interp on\n" : "d_interp off\n");
     }
     t += "f 1/1/1 2/2/1 3/1/1 4/1/1 5/1/1\n";
   }
@@ -348,6 +357,10 @@ std::string regrow_obj() {
       t += "usemtl a material " + std::to_string(i) + "\n";
       t += (i % 20 ? "usemap a map " + std::to_string(i) : "usemap off");
       t += "\n";
+      t += "lod " + std::to_string(i + 1) + "\n";
+      t += (i % 20 ? "bevel on\n" : "bevel off\n");
+      t += (i % 40 ? "c_interp on\n" : "c_interp off\n");
+      t += (i % 60 ? "d_interp on\n" : "d_interp off\n");
     }
     t += "f 1/1/1 2/2/1 3/1/1 4/1/1 5/1/1\n";
   }

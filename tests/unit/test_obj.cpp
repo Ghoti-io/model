@@ -1512,7 +1512,8 @@ namespace {
  *  at the points, a polyline and a point declared before any material -
  *  which the dumper writes in a pass of its own - a maplib, a usemap, the
  *  usemap off that turns it back around, a map change at a polyline and at a
- *  point, and a recorded call and
+ *  point, each render switch in both directions and a lod, and a recorded
+ *  call and
  *  csh. A directive the model
  *  does not carry has its
  *  failure arm go unexecuted, which is how this sweep quietly stops covering
@@ -1533,8 +1534,16 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "p 3\n"
                           "usemtl red\n"
                           "usemap chrome\n"
+                          "bevel on\n"
+                          "c_interp on\n"
+                          "lod 40\n"
                           "f 1 2 3\n"
                           "usemap off\n"
+                          // Back to the defaults, so both directions of each
+                          // switch are written.
+                          "bevel off\n"
+                          "d_interp on\n"
+                          "lod 0\n"
                           "g first\n"
                           "usemtl blue\n"
                           "f 1/1 2/2 3/1\n"
@@ -1551,10 +1560,12 @@ const char * kRichModel = "mtllib m.mtl\n"
                           // a map that never changes there leaves the write
                           // failure arm of each unreachable.
                           "usemap etched\n"
+                          "d_interp off\n"
                           "l 1 2 3\n"
                           "l 1/1 2/2\n"
                           "usemtl red\n"
                           "usemap brushed\n"
+                          "lod 9\n"
                           "p 1 2\n";
 
 /** The same lines with no group, so the dumper writes every face in one
@@ -1658,6 +1669,108 @@ TEST(ObjDump, AHandSetMtllibFieldWithNoListIsStillWritten) {
   ASSERT_EQ(again->mtllib_count, 1u);
   EXPECT_STREQ(again->mtllibs[0].path, path);
   EXPECT_STREQ(again->mtllib, path);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// The round trip for all four, including the return to the defaults - which
+// every one of them can spell, unlike a material.
+TEST(ObjDump, TheRenderAttributesSurviveARoundTrip) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "f 1 1 1\n"
+                             "bevel on\nc_interp on\nd_interp on\nlod 40\n"
+                             "f 1 1 1\n"
+                             "bevel off\nc_interp off\nd_interp off\n"
+                             "lod 0\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->face_count, 3u);
+  EXPECT_EQ(again->faces[0].render_index, -1);
+  EXPECT_EQ(again->faces[2].render_index, -1)
+      << "every attribute has a spelling for its own default";
+  ASSERT_GE(again->faces[1].render_index, 0);
+  const GMDL_Obj_Render_State & state =
+      again->render_states[again->faces[1].render_index];
+  EXPECT_TRUE(state.bevel);
+  EXPECT_TRUE(state.c_interp);
+  EXPECT_TRUE(state.d_interp);
+  EXPECT_EQ(state.lod, 40);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// Only what changed is written. A dump that emitted all four on every change
+// would round-trip identically, so the round trip above cannot see this.
+TEST(ObjDump, OnlyTheRenderAttributesThatChangeAreWritten) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "bevel on\nc_interp on\n"
+                             "f 1 1 1\n"
+                             "c_interp off\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  std::string text;
+  FILE * back = fopen(out.path(), "rb");
+  ASSERT_NE(back, nullptr);
+  char buf[256];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), back)) > 0) text.append(buf, n);
+  fclose(back);
+
+  size_t bevels = 0;
+  for (size_t at = text.find("bevel"); at != std::string::npos;
+      at = text.find("bevel", at + 1)) {
+    bevels++;
+  }
+  EXPECT_EQ(bevels, 1u) << "bevel was set once and never changed:\n" << text;
+  EXPECT_NE(text.find("c_interp on"), std::string::npos) << text;
+  EXPECT_NE(text.find("c_interp off"), std::string::npos) << text;
+  EXPECT_EQ(text.find("lod"), std::string::npos)
+      << "lod never left its default:\n" << text;
+  gmdl_obj_free(obj);
+}
+
+// A render index naming no record. No parse produces it - every index comes
+// from a record the parser made - so it is reached by moving the record out
+// from under the face, the way the material and map fallbacks are.
+TEST(ObjDump, ARenderIndexNamingNoRecordIsWrittenAsTheDefaults) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nbevel on\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->render_state_count, 1u);
+  ASSERT_EQ(obj->faces[0].render_index, 0);
+  obj->faces[0].render_index = 100;
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->face_count, 1u);
+  EXPECT_EQ(again->faces[0].render_index, -1);
+  EXPECT_EQ(again->render_state_count, 0u);
   gmdl_obj_free(again);
   gmdl_obj_free(obj);
 }
@@ -2062,16 +2175,14 @@ TEST(ObjLine, AMaterialAlreadyInForceIsNotRepeated) {
 }
 
 TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
-  // 3.14: the free-form sub-language and the render attributes. A file
-  // carrying them still loads. `maplib` and `usemap` used to be here too and
-  // are read now (3.15), which is why they are not in this list.
+  // 3.14: the free-form sub-language, and the render attributes that are
+  // still unread. A file carrying them still loads. `maplib` and `usemap`
+  // (3.15) and the four render switches (3.16) used to be here too and are
+  // read now, which is why they are not in this list.
   GMDL_Obj * obj = load_text("v 0 0 0\n"
                              "vp 0.5\n"
                              "cstype bezier\n"
                              "deg 3\n"
-                             "bevel on\n"
-                             "c_interp on\n"
-                             "lod 4\n"
                              "shadow_obj shadow.obj\n"
                              "trace_obj trace.obj\n"
                              "f 1 1 1\n");
@@ -2079,6 +2190,203 @@ TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
   EXPECT_EQ(obj->vertex_count, 1u);
   EXPECT_EQ(obj->face_count, 1u);
   EXPECT_EQ(obj->statement_count, 0u);
+  gmdl_obj_free(obj);
+}
+
+//
+// The render attributes (3.16): `bevel`, `c_interp`, `d_interp` and `lod`.
+// State like `usemtl`, held as a record elements name rather than as four
+// fields on every element. Measured 2026-09-23: Blender 4.3.2 implements
+// none of them, printing "OBJ element not recognized" for each, so nothing
+// here follows a reference either.
+//
+
+TEST(ObjRender, EverySwitchIsRecordedAndAppliesToWhatFollows) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "f 1 1 1\n"
+                             "bevel on\nc_interp on\nd_interp on\nlod 40\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 2u);
+  EXPECT_EQ(obj->faces[0].render_index, -1)
+      << "nothing is in force before the first directive";
+  ASSERT_GE(obj->faces[1].render_index, 0);
+  const GMDL_Obj_Render_State & state =
+      obj->render_states[obj->faces[1].render_index];
+  EXPECT_TRUE(state.bevel);
+  EXPECT_TRUE(state.c_interp);
+  EXPECT_TRUE(state.d_interp);
+  EXPECT_EQ(state.lod, 40);
+  gmdl_obj_free(obj);
+}
+
+// Each of the four is read separately, so a test setting all of them at once
+// would pass with three of the branches wired to the wrong field.
+TEST(ObjRender, EachSwitchSetsItsOwnAttribute) {
+  struct Case {
+    const char * line;
+    bool bevel, c_interp, d_interp;
+    int32_t lod;
+  };
+  const Case cases[] = {
+      {"bevel on", true, false, false, 0},
+      {"c_interp on", false, true, false, 0},
+      {"d_interp on", false, false, true, 0},
+      {"lod 7", false, false, false, 7},
+  };
+  for (const Case & c : cases) {
+    GMDL_Obj * obj =
+        load_text(std::string("v 0 0 0\n") + c.line + "\nf 1 1 1\n");
+    ASSERT_NE(obj, nullptr) << c.line;
+    ASSERT_EQ(obj->render_state_count, 1u) << c.line;
+    EXPECT_EQ(obj->render_states[0].bevel, c.bevel) << c.line;
+    EXPECT_EQ(obj->render_states[0].c_interp, c.c_interp) << c.line;
+    EXPECT_EQ(obj->render_states[0].d_interp, c.d_interp) << c.line;
+    EXPECT_EQ(obj->render_states[0].lod, c.lod) << c.line;
+    gmdl_obj_free(obj);
+  }
+}
+
+// The all-defaults state takes no record and is named by -1, so a document
+// that turns something on and off again leaves its later elements exactly
+// where its earlier ones were.
+TEST(ObjRender, ReturningToTheDefaultsNamesNoRecord) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "bevel on\nf 1 1 1\n"
+                             "bevel off\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 2u);
+  EXPECT_EQ(obj->faces[0].render_index, 0);
+  EXPECT_EQ(obj->faces[1].render_index, -1);
+  EXPECT_EQ(obj->render_state_count, 1u)
+      << "the default state is not a record";
+  gmdl_obj_free(obj);
+}
+
+// A document with none of the four directives pays nothing for them.
+TEST(ObjRender, ADocumentMentioningNoneHoldsNoRecords) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->render_state_count, 0u);
+  EXPECT_EQ(obj->render_states, nullptr);
+  EXPECT_EQ(obj->faces[0].render_index, -1);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjRender, ACombinationSeenAgainReusesItsRecord) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "bevel on\nf 1 1 1\n"
+                             "bevel off\nc_interp on\nf 1 1 1\n"
+                             "c_interp off\nbevel on\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 3u);
+  EXPECT_EQ(obj->render_state_count, 2u);
+  EXPECT_EQ(obj->faces[0].render_index, 0);
+  EXPECT_EQ(obj->faces[1].render_index, 1);
+  EXPECT_EQ(obj->faces[2].render_index, 0)
+      << "back to a combination already recorded";
+  gmdl_obj_free(obj);
+}
+
+// Documented as 0 to 100 and kept as written either way, for the reason
+// GMDL_Obj_Color gives for a colour outside [0, 1].
+TEST(ObjRender, LodIsKeptAsWrittenInsideTheDocumentedRangeAndOutside) {
+  for (int32_t value : {0, 1, 100, 200, -5}) {
+    GMDL_Obj * obj = load_text(
+        "v 0 0 0\nlod " + std::to_string(value) + "\nf 1 1 1\n");
+    ASSERT_NE(obj, nullptr) << value;
+    if (value == 0) {
+      EXPECT_EQ(obj->faces[0].render_index, -1) << "zero is the default";
+    }
+    else {
+      ASSERT_EQ(obj->render_state_count, 1u) << value;
+      EXPECT_EQ(obj->render_states[0].lod, value);
+    }
+    gmdl_obj_free(obj);
+  }
+}
+
+TEST(ObjRender, AppliesToPolylinesAndPointsAsWell) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\n"
+                             "c_interp on\n"
+                             "l 1 2\n"
+                             "p 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->line_count, 1u);
+  ASSERT_EQ(obj->point_count, 1u);
+  EXPECT_EQ(obj->lines[0].render_index, 0);
+  EXPECT_EQ(obj->points[0].render_index, 0);
+  gmdl_obj_free(obj);
+}
+
+// The dump writes polylines and points in passes of their own, so a state
+// that reaches them on the way in can still be lost on the way out.
+TEST(ObjDump, APolylineAndAPointKeepTheirRenderState) {
+  // The point's state differs from the polyline's on purpose. With both the
+  // same, a dumper that never wrote a render change at a point still passed:
+  // the point inherited what the polyline had left in force, and the test
+  // could not tell "carried correctly" from "not written at all". Measured -
+  // the mutation that skips the point's change survived the first version of
+  // this test.
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\n"
+                             "c_interp on\nlod 3\n"
+                             "l 1 2\n"
+                             "lod 5\n"
+                             "p 1\n"
+                             "f 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->line_count, 1u);
+  ASSERT_EQ(again->point_count, 1u);
+  ASSERT_GE(again->lines[0].render_index, 0);
+  ASSERT_GE(again->points[0].render_index, 0);
+  const GMDL_Obj_Render_State & on_line =
+      again->render_states[again->lines[0].render_index];
+  const GMDL_Obj_Render_State & on_point =
+      again->render_states[again->points[0].render_index];
+  EXPECT_TRUE(on_line.c_interp);
+  EXPECT_EQ(on_line.lod, 3);
+  EXPECT_TRUE(on_point.c_interp);
+  EXPECT_EQ(on_point.lod, 5);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// The format defines two spellings and there is no third to guess at.
+TEST(ObjRender, ASwitchWithNeitherWordIsAFormatError) {
+  for (const char * line : {"bevel", "bevel maybe", "c_interp 1", "d_interp"}) {
+    EXPECT_EQ(
+        load_text_expecting_failure(std::string("v 0 0 0\n") + line + "\n"),
+        GMDL_ERR_FORMAT)
+        << line;
+  }
+}
+
+TEST(ObjRender, LodWithNoNumberIsFormatAndOneTooWideIsLimit) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nlod\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nlod nine\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nlod 2147483648\n"),
+      GMDL_ERR_LIMIT);
+}
+
+// Trailing text is ignored, as it is for `s` and for every number this
+// parser reads.
+TEST(ObjRender, TrailingTextAfterASwitchIsIgnored) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nbevel on please\nf 1 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->render_state_count, 1u);
+  EXPECT_TRUE(obj->render_states[0].bevel);
   gmdl_obj_free(obj);
 }
 
@@ -2349,6 +2657,10 @@ const LimitCase kLimitCases[] = {
         {"maplib a.map\nmaplib b.map\nmaplib c.map\n"}},
     {offsetof(GMDL_Limits, max_maps), "max_maps",
         {"usemap a\nusemap b\nusemap c\n"}},
+    // Three distinct combinations, which is what the cap counts - toggling
+    // one attribute back and forth would reuse two records for ever.
+    {offsetof(GMDL_Limits, max_render_states), "max_render_states",
+        {"lod 1\nlod 2\nlod 3\n"}},
 };
 
 } // namespace

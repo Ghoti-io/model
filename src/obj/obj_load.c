@@ -68,6 +68,7 @@ typedef struct {
   GCU_Array groups;
   GCU_Array material_mappings;
   GCU_Array map_mappings;
+  GCU_Array render_states;
   GCU_Array statements;
   GCU_Array mtllibs;
   GCU_Array maplibs;
@@ -102,6 +103,8 @@ static bool obj_builder_init(
           &b->statements, sizeof(GMDL_Obj_Statement), 4, allocator)
       && gcu_array_create_in_place(&b->map_mappings,
           sizeof(GMDL_Obj_Map_Mapping), 4, allocator)
+      && gcu_array_create_in_place(&b->render_states,
+          sizeof(GMDL_Obj_Render_State), 4, allocator)
       && gcu_array_create_in_place(
           &b->mtllibs, sizeof(GMDL_Obj_Mtllib), 4, allocator)
       && gcu_array_create_in_place(
@@ -136,6 +139,7 @@ static void obj_builder_destroy(obj_builder_t * b) {
   gcu_array_destroy_in_place(&b->groups);
   gcu_array_destroy_in_place(&b->material_mappings);
   gcu_array_destroy_in_place(&b->map_mappings);
+  gcu_array_destroy_in_place(&b->render_states);
   gcu_array_destroy_in_place(&b->statements);
 }
 
@@ -411,6 +415,82 @@ static GMDL_Result obj_record_statement(const char * rest,
   return GMDL_OK;
 }
 
+/**
+ * Read the `on` or `off` a render-attribute switch takes.
+ *
+ * Trailing text is ignored, as it is for `s` and for every number this
+ * parser reads, so `bevel on please` is `on`. Anything that is neither word
+ * is ::GMDL_ERR_FORMAT: the format defines two spellings and there is no
+ * third reading to guess at, and a bare `bevel` names no value at all.
+ */
+static GMDL_Result obj_parse_on_off(const char * rest, bool * out) {
+  if (gmdl_line_is(rest, "on", NULL)) {
+    *out = true;
+    return GMDL_OK;
+  }
+  if (gmdl_line_is(rest, "off", NULL)) {
+    *out = false;
+    return GMDL_OK;
+  }
+  return GMDL_ERR_FORMAT;
+}
+
+/** Whether a render state is the one a file starts in. */
+static bool obj_render_is_default(const GMDL_Obj_Render_State * state) {
+  return !state->bevel && !state->c_interp && !state->d_interp
+      && state->lod == 0;
+}
+
+/**
+ * Whether two render states hold the same attributes.
+ *
+ * Field by field rather than with memcmp(), because three bools and an
+ * int32_t leave padding and memcmp() reads it - two states built the same
+ * way can differ in bytes no field owns.
+ */
+static bool obj_render_same(
+    const GMDL_Obj_Render_State * a, const GMDL_Obj_Render_State * b) {
+  return a->bevel == b->bevel && a->c_interp == b->c_interp
+      && a->d_interp == b->d_interp && a->lod == b->lod;
+}
+
+/**
+ * Find the index elements should carry for @p wanted, appending a record if
+ * the document has not put that combination in force before.
+ *
+ * The all-defaults state is named by -1 and never takes a record, so a
+ * document mentioning none of the four directives - which is very nearly all
+ * of them - carries no render states at all.
+ *
+ * @param states The builder's array.
+ * @param wanted The attributes now in force.
+ * @param max The cap from GMDL_Limits, or 0.
+ * @param out_index Receives the index, or -1.
+ * @return GMDL_OK, GMDL_ERR_LIMIT or GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_render_use(GCU_Array * states,
+    const GMDL_Obj_Render_State * wanted, size_t max, int32_t * out_index) {
+  if (obj_render_is_default(wanted)) {
+    *out_index = -1;
+    return GMDL_OK;
+  }
+  for (size_t i = 0; i < gcu_array_count(states); i++) {
+    if (obj_render_same(
+            (GMDL_Obj_Render_State *)gcu_array_at(states, i), wanted)) {
+      *out_index = (int32_t)i;
+      return GMDL_OK;
+    }
+  }
+  if (gmdl_limit_reached(gcu_array_count(states), max)) {
+    return GMDL_ERR_LIMIT;
+  }
+  if (!gcu_array_append(states, wanted)) {
+    return GMDL_ERR_OOM;
+  }
+  *out_index = (int32_t)gcu_array_count(states) - 1;
+  return GMDL_OK;
+}
+
 static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     const GMDL_Limits * limits, const GMDL_Allocator * allocator,
     GMDL_Obj ** out_obj) {
@@ -449,6 +529,11 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
   // Texture map set by the last "usemap"; -1 is "none", which is both the
   // state a file starts in and what "usemap off" returns it to.
   int32_t current_map = -1;
+  // The render attributes in force, and the index elements carry for them.
+  // Both are kept: the values are what the next directive modifies, the
+  // index is what an element records. -1 is the all-defaults state.
+  GMDL_Obj_Render_State current_render = {false, false, false, 0};
+  int32_t current_render_index = -1;
   // Smoothing group set by the last "s"; 0 is the format's own default, so a
   // file with no "s" line leaves every face at 0 and writes none back.
   int32_t current_smoothing = 0;
@@ -558,6 +643,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       face.count = 0;
       face.material_index = current_material;
       face.map_index = current_map;
+      face.render_index = current_render_index;
       face.smoothing_group = current_smoothing;
       face.overflow = NULL;
 
@@ -707,6 +793,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       element.count = 0;
       element.material_index = current_material;
       element.map_index = current_map;
+      element.render_index = current_render_index;
 
       const char * cursor = rest;
       while (*cursor) {
@@ -801,6 +888,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         stored->vertex = obj_index(v, vertex_count);
         stored->material_index = current_material;
         stored->map_index = current_map;
+        stored->render_index = current_render_index;
         declared++;
       }
 
@@ -823,6 +911,66 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           goto cleanup;
         }
         current_smoothing = value;
+      }
+    }
+    // The render attributes (3.16). Each is state, like `usemtl`, and each
+    // takes effect for the elements that follow it.
+    else if (gmdl_line_is(line_text, "bevel", &rest)) {
+      GMDL_Result parsed = obj_parse_on_off(rest, &current_render.bevel);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      GMDL_Result used = obj_render_use(&builder.render_states,
+          &current_render, limits->max_render_states, &current_render_index);
+      if (used != GMDL_OK) {
+        result = used;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "c_interp", &rest)) {
+      GMDL_Result parsed = obj_parse_on_off(rest, &current_render.c_interp);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      GMDL_Result used = obj_render_use(&builder.render_states,
+          &current_render, limits->max_render_states, &current_render_index);
+      if (used != GMDL_OK) {
+        result = used;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "d_interp", &rest)) {
+      GMDL_Result parsed = obj_parse_on_off(rest, &current_render.d_interp);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      GMDL_Result used = obj_render_use(&builder.render_states,
+          &current_render, limits->max_render_states, &current_render_index);
+      if (used != GMDL_OK) {
+        result = used;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "lod", &rest)) {
+      // Documented as 0 to 100 and kept as written, in or out of that range,
+      // for the reason section 1 gives: a value this parser corrected would
+      // leave the file unrecoverable. An integer too wide for the field is
+      // GMDL_ERR_LIMIT, as it is for `s`.
+      int32_t value = 0;
+      GMDL_Result parsed = gmdl_parse_int32(rest, &value);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      current_render.lod = value;
+      GMDL_Result used = obj_render_use(&builder.render_states,
+          &current_render, limits->max_render_states, &current_render_index);
+      if (used != GMDL_OK) {
+        result = used;
+        goto cleanup;
       }
     }
     // "call" and "csh" are recorded and never acted on. A parser that ran a
@@ -1035,6 +1183,8 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         obj_steal_into(&builder.statements, &obj->statement_count);
     obj->map_mappings =
         obj_steal_into(&builder.map_mappings, &obj->map_mapping_count);
+    obj->render_states =
+        obj_steal_into(&builder.render_states, &obj->render_state_count);
     obj->mtllibs = obj_steal_into(&builder.mtllibs, &obj->mtllib_count);
     obj->maplibs = obj_steal_into(&builder.maplibs, &obj->maplib_count);
 
@@ -1121,6 +1271,7 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   gcu_allocator_free(allocator, obj->groups);
   gcu_allocator_free(allocator, obj->material_mappings);
   gcu_allocator_free(allocator, obj->map_mappings);
+  gcu_allocator_free(allocator, obj->render_states);
   if (obj->statements) {
     for (size_t i = 0; i < obj->statement_count; i++) {
       gcu_allocator_free(allocator, obj->statements[i].text);

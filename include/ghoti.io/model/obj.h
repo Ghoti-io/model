@@ -71,6 +71,39 @@ typedef struct {
 } GMDL_Obj_Maplib;
 
 /**
+ * @brief The render attributes in force, as one record elements name.
+ *
+ * `bevel`, `c_interp`, `d_interp` and `lod` are state in the file exactly as
+ * `usemtl` is: each applies to every element after it until the next one
+ * changes it. They describe how a renderer should draw the geometry and
+ * change no geometry.
+ *
+ * They are held as a **record elements point at** rather than as four fields
+ * on every element, which is what section 3.14 objected to when it declined
+ * them. A document that never mentions them holds no records and every
+ * element carries -1; one that toggles `bevel` holds two.
+ *
+ * Measured on x86-64: the index lands in padding ::GMDL_Obj_Face already
+ * carried, so a face stays 80 bytes and a point stays 16. A polyline grows
+ * from 24 to 32, which is the one place this costs anything - and there is
+ * one polyline per `l` statement against one face per `f`. Four fields
+ * instead would have widened all three. Another attribute of this kind goes
+ * in this record without widening any element again.
+ *
+ * Values are recorded as written, not validated. `lod` is documented as 0 to
+ * 100 and a file saying `lod 200` keeps 200, for the reason
+ * ::GMDL_Obj_Color gives for a colour outside `[0, 1]`: deciding what an
+ * out-of-range value means is a consumer's job, and a parser that clamped it
+ * would make the file unrecoverable.
+ */
+typedef struct {
+  bool bevel;    ///< `bevel on`; false is the format's default.
+  bool c_interp; ///< `c_interp on`; false is the format's default.
+  bool d_interp; ///< `d_interp on`; false is the format's default.
+  int32_t lod;   ///< `lod level`, as written; 0 is the format's default.
+} GMDL_Obj_Render_State;
+
+/**
  * @brief A 3D vertex.
  */
 typedef struct {
@@ -160,6 +193,14 @@ typedef struct {
    */
   int32_t map_index;
   /**
+   * Index into the render states, or -1 when every attribute is at its
+   * default.
+   *
+   * -1 is not "unset": it names the state a file starts in, so an element
+   * carrying it is fully described. See ::GMDL_Obj_Render_State.
+   */
+  int32_t render_index;
+  /**
    * Smoothing group in force for this face, or 0 for none.
    *
    * `s` is state, like `usemtl`: it applies to every face after it until the
@@ -196,6 +237,7 @@ typedef struct {
   size_t count; ///< Number of entries.
   int32_t material_index; ///< Index into the material mappings, or -1.
   int32_t map_index;      ///< Index into the map mappings, or -1.
+  int32_t render_index;   ///< Index into the render states, or -1.
 } GMDL_Obj_Line;
 
 /**
@@ -208,6 +250,7 @@ typedef struct {
   int32_t vertex;         ///< Vertex index (0-based).
   int32_t material_index; ///< Index into the material mappings, or -1.
   int32_t map_index;      ///< Index into the map mappings, or -1.
+  int32_t render_index;   ///< Index into the render states, or -1.
 } GMDL_Obj_Point;
 
 /**
@@ -342,6 +385,17 @@ typedef struct {
    */
   GMDL_Obj_Map_Mapping * map_mappings;
   size_t map_mapping_count; ///< Number of map mappings.
+
+  /**
+   * Distinct render-attribute states the document put in force, or NULL.
+   *
+   * One entry per distinct combination, in order of first use, the way
+   * ::material_mappings are assigned. The all-defaults state gets no entry:
+   * elements name it with -1, so a document mentioning none of the four
+   * directives holds no records at all.
+   */
+  GMDL_Obj_Render_State * render_states;
+  size_t render_state_count; ///< Number of render states.
 
   /**
    * `call` and `csh` statements, in file order, or NULL.

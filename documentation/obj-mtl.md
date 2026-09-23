@@ -485,21 +485,22 @@ which is a different kind of geometry from the polygon mesh this library
 holds, not another record to append to it. Supporting them means a second
 data model, not a field.
 
-**Render attributes**: `bevel`, `c_interp`, `d_interp`, `lod`, `shadow_obj`,
-`trace_obj`, `ctech`, `stech` and `mg`. These are state for a renderer and
-change no geometry. They could be recorded, and the reason not to is that
-there is nowhere honest to put them: they are per-state like `usemtl`, so
-each would become a field on every face, describing something no consumer of
-this library asks about. `shadow_obj` and `trace_obj` are the two carrying
-real data - paths - and section 12 keeps the question open.
+**Render attributes still unread**: `shadow_obj`, `trace_obj`, `ctech`,
+`stech` and `mg`. Section 12 keeps the first two open. The last three are
+state for the free-form sub-language above rather than for the polygon mesh,
+so there is nothing in this model for them to attach to yet.
+
+`bevel`, `c_interp`, `d_interp` and `lod` were in this group until
+2026-09-23 and are read now; 3.16 is what they do, and why the reason given
+here for leaving them out did not survive being written down.
 
 `maplib` and `usemap` were a third group here until 2026-09-23. They are
 read now; 3.15 is what they do and why the argument for leaving them out did
 not survive being written down.
 
-A line whose directive is none of the above and none of 3.1-3.13 or 3.15 is
-skipped, which is how a file carrying an exporter's private extension still
-loads.
+A line whose directive is none of the above and none of 3.1-3.13, 3.15 or
+3.16 is skipped, which is how a file carrying an exporter's private
+extension still loads.
 
 ### 3.15 `maplib path` and `usemap name`
 
@@ -551,6 +552,62 @@ lose them.
 `GMDL_Limits.max_maplibs` and `GMDL_Limits.max_maps` cap the two counts, and
 like every other record cap they default to 0, meaning the size of the input
 is the bound.
+
+### 3.16 `bevel`, `c_interp`, `d_interp` and `lod`
+
+Four render attributes. Each is state, like `usemtl`: it applies to every
+element after it - faces, polylines and points alike - until the next one
+changes it. None of them changes any geometry; they describe how a renderer
+should draw it.
+
+| directive | argument | default |
+| --- | --- | --- |
+| `bevel` | `on` or `off` | `off` |
+| `c_interp` | `on` or `off` | `off` |
+| `d_interp` | `on` or `off` | `off` |
+| `lod` | an integer, documented as 0 to 100 | `0` |
+
+A switch whose argument is neither word - including a bare one - is
+`GMDL_ERR_FORMAT`: the format defines two spellings and there is no third
+reading to guess at. Trailing text is ignored, so `bevel on please` is `on`,
+which is the reading `s` and every number in this parser already use. A
+`lod` with no number is `GMDL_ERR_FORMAT` and one too wide for an `int32_t`
+is `GMDL_ERR_LIMIT`, as it is for `s` (5).
+
+**`lod` is kept as written, in the documented range or outside it.** A file
+saying `lod 200` holds 200. This is the call `GMDL_Obj_Color` makes for a
+colour outside `[0, 1]` and the one section 1 argues for generally: what an
+out-of-range value means is a consumer's decision, and a parser that
+corrected it would leave the file unrecoverable.
+
+**The four live in a record elements point at, not in four fields on every
+element.** `GMDL_Obj.render_states` holds one `GMDL_Obj_Render_State` per
+distinct combination the document put in force, in order of first use - the
+way `usemtl` names are assigned - and each element carries a
+`render_index` into it. The all-defaults state takes no record and is named
+by `-1`, so a document mentioning none of the four holds no records and
+every element says `-1`.
+
+That is the answer to 3.14's objection, which was that recording these would
+put a field on every face "describing something no consumer of this library
+asks about". It would have: four fields, on all three element kinds.
+Measured on x86-64 with one index instead: a face stays 80 bytes and a point
+stays 16, because the index lands in padding they already carried, and a
+polyline grows from 24 to 32. There is one polyline per `l` statement
+against one face per `f`. A fifth attribute of this kind widens the record
+and no element.
+
+Every attribute has a spelling for its own default, so the dump can always
+write a return to them - which is not true of `usemtl` (9), and is why these
+need none of the two-pass handling polylines and points need for materials.
+The dump writes **only the attributes that change**, so a document that sets
+`bevel on` once carries one `bevel` line however many elements follow.
+
+**No reference reads any of them.** Measured 2026-09-23: Blender 4.3.2 given
+a file carrying all nine of 3.14's render attributes prints `OBJ element not
+recognized` for every one and loads the geometry without them.
+
+`GMDL_Limits.max_render_states` caps the number of distinct combinations.
 
 ---
 
@@ -832,6 +889,7 @@ assuming a surface would record something the file never said.
 | `max_mtllibs` | 0 | `mtllib` records |
 | `max_maplibs` | 0 | `maplib` records |
 | `max_maps` | 0 | distinct `usemap` names |
+| `max_render_states` | 0 | distinct render-attribute combinations |
 
 `0` means no limit. When a record would take a count from `limit` to
 `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
@@ -1047,8 +1105,9 @@ it lands on the one a single-texture renderer wants. A test pins the order
 so it stays deliberate.
 
 The dump writes `usemtl` when the material changes, `usemap` when the
-texture map does, `s` when the smoothing group does, `g` for each group
-before its faces, and relative indices as absolute ones.
+texture map does, `s` when the smoothing group does, a render attribute when
+that one attribute changes, `g` for each group before its faces, and
+relative indices as absolute ones.
 
 Polylines and points are written in two passes, before the faces and after,
 split on whether they name a material. OBJ can change the material in force
@@ -1374,8 +1433,11 @@ section 12 is where they are written down.
   3.14. A second data model rather than more fields, so it is a decision
   about what this library is for.
 - **`shadow_obj` and `trace_obj`.** The two render attributes carrying real
-  data - a path each. Recording them means deciding where per-state
-  attributes live, which 3.14 explains is the blocker for all nine.
+  data - a path each. The blocker 3.14 gave was where per-state attributes
+  live, and 3.16 answers it for the four switches; what is left here is that
+  the specification calls these one per file rather than state, so whether
+  they are a scalar pair, a list, or state like the rest is a different
+  question from the one 3.16 settled.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is now the only place 4.5
   takes it further than either: `-type` on a colour map was the other, and it
