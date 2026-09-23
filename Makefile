@@ -39,6 +39,28 @@ ifeq ($(BUILD),debug)
     override VERSION_STRING := $(VERSION_STRING)-debug
 endif
 
+# The optimisation level, decided here rather than written into CFLAGS.
+#
+# Two reasons this block is *here*, above the platform rewrite below, rather
+# than next to CFLAGS where it is used. `BUILD := linux/$(BUILD)` further down
+# is a plain assignment, so a command-line `BUILD=debug` overrides it and BUILD
+# stays "debug", while an environment `BUILD=debug` does not and it becomes
+# "linux/debug". Testing BUILD up here, before anything rewrites it, is true in
+# both cases.
+#
+# Until 2026-09-23 this library compiled its release build at -O0 and its debug
+# build at -O0 as well, because the debug block above renamed the artifact and
+# changed nothing about how anything was compiled. So `make BUILD=debug`
+# produced a differently-named copy of the release build, and the release build
+# was never optimised. Neither was decided; the -O0 is older than the
+# repository and was copied in from a project where the production build
+# doubled as the debugging build.
+ifeq ($(BUILD),debug)
+OPT_CFLAGS := -O0
+else
+OPT_CFLAGS := -O2
+endif
+
 BASE_NAME := lib$(SUITE)-$(PROJECT)$(BRANCH).so
 # The symbol namespace token, from BRANCH, so that the token inside every
 # exported symbol is the same one that names the .pc file, the install directory
@@ -180,7 +202,7 @@ CC := cc
 # instead, and an implicit conversion of an in-range value is a wrong answer
 # that no sanitizer reports. This library is clean under it today, so the
 # flag costs nothing and fails the build the moment that stops being true.
-CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -Wno-error=unused-function -Wfatal-errors -std=c17 -O0 -g $(EXTRA_CFLAGS)
+CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GMDL_BUILD enables DLL export on Windows (checked by GMDL_API macro)
 # GMDL_TEST_BUILD enables export of internal functions for testing (checked by GMDL_INTERNAL_API macro)
