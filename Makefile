@@ -239,10 +239,16 @@ CC := cc
 #
 # 262 tests pass there at -O0.
 #
-# Naming the flag is codegen-neutral where it is not already on - all 9
-# objects of an -O0 tree are instruction-identical with and without it - and
-# at -O2 it is the default, so this changes what is checked, not what is
-# built.
+# Naming the flag does turn the aliasing *assumption* on where gcc had it off,
+# which is a real change and not only a warning: `gcc -Q --help=optimizers`
+# reports -fstrict-aliasing disabled at -O0 and -O1 and enabled from -O2. On
+# this library it buys the optimiser nothing - all 9 objects are
+# instruction-identical with the flag and with -fno-strict-aliasing, at both
+# -O0 and -O1. That zero is a real zero rather than a measurement that could
+# not see: the same comparison at -O2 does report a difference in
+# obj_load.o. So here this changes what is checked and not what is built, but
+# that is measured rather than given, and a library adding the flag should
+# measure it rather than inherit the claim.
 #
 # The fuzz tree is the exception and stays one: it builds with clang on a
 # command line of its own, at -O1 and with -w, so it reports nothing by
