@@ -369,6 +369,7 @@ link_lines = 0
 for target, prereqs, body in re.findall(RULE, makefile, re.M):
     if target.strip() in phony:
         continue
+    rule_missing = set()
     for line in body.splitlines():
         if not re.match(r"\t@?\$+\(\w*C(?:C|XX)\)", line):
             continue
@@ -377,13 +378,21 @@ for target, prereqs, body in re.findall(RULE, makefile, re.M):
         link_lines += 1
         used = set(re.findall(r"\$\((\w+)\)", line)) - AUTOMATIC - {"^"}
         used -= set(re.findall(r"\$\((\w+)\)", prereqs))
-        missing = sorted(used - recorded_anywhere)
-        if missing:
-            link_problems.append(
-                "the link line for %s expands %s, which no flag stamp "
-                "records, so changing %s relinks nothing"
-                % (target.strip(), ", ".join("$(%s)" % m for m in missing),
-                   "them" if len(missing) > 1 else "it"))
+        rule_missing |= used - recorded_anywhere
+    # Count commands per invocation, but report ownership by rule.  A rule
+    # with two link commands sharing one unrecorded variable is one defect
+    # with one fix, and emitting it once per command inflates exactly the
+    # figure a reader judges severity by.  Measured: a planted two-command
+    # link rule reported its single unrecorded variable twice.  The chron
+    # session hit the same thing from the other direction, after making an
+    # arm walk physical lines.
+    if rule_missing:
+        missing = sorted(rule_missing)
+        link_problems.append(
+            "the link line for %s expands %s, which no flag stamp "
+            "records, so changing %s relinks nothing"
+            % (target.strip(), ", ".join("$(%s)" % m for m in missing),
+               "them" if len(missing) > 1 else "it"))
 problems.extend(link_problems)
 if not link_lines:
     fail("found no link lines at all; this check would pass vacuously")
