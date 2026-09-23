@@ -480,7 +480,7 @@ $(APP_DIR)/$(STATIC_TARGET): $(LIBOBJECTS)
 ####################################################################
 
 ifneq ($(TEST_HELPER_SRC),)
-$(TEST_HELPER_OBJ): $(TEST_HELPER_SRC)
+$(TEST_HELPER_OBJ): $(TEST_HELPER_SRC) $(FLAGS_STAMP)
 	@printf "\n### Compiling Test Helper ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@

@@ -231,21 +231,38 @@ for name, body in re.findall(
 if not stamp_recipes:
     fail("found no flag stamps at all; the pattern must have rotted")
 
-guarded = re.findall(
-    r"^\$\(\w*OBJ_DIR\)/[^\n:]*:[^\n]*\$\((\w*FLAGS_STAMP)\)[^\n]*\n"
-    r"((?:\t.*\n)+)",
-    makefile, re.M)
-if not guarded:
-    fail("found no object rules guarded by a flag stamp; the pattern must "
-         "have rotted")
+# Find the compile rules by what their recipes DO, not by how their targets
+# are spelled.  The first version of this check took every rule whose target
+# began with $(OBJ_DIR)/ as the population, and then checked how many of them
+# named a stamp - so the denominator and the numerator came from the same
+# pattern, and a rule spelled any other way was missing from both.  It read
+# 7 of 7, clean, while $(TEST_HELPER_OBJ) sat one screen away compiling with
+# $(CXXFLAGS) and naming no stamp.  A denominator drawn from the numerator's
+# own pattern is not a control.
+#
+# Measured on a clone with the helper source present: editing CXXFLAGS
+# rebuilt 9 library objects and 5 test objects and 0 helper objects, and the
+# stale helper links into every test executable.  With the stamp named, 1.
+compile_rules = [
+    (target, prereqs, body)
+    for target, prereqs, body in re.findall(
+        r"^([^\s#][^\n:=]*):([^\n]*)\n((?:\t.*\n)+)", makefile, re.M)
+    if re.search(r"\$\(\w*C(?:C|XX)\)[^\n]*\s-c\s", body)]
+if not compile_rules:
+    fail("found no compile rules at all; the pattern must have rotted")
 
-rules = re.findall(r"^\$\(\w*OBJ_DIR\)/[^\n:]*\.o:", makefile, re.M)
-if len(guarded) != len(rules):
-    problems.append(
-        "%d object pattern rules but only %d name a flag stamp. Partial "
-        "coverage is worse than none: the rules that do rebuild make it look "
-        "as though a flag change rebuilt everything"
-        % (len(rules), len(guarded)))
+guarded = []
+for target, prereqs, body in compile_rules:
+    stamp = re.search(r"\$\((\w*FLAGS_STAMP)\)", prereqs)
+    if stamp:
+        guarded.append((stamp.group(1), body))
+    else:
+        problems.append(
+            "the rule for %s compiles but names no flag stamp, so it keeps "
+            "whatever flags it was first built with and never rebuilds when "
+            "they change. Partial coverage is worse than none: the rules that "
+            "do rebuild make it look as though the flag change rebuilt "
+            "everything" % target.strip())
 
 # $(@D), $@ and $< are make's own automatic variables, not flags.
 AUTOMATIC = {"@D", "@", "<", "CURDIR", "MAKE"}
