@@ -268,6 +268,72 @@ std::string rich_obj() {
 }
 
 /**
+ * A second document shape, and the axis it adds.
+ *
+ * `kGrow` is 160 against a largest initial capacity of 128, so the arrays
+ * that `rich_obj()` fills one entry per line grow exactly **once**: a single
+ * doubling covers them. The exception is the colour array, which
+ * `obj_color_append()` pads in bulk up to the vertex count, so that one does
+ * regrow there - which is worth saying because "every array grows once" was
+ * the premise this document was first written under and it is wrong.
+ *
+ * What is true is that a *refusal* lands on a first growth for every array
+ * but that one. A defect in a later growth - a capacity calculation right
+ * from 128 to 256 and wrong from 256 to 512, a copy assuming the old block
+ * was the initial one - is out of the population for all of them.
+ *
+ * This document is the same shape at `kRegrow` entries, past three doublings
+ * of the largest capacity, so every array here regrows and a refusal lands
+ * on second and third growths as well as first ones. Measured: 1286
+ * allocation sites against `rich_obj()`'s 542, so 744 (site, context) pairs
+ * that were previously not in the sweep at all.
+ *
+ * What has NOT been shown is a defect this catches and `rich_obj()` misses.
+ * The argument for it is the larger population, not a demonstrated find, and
+ * that is a weaker claim than the rest of this file makes.
+ * Size is the whole difference: reaching more directives than `rich_obj()`
+ * would make one of the two redundant rather than complementary, and
+ * reaching fewer - which the first attempt at this did, by dropping colours,
+ * groups and materials - makes it a strict subset that can catch nothing the
+ * other misses. That was measured rather than argued: two planted defects,
+ * neither caught by the smaller document and one caught by `rich_obj()`.
+ */
+const size_t kRegrow = 600;
+
+std::string regrow_obj() {
+  std::string t = "mtllib my library.mtl\n";
+  for (size_t i = 0; i < kRegrow; i++) {
+    t += "v " + std::to_string(i) + " 0 0\n";
+  }
+  for (size_t i = 0; i < kRegrow; i++) {
+    t += "v " + std::to_string(i) + " 1 0 0.5 0.25 0.125\n";
+  }
+  for (size_t i = 0; i < kRegrow; i++) {
+    t += "vt 0.5\n";
+  }
+  for (size_t i = 0; i < kRegrow; i++) {
+    t += "vn 0 1 0\n";
+  }
+  t += "s 3\n";
+  for (size_t i = 0; i < kRegrow; i++) {
+    if (i % 5 == 0) {
+      t += (i % 10 ? "g a group " : "o an object ") + std::to_string(i) + "\n";
+    }
+    if (i % 10 == 0) {
+      t += "usemtl a material " + std::to_string(i) + "\n";
+    }
+    t += "f 1/1/1 2/2/1 3/1/1 4/1/1 5/1/1\n";
+  }
+  for (size_t i = 0; i < kRegrow; i++) {
+    t += "l 1 2 3\n";
+  }
+  for (size_t i = 0; i < kRegrow; i++) {
+    t += "p 1 2\n";
+  }
+  return t;
+}
+
+/**
  * The same for MTL.
  *
  * The maps go on the first few materials rather than on all of them. A map
@@ -450,6 +516,8 @@ std::string dump_to_string(Model * model, Dump dump) {
 // of kSweepModes: one request, one append, exhausted.
 const size_t kObjFloors[3] = {160, 160, 500};
 const size_t kMtlFloors[3] = {10, 10, 18};
+// Measured for regrow_obj(), then lowered the way the others are.
+const size_t kRegrowObjFloors[3] = {10, 600, 1200};
 // Measured; the file path is short, so these are small numbers.
 const size_t kObjFileFloors[3] = {14, 14, 14};
 const size_t kMtlFileFloors[3] = {5, 5, 5};
@@ -468,6 +536,21 @@ TEST(Allocator, EveryObjAllocationFailureIsReported) {
         GMDL_Result result = gmdl_obj_load(stream.get(), nullptr, a.get(), &obj);
         // The model holds this allocator, so everything below would be
         // refused too; the budget has done its work by now.
+        a.stop_failing();
+        *out = obj ? dump_to_string(obj, gmdl_obj_dump) : std::string();
+        gmdl_obj_free(obj);
+        return result;
+      });
+}
+
+// The second shape: the same document past three doublings, so a refusal
+// lands on second and third array growths. See regrow_obj().
+TEST(Allocator, EveryObjAllocationFailureIsReportedAcrossRepeatedGrowth) {
+  sweep_allocation_failures("obj (regrow)", kRegrowObjFloors,
+      [](gmdltest::FailingAllocator & a, std::string * out) {
+        MemStream stream(regrow_obj());
+        GMDL_Obj * obj = nullptr;
+        GMDL_Result result = gmdl_obj_load(stream.get(), nullptr, a.get(), &obj);
         a.stop_failing();
         *out = obj ? dump_to_string(obj, gmdl_obj_dump) : std::string();
         gmdl_obj_free(obj);
