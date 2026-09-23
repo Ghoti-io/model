@@ -122,6 +122,13 @@ bool names_are_representable(const GMDL_Obj * obj) {
   if (ends_with_backslash(obj->mtllib)) {
     return false;
   }
+  // The list, not only the compatibility scalar: that scalar is the FIRST
+  // path, so checking it alone leaves every later `mtllib` line unexamined.
+  for (size_t i = 0; i < obj->mtllib_count; i++) {
+    if (ends_with_backslash(obj->mtllibs[i].path)) {
+      return false;
+    }
+  }
   for (size_t i = 0; i < obj->group_count; i++) {
     if (ends_with_backslash(obj->groups[i].name)) {
       return false;
@@ -217,6 +224,14 @@ void check_round_trip(const GMDL_Obj * obj) {
   REQUIRE(obj->point_count == again->point_count, "point_count");
   REQUIRE(obj->statement_count == again->statement_count, "statement_count");
   REQUIRE(strcmp(obj->mtllib, again->mtllib) == 0, "mtllib");
+  // Every library line, not just the first. A dumper that wrote only the
+  // compatibility scalar would pass the line above and lose the rest, which
+  // is the exact shape of the defect the list was added to fix.
+  REQUIRE(obj->mtllib_count == again->mtllib_count, "mtllib_count");
+  for (size_t i = 0; i < obj->mtllib_count; i++) {
+    REQUIRE(strcmp(obj->mtllibs[i].path, again->mtllibs[i].path) == 0,
+        "mtllib path");
+  }
 
   for (size_t i = 0; i < obj->vertex_count; i++) {
     REQUIRE(same_float(obj->vertices[i].x, again->vertices[i].x)

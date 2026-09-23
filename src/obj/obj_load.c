@@ -435,8 +435,6 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
   }
 
   GMDL_Result result = GMDL_OK;
-  char mtllib[GMDL_OBJ_MAX_PATH_LENGTH];
-  mtllib[0] = '\0';
 
   long current_group = -1;          // Index of the active group.
   int32_t current_material = -1;    // Material set by the last "usemtl".
@@ -890,25 +888,12 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // The whole line is the path, spaces included - Blender exports
       // `mtllib my model.mtl` for a document saved under that name, and
       // taking the first token off it names a file that does not exist.
-      // A bare "mtllib" clears the path (3.8); one too long for the field is
-      // GMDL_ERR_LIMIT (3.9), since a path cut at 255 bytes names a
-      // different file, or none.
+      // One too long for the field is GMDL_ERR_LIMIT (3.9), since a path cut
+      // at 255 bytes names a different file, or none.
       GMDL_Obj_Mtllib entry;
       GMDL_Result named =
           gmdl_rest_of_line(rest, entry.path, sizeof(entry.path));
-      if (named == GMDL_ERR_FORMAT) {
-        // A bare `mtllib` names no library. It clears the compatibility
-        // field and contributes no entry, which is what "no path" means -
-        // appending an empty one would put a library nobody asked for into
-        // the list and write it back out on the dump.
-        entry.path[0] = '\0';
-        mtllib[0] = '\0';
-      }
-      else if (named != GMDL_OK) {
-        result = named;
-        goto cleanup;
-      }
-      else {
+      if (named == GMDL_OK) {
         if (gmdl_limit_reached(
                 gcu_array_count(&builder.mtllibs), limits->max_mtllibs)) {
           result = GMDL_ERR_LIMIT;
@@ -918,13 +903,20 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           result = GMDL_ERR_OOM;
           goto cleanup;
         }
-        // The compatibility field is the FIRST path now, not the last: with
-        // the list present that is the only reading of it that does not
-        // depend on how many lines followed.
-        if (gcu_array_count(&builder.mtllibs) == 1) {
-          memcpy(mtllib, entry.path, strlen(entry.path) + 1);
-        }
       }
+      else if (named != GMDL_ERR_FORMAT) {
+        result = named;
+        goto cleanup;
+      }
+      // A bare `mtllib` names no library, so it contributes no entry -
+      // appending an empty one would put a library nobody asked for into the
+      // list and write it back out on the dump. It does not clear the
+      // libraries already named: measured 2026-09-23, Blender 4.3.2 reads
+      // the line as an unrecognized element and still applies a material
+      // from a library an earlier line named. It used to clear the
+      // compatibility field, which broke the round trip; the steal at the
+      // end of this function says what happened and why the field is
+      // derived now.
     }
     // Anything else - comments, unsupported directives - is ignored, which is
     // what the OBJ specification asks readers to do.
@@ -955,7 +947,16 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         obj_steal_into(&builder.statements, &obj->statement_count);
     obj->mtllibs = obj_steal_into(&builder.mtllibs, &obj->mtllib_count);
 
-    memcpy(obj->mtllib, mtllib, sizeof(obj->mtllib));
+    // The compatibility field is derived from the list rather than
+    // maintained alongside it, so the two cannot disagree. They did: a bare
+    // `mtllib` after a real one cleared this field and left the list alone,
+    // and since the dump writes the list, the reload came back with a field
+    // the original did not have. The fuzzer found it against the corpus the
+    // first time it was run after the list was added.
+    if (obj->mtllib_count > 0) {
+      memcpy(obj->mtllib, obj->mtllibs[0].path,
+          strlen(obj->mtllibs[0].path) + 1);
+    }
     obj->allocator = allocator;
 
     obj_builder_destroy(&builder);

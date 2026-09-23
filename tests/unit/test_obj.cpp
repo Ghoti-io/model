@@ -637,13 +637,54 @@ TEST(ObjParse, EveryMtllibLineIsKeptInOrder) {
 }
 
 // A bare `mtllib` names no library (3.8). It must not append an empty entry,
-// or the dump writes back a `mtllib ` line the document never had.
-TEST(ObjParse, BareMtllibAddsNoEntry) {
+// or the dump writes back a `mtllib ` line the document never had - and it
+// must not clear the libraries already named, which is what it used to do.
+//
+// Clearing made the compatibility field disagree with the list it is
+// documented to be the first entry of, and the disagreement was not
+// academic: the dump writes the list, so a document with this shape reloaded
+// carrying a path the original had blanked. The fuzzer found it against the
+// corpus. Measured 2026-09-23: Blender 4.3.2 reads a bare `mtllib` as an
+// unrecognized element and still applies a material from a library an
+// earlier line named, so not clearing is also the reference's reading.
+TEST(ObjParse, BareMtllibAddsNoEntryAndClearsNothing) {
   GMDL_Obj * obj = load_text("mtllib a.mtl\nmtllib\nv 0 0 0\n");
   ASSERT_NE(obj, nullptr);
   EXPECT_EQ(obj->mtllib_count, 1u);
   EXPECT_STREQ(obj->mtllibs[0].path, "a.mtl");
+  EXPECT_STREQ(obj->mtllib, "a.mtl")
+      << "the compatibility field is mtllibs[0].path, always";
+  gmdl_obj_free(obj);
+}
+
+// A bare `mtllib` with no real one before it still names nothing.
+TEST(ObjParse, BareMtllibAloneLeavesNoLibrary) {
+  GMDL_Obj * obj = load_text("mtllib\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->mtllib_count, 0u);
   EXPECT_STREQ(obj->mtllib, "");
+  gmdl_obj_free(obj);
+}
+
+// The round trip the fuzzer broke, as a unit test so it stays broken-proof
+// without a fuzz run.
+TEST(ObjDump, ABareMtllibDoesNotChangeWhatReloads) {
+  GMDL_Obj * obj = load_text("mtllib a.mtl\nmtllib\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  EXPECT_EQ(again->mtllib_count, obj->mtllib_count);
+  EXPECT_STREQ(again->mtllib, obj->mtllib);
+  gmdl_obj_free(again);
   gmdl_obj_free(obj);
 }
 
@@ -1270,13 +1311,6 @@ TEST(ObjNames, AMtllibPathThatExactlyFitsIsAccepted) {
   gmdl_obj_free(obj);
 }
 
-TEST(ObjNames, ABareMtllibStillClearsThePath) {
-  GMDL_Obj * obj = load_text("mtllib a.mtl\nmtllib\n");
-  ASSERT_NE(obj, nullptr);
-  EXPECT_STREQ(obj->mtllib, "");
-  gmdl_obj_free(obj);
-}
-
 //
 // Dump: section 9 promises a structural round-trip, and floats that survive.
 //
@@ -1527,9 +1561,33 @@ TEST(ObjDump, EveryWriteFailureIsReported) {
   // groups walks the group loop, and one without takes the branch that
   // writes every face in a single range. Sweeping only the first left that
   // second branch's failure arm the one line in the dumper no test reached.
-  for (const char * source : {kRichModel, kGrouplessModel}) {
-    GMDL_Obj * obj = load_text(source);
+  //
+  // The third case is the groupless model with its compatibility `mtllib`
+  // field set by hand. No parse reaches that state - the field is derived
+  // from the list, so an empty list means an empty field - and the dumper
+  // keeps a branch for a model built through the struct. Without this the
+  // arm reporting THAT write failing is the one line in the dumper no test
+  // executes, which is the failure this sweep's comment above warns about,
+  // arriving from the other direction: not a directive the model lacks, but
+  // a state a parse cannot produce.
+  //
+  struct SweepCase {
+    const char * source;
+    bool hand_set_mtllib;
+  };
+  const SweepCase cases[] = {
+      {kRichModel, false},
+      {kGrouplessModel, false},
+      {kGrouplessModel, true},
+  };
+  for (const SweepCase & sweep : cases) {
+    GMDL_Obj * obj = load_text(sweep.source);
     ASSERT_NE(obj, nullptr);
+    if (sweep.hand_set_mtllib) {
+      ASSERT_EQ(obj->mtllib_count, 0u);
+      const char * path = "set by hand.mtl";
+      memcpy(obj->mtllib, path, strlen(path) + 1);
+    }
 
     // Walk the failure through the dump one write at a time. Each position
     // must be reported as I/O rather than swallowed; the sweep ends when the
@@ -1556,6 +1614,35 @@ TEST(ObjDump, EveryWriteFailureIsReported) {
     EXPECT_GT(failures, 10u) << "the sweep stopped far too early";
     gmdl_obj_free(obj);
   }
+}
+
+// The compatibility field without a list behind it. A parse cannot produce
+// that state any more - the field is derived from the list, so an empty list
+// means an empty field - but a model built through the struct can, and the
+// dumper keeps a branch for it. Reached the only way it can be.
+TEST(ObjDump, AHandSetMtllibFieldWithNoListIsStillWritten) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->mtllib_count, 0u);
+  ASSERT_STREQ(obj->mtllib, "");
+  const char * path = "set by hand.mtl";
+  memcpy(obj->mtllib, path, strlen(path) + 1);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
+  fclose(sink);
+
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->mtllib_count, 1u);
+  EXPECT_STREQ(again->mtllibs[0].path, path);
+  EXPECT_STREQ(again->mtllib, path);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
 }
 
 TEST(ObjDump, AFaceNamingAMaterialWithNoMappingWritesWhite) {

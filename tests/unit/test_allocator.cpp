@@ -226,7 +226,14 @@ const size_t kGrow = 160;
  * nobody is checking.
  */
 std::string rich_obj() {
-  std::string t = "mtllib my library.mtl\n";
+  // Several library lines, not one. The list starts with room for four, so
+  // a single line never makes the array grow and the arm that reports that
+  // growth failing is not in the sweep at all - measured: 5446 appends, none
+  // of them refused, because none of them allocated.
+  std::string t;
+  for (size_t i = 0; i < 6; i++) {
+    t += "mtllib library " + std::to_string(i) + ".mtl\n";
+  }
   // Plain vertices first and coloured ones after, so the colour array is
   // padded across a growth as well as appended to - obj_color_append() has an
   // allocation in each half.
@@ -301,7 +308,10 @@ std::string rich_obj() {
 const size_t kRegrow = 600;
 
 std::string regrow_obj() {
-  std::string t = "mtllib my library.mtl\n";
+  std::string t;
+  for (size_t i = 0; i < 6; i++) {
+    t += "mtllib library " + std::to_string(i) + ".mtl\n";
+  }
   for (size_t i = 0; i < kRegrow; i++) {
     t += "v " + std::to_string(i) + " 0 0\n";
   }

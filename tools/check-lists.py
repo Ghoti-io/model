@@ -397,6 +397,48 @@ problems.extend(link_problems)
 if not link_lines:
     fail("found no link lines at all; this check would pass vacuously")
 
+#
+# GMDL_Limits: every field in the documented table
+#
+# A limit is named in three places: the struct, gmdl_limits_default(), and
+# the table in section 5 of documentation/obj-mtl.md.  The first two are
+# checked by the compiler and by ObjLimits.EveryFieldRefusesSomething, which
+# fails the moment a field arrives without a case row.  Nothing checked the
+# third, and it drifted: max_mtllibs was added to the struct, given a
+# default, given a cap in the parser and given a test, and never reached the
+# table - so the document told a caller bounding memory from untrusted input
+# that a cap they could set did not exist.  That is the worst shape a
+# documentation defect takes, because the reader has no way to find it: the
+# absence reads exactly like a field that was never added.
+#
+core_header = read("include/ghoti.io/model/core.h")
+limits_body = re.search(
+    r"typedef struct GMDL_Limits \{(.*?)\} GMDL_Limits;", core_header, re.S)
+if not limits_body:
+    fail("could not find GMDL_Limits in core.h; the pattern must have rotted")
+limit_fields = re.findall(r"^\s*size_t (\w+);", limits_body.group(1), re.M)
+if not limit_fields:
+    fail("found no fields in GMDL_Limits; the pattern must have rotted")
+
+doc = read("documentation/obj-mtl.md")
+table = re.search(r"^## 5\. Limits$(.*?)^`0` means no limit", doc, re.S | re.M)
+if not table:
+    fail("could not find the limits table in section 5 of "
+         "documentation/obj-mtl.md")
+documented = set(re.findall(r"^\| `(\w+)` \|", table.group(1), re.M))
+
+undocumented = [f for f in limit_fields if f not in documented]
+if undocumented:
+    fail("GMDL_Limits has %s that section 5 of documentation/obj-mtl.md does "
+         "not list: %s.  Add a row saying what it counts."
+         % ("fields" if len(undocumented) > 1 else "a field",
+            ", ".join(undocumented)))
+invented = sorted(documented - set(limit_fields))
+if invented:
+    fail("section 5 of documentation/obj-mtl.md lists %s that GMDL_Limits "
+         "does not have: %s." % ("caps" if len(invented) > 1 else "a cap",
+                                 ", ".join(invented)))
+
 if problems:
     for problem in problems:
         print("check-lists: %s" % problem, file=sys.stderr)
@@ -411,3 +453,5 @@ print("check-lists: %d flag stamps guarding %d compile rules, each recording "
 print("check-lists: %d builder capacities, largest %d, all under the sweep's "
       "kGrow of %d; %d deliberately empty"
       % (len(capacities), max(c for _, _, c in capacities), grow, len(empty)))
+print("check-lists: %d GMDL_Limits fields, each with a row in section 5"
+      % len(limit_fields))

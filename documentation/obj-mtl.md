@@ -308,9 +308,11 @@ names against an MTL library with `gmdl_mtl_find()`.
 
 Names a material library. This library keeps the **whole of each `mtllib`
 line** as one path, blanks at either end dropped, and keeps **every line**
-the document carries, in order. A bare `mtllib` names no library: it clears
-the compatibility field below and contributes no entry, so a dump does not
-write back a line the document never had.
+the document carries, in order. A bare `mtllib` names no library: it
+contributes no entry, so a dump does not write back a line the document
+never had, and it clears nothing - measured 2026-09-23, Blender 4.3.2 reads
+the line as an unrecognized element and still applies a material from a
+library an earlier line named.
 
 The documentation allows several paths on one line, and Blender does not
 implement that: given `mtllib a.mtl b.mtl` it looks for a single file called
@@ -326,10 +328,23 @@ now keeps all of them: `GMDL_Obj.mtllibs` is the list and
 so a document naming two libraries lost one silently.
 
 `GMDL_Obj.mtllib` remains, as the **first** path or `""` when there is none -
-equivalent to `mtllibs[0].path`. It held the last path before the list
-existed, which differs only for documents that were losing libraries anyway.
-Keeping it is what made this a non-breaking change: the one consumer in the
-workspace reads that field, names one library, and did not have to move.
+equivalent to `mtllibs[0].path`, and now derived from the list rather than
+maintained beside it. It held the last path before the list existed, which
+differs only for documents that were losing libraries anyway. Keeping it is
+what made this a non-breaking change: the one consumer in the workspace
+reads that field, names one library, and did not have to move.
+
+It was maintained beside the list for one commit, and the two disagreed
+straight away: a bare `mtllib` after a real one cleared the field and left
+the list alone, so a document with that shape held `mtllib_count == 1` and
+`mtllib == ""`. The dump writes the list, so the reload came back with a
+path the original had blanked - a round trip broken by the field that was
+added to avoid breaking anything. **The fuzzer found it on the first run
+after the list landed**, from a corpus document nobody wrote for the
+purpose; the unit tests of the time asserted the clearing, because the
+clearing was the behaviour being kept rather than the invariant being
+checked. Deriving the field is what makes the two unable to differ,
+which is why the fix is that rather than one more place to remember.
 
 `GMDL_Limits.max_mtllibs` caps the count, and like the other record caps it
 defaults to 0, meaning the size of the input is the bound.
@@ -764,6 +779,7 @@ assuming a surface would record something the file never said.
 | `max_groups` | 0 | `g` and `o` together |
 | `max_materials` | 0 | distinct `usemtl` names in OBJ; `newmtl` in MTL |
 | `max_statements` | 0 | `call` and `csh` records |
+| `max_mtllibs` | 0 | `mtllib` records |
 
 `0` means no limit. When a record would take a count from `limit` to
 `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
