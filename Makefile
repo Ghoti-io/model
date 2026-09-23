@@ -427,6 +427,14 @@ all: $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET) ## Build shared + static l
 ####################################################################
 
 TEST_DEPFILES := $(foreach pair,$(TEST_PAIRS),$(OBJ_DIR)/tests/$(basename $(notdir $(word 1,$(subst |, ,$(pair))))).d)
+# The ASan tree needs these as much as the release tree does, and did not
+# have them. A header change therefore left its objects stale: adding a
+# field to GMDL_Limits and running `make test-asan` reported
+# "AddressSanitizer: unknown-crash ... in gmdl_limits_default", which reads
+# as a defect in the library and was a struct written by new code into a
+# buffer sized by old code. A clean rebuild passed. That failure mode is
+# worse than a stale result, because the report names a source line and
+# accuses working code.
 DEPFILES := $(LIBOBJECTS:.o=.d) $(TEST_HELPER_OBJ:.o=.d) $(TEST_DEPFILES)
 -include $(DEPFILES)
 
@@ -1021,6 +1029,23 @@ ASAN_FLAGS_STAMP := $(ASAN_OBJ_DIR)/.flags
 ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
 
 ASAN_LIBOBJECTS := $(patsubst src/%.c,$(ASAN_OBJ_DIR)/%.o,$(SOURCES))
+
+# The ASan tree needs header dependencies as much as the release tree does,
+# and did not have them. Adding a field to GMDL_Limits and running `make
+# test-asan` reported "AddressSanitizer: unknown-crash ... in
+# gmdl_limits_default": a struct written by new code into a buffer sized by
+# old code, from objects that no longer matched the header. A clean rebuild
+# passed. That is worse than a stale result, because the report names a
+# source line and accuses working code.
+#
+# This sits HERE, after ASAN_LIBOBJECTS, and not with the release DEPFILES
+# near the top. `:=` expands immediately, so up there ASAN_LIBOBJECTS is
+# still empty and the list came out blank - which looks exactly like a
+# working fix, since a no-op build is 0 either way. What tells them apart is
+# editing a header and counting: 0 before, and every dependent object after.
+ASAN_DEPFILES := $(ASAN_LIBOBJECTS:.o=.d) \
+    $(foreach pair,$(TEST_PAIRS),$(ASAN_OBJ_DIR)/tests/$(basename $(notdir $(word 1,$(subst |, ,$(pair))))).d)
+-include $(ASAN_DEPFILES)
 ASAN_TARGET := $(BASE_NAME_PREFIX)-asan.$(LIB_EXTENSION)
 ASAN_MODELLIBRARY := -L $(ASAN_APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH)-asan
 
@@ -1034,7 +1059,7 @@ endif
 $(ASAN_OBJ_DIR)/%.o: src/%.c $(ASAN_FLAGS_STAMP)
 	@printf "\n### Compiling (ASan+UBSan): $< ###\n"
 	@mkdir -p $(@D)
-	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -o $@
+	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
 	@printf "\n### Linking ASan+UBSan Model Library ###\n"
@@ -1044,12 +1069,12 @@ $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
 $(ASAN_OBJ_DIR)/tests/%.o: tests/%.cpp $(ASAN_FLAGS_STAMP)
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGMDL_TEST_DATA=\"$(TEST_DATA)\" -c $< -o $@
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGMDL_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(ASAN_OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(ASAN_FLAGS_STAMP)
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGMDL_TEST_DATA=\"$(TEST_DATA)\" -c $< -o $@
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGMDL_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 define asan-test-executable-rule
 ASAN_TEST_OBJ_$1 := $(ASAN_OBJ_DIR)/tests/$(basename $(notdir $1)).o
