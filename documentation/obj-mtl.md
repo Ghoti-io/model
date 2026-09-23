@@ -1321,10 +1321,21 @@ section 12 is where they are written down.
 `test_allocator.cpp` refuses every allocation against one designed document
 per format, and the fuzz harnesses refuse one allocation against every corpus
 document - so document shape is varied and allocation position is swept, but
-never both at once, and never above a few kilobytes. libFuzzer does not
-generate inputs of the size where the builders' arrays grow repeatedly, which
-is measurable: a planted defect reachable only past 128 vertices survived a
-corpus replay and 1,982,029 fuzz executions, and died instantly under the unit
-sweep. Closing it
-wants either a seed corpus of large documents, or a generator that builds one
-and sweeps its allocations the way the unit sweep does. Not done.
+never both at once, and never above a few kilobytes. A planted defect reachable only past 128
+vertices survived a corpus replay and 1,982,029 fuzz executions, and died
+instantly under the unit sweep.
+
+The reason is narrower than "the corpus is too small", which was the earlier
+claim here and is measurably wrong. Of 11,522 OBJ corpus documents, 9,054
+parse; the largest reaches 160 vertices, 16 exceed 128 - the largest initial
+capacity - and 56 exceed 32. So the corpus does reach the sizes where arrays
+grow, just rarely. What it does not do is sweep them: the harness refuses one
+allocation per document, and for a large document the allocations that matter
+are the repeated growths near the end, which one arbitrary position is
+unlikely to be.
+
+So closing it wants allocation positions swept against a second, larger
+document shape - not a bigger corpus. The unit sweep already forces growth on
+every array (`kGrow` exceeds every initial capacity, and `check-lists.py`
+holds it there); what is missing is a second shape beside the one designed
+document per format. Not done.
