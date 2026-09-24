@@ -202,6 +202,17 @@ TEST(MtlParse, MalformedPropertyIsAFormatError) {
 // Lookup
 //
 
+// A document with no materials hands back a NULL array, and the lookup has
+// to answer on that rather than walk it. Reached from an empty file, which
+// every other test of this function has a material in.
+TEST(MtlFind, AModelWithNoMaterialsFindsNothing) {
+  GMDL_Mtl * mtl = load_text("# nothing but a comment\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 0u);
+  EXPECT_EQ(gmdl_mtl_find(mtl, "anything"), nullptr);
+  gmdl_mtl_free(mtl);
+}
+
 TEST(MtlFind, FindsByName) {
   GMDL_Mtl * mtl = load_text("newmtl red\nKd 1 0 0\nnewmtl blue\nKd 0 0 1\n");
   ASSERT_NE(mtl, nullptr);
@@ -217,6 +228,59 @@ TEST(MtlFind, FindsByName) {
 //
 // Limits
 //
+
+// Section 2.5 makes a tab a separator wherever a space is one, and every
+// fixture in this file is written with spaces - so the tab half of every
+// whitespace test in the MTL parser was unrun. A map line is where the most
+// of them are: one skip before each option token, one ending it, and one
+// before the path.
+TEST(MtlParse, TabsSeparateEveryTokenOfAMapLine) {
+  GMDL_Mtl * mtl = load_text(
+      "newmtl m\n"
+      "map_Kd\t-o\t1\t2\t3\ta texture.png\n"
+      // A one-value colour, whose "is that the whole line" check has its own
+      // blank skip.
+      "Ks 0.5\t\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  ASSERT_NE(mtl->materials[0].map_Kd.path, nullptr);
+  EXPECT_STREQ(mtl->materials[0].map_Kd.path, "a texture.png");
+  EXPECT_FLOAT_EQ(mtl->materials[0].map_Kd.o[2], 3.0f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Ks[1], 0.5f)
+      << "one value is grey, and a tab after it is not a second value";
+  gmdl_mtl_free(mtl);
+}
+
+// An option whose arguments run out at the end of the line, which is a
+// different refusal from an argument that is present and not a number: the
+// first stops the reader with no token at all and the second with a token it
+// cannot use.
+TEST(MtlParse, AMapOptionWithNoArgumentIsAFormatError) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nmap_Kd -o\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl m\nmap_Kd -texres x a.png\n"),
+      GMDL_ERR_FORMAT);
+}
+
+// Zero is not "unlimited" for this one field, and nothing pinned that: every
+// test either takes the default or sets a small cap, so the arm that supplies
+// the fallback had never run. See GMDL_Limits.max_line_length.
+TEST(MtlLimits, AZeroLineLengthIsTheDefaultAndNotUnlimited) {
+  GMDL_Limits limits;
+  gmdl_limits_default(&limits);
+  limits.max_line_length = 0;
+  MemStream stream("newmtl a_name_well_under_the_default\n");
+  GMDL_Mtl * mtl = nullptr;
+  ASSERT_EQ(gmdl_mtl_load(stream.get(), &limits, nullptr, &mtl), GMDL_OK);
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_EQ(mtl->material_count, 1u);
+  gmdl_mtl_free(mtl);
+
+  std::string overlong = "newmtl "
+      + std::string(GMDL_DEFAULT_MAX_LINE_LENGTH, 'x') + "\n";
+  EXPECT_EQ(load_text_expecting_failure(overlong, &limits), GMDL_ERR_LIMIT)
+      << "zero means the default, not no cap at all";
+}
 
 TEST(MtlLimits, MaterialCapIsEnforced) {
   GMDL_Limits limits;
@@ -1064,6 +1128,50 @@ TEST(MtlMap, AFailedLoadReleasesThePathsItHadAlreadyRead) {
 //
 // Every write the dumper checks can fail (section 9).
 //
+
+// Each boolean map option is written through a `? "on" : "off"`, and every
+// fixture in the suite states the same spelling of each - so for three of
+// them only one arm of the ternary had ever run, and a dumper that wrote the
+// wrong word for the other would have passed. Both spellings of all four,
+// asserted on the text and then reparsed.
+TEST(MtlDump, ABooleanOptionKeepsTheSpellingTheFileUsed) {
+  GMDL_Mtl * mtl = load_text(
+      "newmtl on\n"
+      "map_aat on\n"
+      "map_Kd -blendu on -blendv on -clamp on a.png\n"
+      "newmtl off\n"
+      "map_aat off\n"
+      "map_Kd -blendu off -blendv off -clamp off b.png\n");
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 2u);
+
+  gmdltest::CapturedOutput sink;
+  ASSERT_NE(sink.get(), nullptr);
+  ASSERT_EQ(gmdl_mtl_dump(mtl, sink.get()), GMDL_OK);
+  std::string text = sink.finish();
+  EXPECT_NE(text.find("map_aat on\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("map_aat off\n"), std::string::npos) << text;
+  EXPECT_NE(text.find(" -blendu on -blendv on -clamp on "), std::string::npos)
+      << text;
+  EXPECT_NE(
+      text.find(" -blendu off -blendv off -clamp off "), std::string::npos)
+      << text;
+
+  MemStream again_stream(text);
+  GMDL_Mtl * again = nullptr;
+  ASSERT_EQ(gmdl_mtl_load(again_stream.get(), nullptr, nullptr, &again),
+      GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->material_count, 2u);
+  EXPECT_TRUE(again->materials[0].map_aat);
+  EXPECT_FALSE(again->materials[1].map_aat);
+  EXPECT_TRUE(again->materials[0].map_Kd.blendu);
+  EXPECT_FALSE(again->materials[1].map_Kd.blendu);
+  EXPECT_TRUE(again->materials[0].map_Kd.clamp);
+  EXPECT_FALSE(again->materials[1].map_Kd.clamp);
+  gmdl_mtl_free(again);
+  gmdl_mtl_free(mtl);
+}
 
 TEST(MtlDump, EveryWriteFailureIsReported) {
   // Two materials between them reaching every line the dumper can write:

@@ -1245,7 +1245,7 @@ assuming a surface would record something the file never said.
 
 | Field | Default | Counts |
 | --- | --- | --- |
-| `max_line_length` | 65536 | bytes in one line, excluding its ending |
+| `max_line_length` | `GMDL_DEFAULT_MAX_LINE_LENGTH` (65536) | bytes in one line, excluding its ending |
 | `max_vertices` | 0 (unlimited) | `v` records |
 | `max_texcoords` | 0 | `vt` |
 | `max_normals` | 0 | `vn` |
@@ -1269,8 +1269,15 @@ assuming a surface would record something the file never said.
 | `max_special_points` | 0 | `sp` indices, across every line |
 | `max_connections` | 0 | `con` records |
 
-`0` means no limit. When a record would take a count from `limit` to
-`limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
+`0` means no limit - **except for `max_line_length`**, where it means
+`GMDL_DEFAULT_MAX_LINE_LENGTH`. That one field is the odd one out on purpose:
+its buffer is allocated once, before the first line is read, so "no limit"
+would be an unbounded allocation a caller could ask for by leaving a field
+out. A caller who zeroes this struct and fills in only the fields it cares
+about gets no cap on anything it did not mention and a bounded line either
+way, which is the safe reading of an omission. When a record would take a
+count from `limit` to `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing
+stops.
 
 `max_faces` is one budget across three arrays, not one each. It was three
 separate checks against the same field until it was measured, so a file with

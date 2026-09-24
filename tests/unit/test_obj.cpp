@@ -83,6 +83,11 @@ TEST(LineHelpers, LeadingBlanksAreSkipped) {
   EXPECT_EQ(gmdl_first_token("   \t name rest", out, sizeof(out)), GMDL_OK);
   EXPECT_STREQ(out, "name");
 
+  // A token a tab ends, not a space. The scan tests for both and every
+  // caller's fixture is written with spaces.
+  EXPECT_EQ(gmdl_first_token("name\trest", out, sizeof(out)), GMDL_OK);
+  EXPECT_STREQ(out, "name");
+
   EXPECT_EQ(gmdl_rest_of_line("  \t two words  \t", out, sizeof(out)), GMDL_OK);
   EXPECT_STREQ(out, "two words");
 
@@ -1441,6 +1446,56 @@ TEST(ObjDump, ABasisSpanPastTheValuesWritesNoBmat) {
   gmdl_obj_free(obj);
 }
 
+// Three more states a parse cannot produce and a caller assembling a model
+// through the struct can, each of which would make the dump read past the
+// end of an array. The same shape as the body-span tests, applied to the
+// three places outside the free-form model that index one array by another's
+// count. The property asserted is the same one: nothing is read past the
+// end, and what is written still reloads.
+TEST(ObjDump, AModelWhoseSpansDisagreeIsStillWrittenSafely) {
+  // A face claiming more vertices than it holds, with no overflow array. The
+  // four inline slots are all real here, so what the count adds is exactly
+  // the overflow that is not there.
+  GMDL_Obj * face =
+      load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nf 1 2 3 4\n");
+  ASSERT_NE(face, nullptr);
+  ASSERT_EQ(face->face_count, 1u);
+  ASSERT_EQ(face->faces[0].overflow, nullptr);
+  face->faces[0].count = 7;
+  std::string text = dump_text(face);
+  EXPECT_NE(text.find("f 1 2 3 4\n"), std::string::npos)
+      << "the four inline slots are written and the absent overflow is not:\n"
+      << text;
+  face->faces[0].count = 4;
+  gmdl_obj_free(face);
+
+  // A group whose face range runs off the end of the face array.
+  GMDL_Obj * group = load_text("v 0 0 0\ng one\nf 1 1 1\n");
+  ASSERT_NE(group, nullptr);
+  ASSERT_EQ(group->group_count, 1u);
+  group->groups[0].face_count = 99;
+  text = dump_text(group);
+  EXPECT_EQ(count_occurrences(text, "f "), 1u) << text;
+  group->groups[0].face_count = 1;
+  gmdl_obj_free(group);
+
+  // A colour array shorter than the vertices it belongs to. Every vertex
+  // past the end is written without a colour, which is what an absent one
+  // means anyway.
+  GMDL_Obj * colored = load_text("v 0 0 0 1 0 0\nv 1 0 0 0 1 0\n");
+  ASSERT_NE(colored, nullptr);
+  ASSERT_EQ(colored->color_count, 2u);
+  size_t kept = colored->color_count;
+  colored->color_count = 1;
+  text = dump_text(colored);
+  EXPECT_NE(text.find("v 0 0 0 1 0 0\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("v 1 0 0\n"), std::string::npos)
+      << "the vertex past the colours is written without one:\n"
+      << text;
+  colored->color_count = kept;
+  gmdl_obj_free(colored);
+}
+
 // The other three states with no spelling, for the same reason.
 TEST(ObjDump, AFreeformStateReturningToNoneWritesNothing) {
   GMDL_Obj * obj = load_text(
@@ -1791,6 +1846,26 @@ TEST(ObjParse, TabsSeparateFaceTokens) {
   ASSERT_EQ(obj->face_count, 1u);
   EXPECT_EQ(obj->faces[0].count, 3u);
   EXPECT_EQ(obj->faces[0].vertex[2], 2);
+  gmdl_obj_free(obj);
+}
+
+// `l` and `p` do their own tokenising rather than sharing the face loop, so
+// each carries its own copy of the "space or tab" tests and neither had a
+// fixture with a tab in it. Three skips on the polyline side - before a
+// reference, ending one, and after the number a reference's own strict check
+// reads - and one on the point side.
+TEST(ObjParse, TabsSeparatePolylineAndPointReferences) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\n"
+      "l\t1/1\t2\t3\n"
+      "p\t1\t2\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->line_count, 1u);
+  EXPECT_EQ(obj->lines[0].count, 3u);
+  EXPECT_EQ(obj->line_vertices[obj->lines[0].start].texcoord, 0);
+  EXPECT_EQ(obj->line_vertices[obj->lines[0].start + 2].vertex, 2);
+  ASSERT_EQ(obj->point_count, 2u);
+  EXPECT_EQ(obj->points[1].vertex, 1);
   gmdl_obj_free(obj);
 }
 
@@ -2381,6 +2456,22 @@ TEST(ObjLine, ByteOrderMarkDoesNotSwallowTheFirstLine) {
   gmdl_obj_free(obj);
 }
 
+// The mark is three bytes and the reader compares all three, stopping at the
+// terminator so a one- or two-byte first line is not read past. Both of the
+// short prefixes are documents a file can begin with, and neither was tried:
+// what proves the second and third comparisons happen at all is a file that
+// starts with 0xEF and is not a mark.
+TEST(ObjLine, AnIncompleteByteOrderMarkIsNotOne) {
+  for (const char * start : {"\xEF", "\xEF\xBB", "\xEF\xBB v 9 9 9"}) {
+    GMDL_Obj * obj = load_text(std::string(start) + "\nv 1 2 3\n");
+    ASSERT_NE(obj, nullptr) << start;
+    ASSERT_EQ(obj->vertex_count, 1u)
+        << "the short prefix is an unrecognised directive, not a mark";
+    EXPECT_FLOAT_EQ(obj->vertices[0].x, 1.0f);
+    gmdl_obj_free(obj);
+  }
+}
+
 TEST(ObjLine, ByteOrderMarkOnlyCountsAtTheStart) {
   // Those three bytes in the middle of a file are ordinary content, and a
   // line beginning with them is just an unrecognised directive.
@@ -2505,6 +2596,29 @@ TEST(ObjFaceToken, EveryWellFormedShapeIsStillAccepted) {
   // "3//1": normal, no texture coordinate.
   EXPECT_EQ(obj->faces[0].texcoord[2], -1);
   EXPECT_EQ(obj->faces[0].normal[2], 0);
+  gmdl_obj_free(obj);
+}
+
+// A field left empty by ending the token rather than by writing another
+// slash. "1/" means what "1" means and "1/2/" means what "1/2" means -
+// nothing in 3.5 makes either an error, and no writer emits them - but the
+// reader gets there by a different route each time, through the bounds half
+// of "there is a character and it is not a slash" instead of the slash half.
+// "1//" and "1/2//" already covered the slash half; these cover the other.
+TEST(ObjFaceToken, ATokenMayEndWhereAFieldWouldStart) {
+  GMDL_Obj * obj = load_text(
+      "v 1 2 3\nv 1 2 3\nv 1 2 3\nvt 0 0\nvn 0 1 0\n"
+      "f 1/ 2/ 3/\n"
+      "f 1/1/ 2/1/ 3/1/\n"
+      "f 1/1// 2/1// 3/1//\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->face_count, 3u);
+  EXPECT_EQ(obj->faces[0].vertex[0], 0);
+  EXPECT_EQ(obj->faces[0].texcoord[0], -1) << "\"1/\" names no texcoord";
+  EXPECT_EQ(obj->faces[1].texcoord[0], 0);
+  EXPECT_EQ(obj->faces[1].normal[0], -1) << "\"1/1/\" names no normal";
+  EXPECT_EQ(obj->faces[2].texcoord[0], 0);
+  EXPECT_EQ(obj->faces[2].normal[0], -1) << "\"1/1//\" names no normal";
   gmdl_obj_free(obj);
 }
 
@@ -2939,14 +3053,23 @@ TEST(ObjDump, EveryWriteFailureIsReported) {
   // arriving from the other direction: not a directive the model lacks, but
   // a state a parse cannot produce.
   //
+  // The fourth is the same shape again: every material mapping moved out
+  // from under the elements that name it, so every `usemtl` the dump writes
+  // goes through the "no mapping, so white" fallback instead. That fallback
+  // has a write of its own and so a failure arm of its own, and a model
+  // whose indices all resolve leaves it unreached -
+  // AFaceNamingAMaterialWithNoMappingWritesWhite covers the fallback and not
+  // its failure.
   struct SweepCase {
     const char * source;
     bool hand_set_mtllib;
+    bool displace_materials;
   };
   const SweepCase cases[] = {
-      {kRichModel, false},
-      {kGrouplessModel, false},
-      {kGrouplessModel, true},
+      {kRichModel, false, false},
+      {kGrouplessModel, false, false},
+      {kGrouplessModel, true, false},
+      {kRichModel, false, true},
   };
   for (const SweepCase & sweep : cases) {
     GMDL_Obj * obj = load_text(sweep.source);
@@ -2955,6 +3078,12 @@ TEST(ObjDump, EveryWriteFailureIsReported) {
       ASSERT_EQ(obj->mtllib_count, 0u);
       const char * path = "set by hand.mtl";
       memcpy(obj->mtllib, path, strlen(path) + 1);
+    }
+    if (sweep.displace_materials) {
+      ASSERT_GT(obj->material_mapping_count, 0u);
+      for (size_t m = 0; m < obj->material_mapping_count; m++) {
+        obj->material_mappings[m].index += 1000;
+      }
     }
 
     // Walk the failure through the dump one write at a time. Each position

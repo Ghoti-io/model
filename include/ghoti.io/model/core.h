@@ -69,8 +69,29 @@ GMDL_API const char * gmdl_result_string(GMDL_Result result);
  * Zero means "no limit" for every field. Pass NULL to a load function to use
  * gmdl_limits_default().
  */
+/**
+ * @brief The line length both parsers use when ::GMDL_Limits.max_line_length
+ *   is zero, and the value ::gmdl_limits_default() puts there.
+ *
+ * Named rather than repeated because it was written out three times - in the
+ * defaults and in each loader - and a caller reading the header had no way to
+ * know the three agreed.
+ */
+#define GMDL_DEFAULT_MAX_LINE_LENGTH 65536u
+
 typedef struct GMDL_Limits {
-  size_t max_line_length; ///< Longest accepted line, in bytes.
+  /**
+   * Longest accepted line, in bytes.
+   *
+   * **Zero does not mean "unlimited" here**, which it does for every other
+   * field of this struct. It means ::GMDL_DEFAULT_MAX_LINE_LENGTH, because
+   * the line buffer is allocated once before the first line is read and a
+   * caller cannot be given an unbounded allocation by leaving a field out.
+   * A caller who zeroes this struct and fills in only the fields it cares
+   * about therefore still gets a bounded line, which is the safe reading of
+   * an omission and the reason the odd one out is this one.
+   */
+  size_t max_line_length;
   size_t max_vertices;    ///< Cap on `v` records.
   size_t max_texcoords;   ///< Cap on `vt` records.
   size_t max_normals;     ///< Cap on `vn` records.

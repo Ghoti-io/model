@@ -64,7 +64,7 @@ void gmdl_limits_default(GMDL_Limits * limits) {
   // size of the input already bounds them - every record costs at least a
   // couple of bytes - and a legitimate model can be very large.
   *limits = (GMDL_Limits) {
-    .max_line_length = 65536,
+    .max_line_length = GMDL_DEFAULT_MAX_LINE_LENGTH,
     .max_vertices = 0,
     .max_texcoords = 0,
     .max_normals = 0,

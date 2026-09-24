@@ -492,9 +492,14 @@ std::string rich_mtl() {
     std::string n = std::to_string(i);
     t += "newmtl a material " + n + "\n";
     t += "Ka 0.1 0.2 0.3\nKd 0.4 0.5 0.6\nKs 1 1 1\n";
-    t += "Ns 32\nd 0.5\nillum 2\nKe 1 1 1\nPr 0.25\n";
+    t += "Ns 32\nd 0.5\nillum 2\nKe 1 1 1\nPr 0.25\nmap_aat on\n";
     if (i < 3) {
-      t += "map_Kd -s 1 1 1 -o 0 0 0 -bm 2 some texture " + n + ".png\n";
+      // -blendu, -blendv and -clamp are here because the writer gives each
+      // its own fprintf and its own failure arm, and a map that states none
+      // of them leaves all three unreached - which is the same miss
+      // kRichModel's comment warns about, on the MTL side.
+      t += "map_Kd -s 1 1 1 -o 0 0 0 -bm 2 -blendu off -blendv off";
+      t += " -clamp on some texture " + n + ".png\n";
       t += "map_bump -bm 0.5 a bump map " + n + ".png\n";
       t += "refl -type sphere sky " + n + ".png\n";
     }

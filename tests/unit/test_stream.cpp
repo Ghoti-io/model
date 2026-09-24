@@ -62,6 +62,19 @@ TEST(Stream, AccessorsTolerateNull) {
   EXPECT_EQ(gmdl_stream_tell(nullptr), 0u);
   EXPECT_EQ(gmdl_stream_size(nullptr), 0u);
   EXPECT_NE(gmdl_stream_eof(nullptr), 0);
+  EXPECT_EQ(gmdl_stream_seek(nullptr, 0), GMDL_ERR_INVALID);
+}
+
+// Both answers, not only the one at the end. A stream with bytes left is the
+// case every parse is in for all but its last read, and nothing asked for it:
+// `gmdl_stream_eof()` was only ever called after a seek to the end.
+TEST(Stream, EofIsFalseWhileBytesRemain) {
+  MemStream s("abcdef");
+  EXPECT_EQ(gmdl_stream_eof(s.get()), 0);
+  ASSERT_EQ(gmdl_stream_seek(s.get(), 5), GMDL_OK);
+  EXPECT_EQ(gmdl_stream_eof(s.get()), 0) << "one byte left is not the end";
+  ASSERT_EQ(gmdl_stream_seek(s.get(), 6), GMDL_OK);
+  EXPECT_NE(gmdl_stream_eof(s.get()), 0);
 }
 
 TEST(Stream, ReadRejectsNullArguments) {
@@ -114,6 +127,18 @@ TEST(StreamReadLine, SplitsOnEveryLineEnding) {
   EXPECT_EQ(lines[1], "windows");
   EXPECT_EQ(lines[2], "mac");
   EXPECT_EQ(lines[3], "last") << "a final line with no terminator still counts";
+}
+
+// A carriage return as the very last byte. The reader looks past a "\r" for
+// the "\n" of a "\r\n" pair, and with the "\r" at the end there is nothing to
+// look at - so the bounds test is the only thing standing between it and a
+// read one byte past the buffer. "mac\rlast" reaches the other half of that
+// test and this reaches this one.
+TEST(StreamReadLine, ACarriageReturnAtTheEndEndsTheLine) {
+  MemStream s("only\r");
+  std::vector<std::string> lines = read_lines(s.get(), 64);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0], "only");
 }
 
 TEST(StreamReadLine, EmptyLinesAreKept) {

@@ -233,7 +233,11 @@ static size_t mtl_take_floats(
     size_t length = 0;
     const char * token = mtl_next_token(*cursor, &length);
     float value = 0.0f;
-    if (length == 0 || !mtl_token_float(token, length, &value)) {
+    // A token of no length is mtl_token_float()'s answer too, and checking
+    // it here as well left that clause of its guard unreachable: one
+    // predicate written twice, where the copy nobody can reach is the copy
+    // that stops being maintained.
+    if (!mtl_token_float(token, length, &value)) {
       break;
     }
     out[taken++] = value;
@@ -513,7 +517,10 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     limits = &defaults;
   }
 
-  size_t line_size = limits->max_line_length ? limits->max_line_length : 65536;
+  // Zero is not "unlimited" here - see GMDL_Limits.max_line_length - because
+  // this buffer is allocated before the first line is read.
+  size_t line_size = limits->max_line_length ? limits->max_line_length
+                                             : GMDL_DEFAULT_MAX_LINE_LENGTH;
   char * line = gcu_allocator_malloc(allocator, line_size + 1);
   if (!line) {
     return GMDL_ERR_OOM;

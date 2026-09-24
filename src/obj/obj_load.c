@@ -977,10 +977,12 @@ static GMDL_Result obj_parse_stech(
 /**
  * Read an `mg` line into the free-form state (3.18).
  *
- * `mg off` and `mg group [res]`. The resolution is optional because the
- * specification gives a group of 0 as the other way to turn merging off, and
- * a line turning it off carries no distance - so refusing `mg 0` would
- * reject a document that said exactly what the format tells it to say. How
+ * `mg off` and `mg group [res]`. The resolution is optional and the reference
+ * says so: it calls `res` "a required argument only when using merging
+ * groups", and gives "a value of 0 or off" as the two ways to turn adjacency
+ * detection off - so a line that disables merging carries no distance, and
+ * refusing `mg 0` would reject a document that says exactly what the format
+ * tells it to say. How
  * many numbers there were is recorded, because an absent `res` and a written
  * `res 0` are different lines (::GMDL_Obj_Freeform_State.merge_count).
  *
@@ -1190,7 +1192,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     limits = &defaults;
   }
 
-  size_t line_size = limits->max_line_length ? limits->max_line_length : 65536;
+  // Zero is not "unlimited" here - see GMDL_Limits.max_line_length - because
+  // this buffer is allocated before the first line is read.
+  size_t line_size = limits->max_line_length ? limits->max_line_length
+                                             : GMDL_DEFAULT_MAX_LINE_LENGTH;
   // Room for the NUL that gmdl_stream_read_line() always writes.
   char * line = gcu_allocator_malloc(allocator, line_size + 1);
   if (!line) {
