@@ -87,7 +87,6 @@ typedef struct GMDL_Limits {
   size_t max_render_states; ///< Cap on distinct render-attribute states.
   size_t max_shadow_objs; ///< Cap on `shadow_obj` records.
   size_t max_trace_objs;  ///< Cap on `trace_obj` records.
-  size_t max_freeform_attrs; ///< Cap on `ctech`, `stech` and `mg` records.
   size_t max_freeforms;   ///< Cap on `curv`, `curv2` and `surf` elements.
   size_t max_basis_values; ///< Cap on `bmat` values, across every line.
   size_t max_freeform_bodies; ///< Cap on `parm`, `trim`, `hole`, `scrv` and

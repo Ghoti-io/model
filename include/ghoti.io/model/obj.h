@@ -368,41 +368,51 @@ typedef struct {
 } GMDL_Obj_Statement;
 
 /**
- * @brief Which approximation directive a ::GMDL_Obj_Freeform_Attr holds.
+ * @brief How a `ctech` line asks a curve to be approximated (3.18).
+ *
+ * `ctech` and `stech` are the same idea for the two kinds of element, and
+ * they are **two enumerations rather than one** because the format gives
+ * them different technique names: a curve is subdivided by `cparm` and a
+ * surface by `cparma` or `cparmb`, and no file may write `ctech cparma` or
+ * `stech cparm`. One shared enumeration would make both of those spellable
+ * and leave the dump free to write a line no reader accepts.
+ *
+ * The technique also fixes how many numbers the line carries, so there is no
+ * count beside it: see ::GMDL_Obj_Freeform_State.ctech_value.
  */
-typedef enum GMDL_Obj_Freeform_Attr_Kind {
-  GMDL_OBJ_FREEFORM_CTECH = 0, ///< `ctech technique resolution...`.
-  GMDL_OBJ_FREEFORM_STECH,     ///< `stech technique resolution...`.
-  GMDL_OBJ_FREEFORM_MG,        ///< `mg group res`, or `mg off`.
-} GMDL_Obj_Freeform_Attr_Kind;
+typedef enum GMDL_Obj_Ctech {
+  GMDL_OBJ_CTECH_NONE = 0, ///< No `ctech` was in force.
+  GMDL_OBJ_CTECH_CPARM,    ///< `ctech cparm res`; constant parametric.
+  GMDL_OBJ_CTECH_CSPACE,   ///< `ctech cspace maxlength`; constant spatial.
+  GMDL_OBJ_CTECH_CURV,     ///< `ctech curv maxdist maxangle`; curvature.
+} GMDL_Obj_Ctech;
 
 /**
- * @brief A `ctech`, `stech` or `mg` line, kept as text.
+ * @brief How an `stech` line asks a surface to be approximated (3.18).
  *
- * These three are state for the **free-form** sub-language: `ctech` and
- * `stech` set how a curve or a surface is approximated, and `mg` sets the
- * merging group for the free-form surfaces that follow. This library did not
- * read free-form geometry when they landed, so there was nothing here for
- * them to apply to - which is why they are text and not parsed fields.
- *
- * That was deliberate and it is **provisional**. Parsing them into typed
- * records then would have meant choosing a representation before the model
- * they describe existed, and attaching it to nothing.
- *
- * **The model exists now** - ::GMDL_Obj_Freeform and its body statements, as
- * of 2026-09-24 - so this field is the one part of 3.19's sub-language still
- * spelled as text, and giving it a typed home is the breaking change 3.18
- * documents as coming.
- *
- * `text` is everything after the directive with trailing blanks removed,
- * exactly as written. Unlike ::GMDL_Obj_Statement this names no file and no
- * command - there is nothing here a consumer could execute - so the warnings
- * on that type do not apply.
+ * See ::GMDL_Obj_Ctech for why the two are separate enumerations.
  */
-typedef struct {
-  GMDL_Obj_Freeform_Attr_Kind kind; ///< Which directive this was.
-  char * text; ///< The text after it, owned by the ::GMDL_Obj.
-} GMDL_Obj_Freeform_Attr;
+typedef enum GMDL_Obj_Stech {
+  GMDL_OBJ_STECH_NONE = 0, ///< No `stech` was in force.
+  GMDL_OBJ_STECH_CPARMA,   ///< `stech cparma ures vres`; separate u and v.
+  GMDL_OBJ_STECH_CPARMB,   ///< `stech cparmb uvres`; one resolution.
+  GMDL_OBJ_STECH_CSPACE,   ///< `stech cspace maxlength`; constant spatial.
+  GMDL_OBJ_STECH_CURV,     ///< `stech curv maxdist maxangle`; curvature.
+} GMDL_Obj_Stech;
+
+/**
+ * @brief Whether an `mg` line was in force, and whether it turned on (3.18).
+ *
+ * Three states rather than a `bool`, because "the file said `mg off`" and
+ * "the file said nothing" are different documents and a dump that wrote
+ * `mg off` for the second would put a directive into a file that had none.
+ * That is the distinction ::GMDL_OBJ_CSTYPE_NONE draws for `cstype`.
+ */
+typedef enum GMDL_Obj_Merge {
+  GMDL_OBJ_MERGE_NONE = 0, ///< No `mg` was in force.
+  GMDL_OBJ_MERGE_OFF,      ///< `mg off`.
+  GMDL_OBJ_MERGE_ON,       ///< `mg group [res]`.
+} GMDL_Obj_Merge;
 
 /**
  * @brief Which basis a `cstype` line named (3.19).
@@ -419,11 +429,14 @@ typedef enum GMDL_Obj_Cstype {
 /**
  * @brief The free-form state in force where a curve or a surface began.
  *
- * `cstype`, `deg`, `bmat` and `step` are state in the file the way `usemtl`
- * is: each applies to every free-form element after it until the next one
- * changes it. Together they say how the control points a `curv`, `curv2` or
- * `surf` names are to be interpreted, and without them the element is a list
- * of indices that means nothing.
+ * `cstype`, `deg`, `bmat`, `step`, `ctech`, `stech` and `mg` are state in the
+ * file the way `usemtl` is: each applies to every free-form element after it
+ * until the next one changes it. The first four say how the control points a
+ * `curv`, `curv2` or `surf` names are to be interpreted, and without them the
+ * element is a list of indices that means nothing. The last three say how
+ * finely the result is to be approximated and how adjacent surfaces meet
+ * (3.18); a consumer that only reads the geometry can ignore them, which is
+ * why they are last and why an element that names none is still complete.
  *
  * **Held on the element rather than indexed**, which is the opposite of what
  * ::GMDL_Obj_Render_State does, for a reason that is about counts and not
@@ -468,6 +481,63 @@ typedef struct {
   size_t basis_u_count; ///< How many, or 0 when no `bmat u` was in force.
   size_t basis_v_start; ///< First `bmat v` value in ::GMDL_Obj.basis_values.
   size_t basis_v_count; ///< How many, or 0 when no `bmat v` was in force.
+  GMDL_Obj_Ctech ctech; ///< From `ctech`, or ::GMDL_OBJ_CTECH_NONE.
+  /**
+   * The numbers the `ctech` line carried, in the order it wrote them.
+   *
+   * **The technique says how many are meaningful**, so there is no count
+   * beside it the way ::degree_count stands beside ::degree_u: `cparm` and
+   * `cspace` carry one, `curv` carries two, and a line with the wrong number
+   * of them is ::GMDL_ERR_FORMAT rather than a record with a gap in it. That
+   * is the difference from `deg` and `step`, where the format itself defines
+   * both a one-number and a two-number form and a reader cannot tell an
+   * absent second number from a written one without counting.
+   *
+   * | ::ctech | `[0]` | `[1]` |
+   * | --- | --- | --- |
+   * | ::GMDL_OBJ_CTECH_CPARM | `res` | unused |
+   * | ::GMDL_OBJ_CTECH_CSPACE | `maxlength` | unused |
+   * | ::GMDL_OBJ_CTECH_CURV | `maxdist` | `maxangle` |
+   *
+   * Unused entries are 0. They are not named individually because no name
+   * fits all three rows: `[0]` is a parametric resolution, a length and a
+   * distance depending on which technique is in force.
+   */
+  float ctech_value[2];
+  GMDL_Obj_Stech stech; ///< From `stech`, or ::GMDL_OBJ_STECH_NONE.
+  /**
+   * The numbers the `stech` line carried. See ::ctech_value.
+   *
+   * | ::stech | `[0]` | `[1]` |
+   * | --- | --- | --- |
+   * | ::GMDL_OBJ_STECH_CPARMA | `ures` | `vres` |
+   * | ::GMDL_OBJ_STECH_CPARMB | `uvres` | unused |
+   * | ::GMDL_OBJ_STECH_CSPACE | `maxlength` | unused |
+   * | ::GMDL_OBJ_STECH_CURV | `maxdist` | `maxangle` |
+   */
+  float stech_value[2];
+  GMDL_Obj_Merge merge; ///< From `mg`, or ::GMDL_OBJ_MERGE_NONE.
+  /**
+   * The merging group number, when ::merge is ::GMDL_OBJ_MERGE_ON.
+   *
+   * **A group of 0 is the format's other spelling of "off"**, alongside the
+   * `off` keyword, and this records which one the file wrote rather than
+   * folding them together - the same call `g` and `o` get. A consumer acting
+   * on the state reads 0 and `off` alike; one writing the file back out
+   * writes what it was given.
+   */
+  int32_t merge_group;
+  float merge_resolution; ///< `mg`'s second number, or 0 when it had one.
+  /**
+   * Numbers on the `mg` line: 0 (for `off` or no line), 1 or 2.
+   *
+   * The specification writes `mg group res`, and also says a group of 0
+   * turns merging off - for which a resolution means nothing and files write
+   * none. So one number is accepted and recorded as one, for the reason
+   * ::degree_count exists: an absent `res` and a written `res 0` are
+   * different lines and no float value can stand for "absent".
+   */
+  int32_t merge_count;
 } GMDL_Obj_Freeform_State;
 
 /**
@@ -831,15 +901,6 @@ typedef struct {
    */
   GMDL_Obj_Statement * statements;
   size_t statement_count; ///< Number of statements.
-
-  /**
-   * `ctech`, `stech` and `mg` lines, in file order, or NULL.
-   *
-   * Kept as text because the geometry they describe is not read - see
-   * ::GMDL_Obj_Freeform_Attr, which also says why that is provisional.
-   */
-  GMDL_Obj_Freeform_Attr * freeform_attrs;
-  size_t freeform_attr_count; ///< Number of those lines.
 
   /**
    * Every `mtllib` path the document named, in the order it named them.

@@ -665,31 +665,94 @@ a curve or a surface is approximated; `mg` sets the merging group and
 resolution for the free-form surfaces that follow, with `mg off` turning
 adjacency detection off.
 
-All three are state for the free-form sub-language, which this library did
-not read when they landed. They are kept as text:
-`GMDL_Obj.freeform_attrs` holds them in file order, each with the directive
-it came from and everything after it, trailing blanks removed - the reading
-`call` and `csh` use (3.13), with which they share the trimming. A bare one
-is `GMDL_ERR_FORMAT`.
+All three are **state for the free-form sub-language**, the way `cstype` and
+`deg` are (3.19), so each applies to every element after it until the next
+one changes it, and each is recorded on
+`GMDL_Obj_Freeform.state` - alongside the basis, the degree and the step. An
+element declared before any of the three carries none of them; one declared
+after carries what was in force. A list in file order can answer neither
+question, which is why these are not one.
 
-**Text is a provisional answer and is meant to look like one.** Parsing them
-into typed records then would have meant choosing a representation before the
-model they describe existed, and attaching it to nothing; keeping the line
-loses no bytes and commits to nothing.
+They were **text** until 2026-09-24, in a `GMDL_Obj.freeform_attrs` array
+this version removes. That was a deliberate placeholder: parsing them into
+typed records before the model they describe existed would have meant
+choosing a representation and attaching it to nothing. 3.19 landed the model
+on 2026-09-24 and this landed the same day, which is the breaking change the
+previous version of this section documented as coming.
 
-**That model now exists** (3.19, 2026-09-24), so the reason for the text has
-expired and the change it promised is due: these three get a typed home
-beside the elements they describe, which is a breaking change to a field this
-section documents as provisional rather than a silent loss of data in the
-meantime. Not done, and listed in 12.
+#### The techniques
 
-Unlike `call` and `csh` these name no file and no command, so none of the
-warnings section 3.13 carries apply. The dump writes them in file order
-before the elements, with the statements, for the same reason: nothing in
-this model is ordered against the geometry.
+`ctech` and `stech` name a technique and then the numbers it calls for:
 
-`GMDL_Limits.max_freeform_attrs` caps the three together, one budget across
-one array.
+| line | meaning |
+| --- | --- |
+| `ctech cparm res` | constant parametric subdivision |
+| `ctech cspace maxlength` | constant spatial subdivision |
+| `ctech curv maxdist maxangle` | curvature-dependent subdivision |
+| `stech cparma ures vres` | constant parametric, u and v separately |
+| `stech cparmb uvres` | constant parametric, one resolution |
+| `stech cspace maxlength` | constant spatial subdivision |
+| `stech curv maxdist maxangle` | curvature-dependent subdivision |
+
+The seven rows are the reference's, argument names and all, and the arity
+column of the table the parser and the dumper share is read from them.
+
+`GMDL_Obj_Ctech` and `GMDL_Obj_Stech` are **two enumerations, not one**.
+`cparm` is a curve technique and `cparma` a surface one, and the words are
+close enough that a single lookup would accept each in the other's line
+without anything noticing - a file would come back saying a curve is drawn by
+a rule the format gives only to surfaces. Here `ctech cparma 4 8` is
+`GMDL_ERR_FORMAT`, and so is an unrecognised technique, for the reason 3.19
+gives for an unrecognised `cstype`: the format defines the spellings and
+there is no other reading to guess at.
+
+**A technique carries exactly the numbers its row names.** `ctech curv 0.5`
+is `GMDL_ERR_FORMAT`, not a `maxangle` of zero - the technique fixes the
+arity, so a short line has lost a number rather than chosen a shorter form,
+and recording a 0 would put a value into the model the document never wrote.
+This is where these two part company with `deg` and `step`, which the format
+itself gives both a one-number and a two-number form (3.19); there a count
+records which was written, and here there is nothing to count.
+
+Each number must be a **whole token**: `ctech curv 1.5.2` is
+`GMDL_ERR_FORMAT` rather than `1.5` followed by `0.2`, the same rule and the
+same reason as the body statements in 3.19.
+
+#### `mg`
+
+`mg off`, or `mg group [res]`. `GMDL_Obj_Freeform_State.merge` is
+`GMDL_OBJ_MERGE_NONE`, `_OFF` or `_ON`; three states rather than a `bool`,
+because a file that said `mg off` and a file that said nothing are different
+documents and a dump that wrote `mg off` for the second would put a directive
+into a file that had none.
+
+**The resolution is optional, and the reference says so.** Bourke's page
+writes the syntax as `mg group_number res`, then says of `res` that it "is a
+required argument only when using merging groups" and of `group_number` that
+turning adjacency detection off takes "a value of 0 or off". So a line that
+disables merging carries no distance, and refusing `mg 0` would reject a
+document saying exactly what the format tells it to say. `merge_count`
+records whether a `res` was there, for the reason `degree_count` exists:
+`mg 1` and `mg 1 0` are different lines and no float value can stand for
+"absent".
+
+A group of 0 is **not** folded into `_OFF`. Which spelling the file used is
+kept, the call `g` and `o` get in 3.6: a consumer acting on the state reads
+the two alike, and one writing the file back writes what it was given.
+
+A second token that is not a number - `mg 1 half` - is `GMDL_ERR_FORMAT`.
+That is stricter than `v`, where everything after the numbers is a field the
+format does not define (3.1); here the second token *is* a field the format
+defines, so a line that says a resolution and does not give one is malformed
+rather than decorated. A group outside `int32_t` is `GMDL_ERR_LIMIT`, the
+answer `s`, `lod` and `illum` already give.
+
+#### Caps
+
+None. These are fixed-size fields on a record 3.19 already caps with
+`GMDL_Limits.max_freeforms`, so there is nothing here a document can make
+arbitrarily large. `max_freeform_attrs`, which capped the text array, is
+removed with it.
 
 ### 3.19 The free-form sub-language
 
@@ -735,7 +798,10 @@ at all is `GMDL_ERR_FORMAT`, as `vt` with none is.
 
 Four directives saying how the control points of the elements that follow
 are to be read. Each is state in the file exactly as `usemtl` is, and
-together they are what makes a `curv` more than a list of indices.
+together they are what makes a `curv` more than a list of indices. `ctech`,
+`stech` and `mg` join them on the same record (3.18); they are documented
+apart because they say how finely the result is drawn rather than what it
+is, and an element naming none of them is still complete.
 
 - **`cstype [rat] type`** names one of five bases: `bmatrix`, `bezier`,
   `bspline`, `cardinal` or `taylor`. `rat` is a *prefix* making the curve or
@@ -1195,7 +1261,6 @@ assuming a surface would record something the file never said.
 | `max_render_states` | 0 | distinct render-attribute combinations |
 | `max_shadow_objs` | 0 | `shadow_obj` records |
 | `max_trace_objs` | 0 | `trace_obj` records |
-| `max_freeform_attrs` | 0 | `ctech`, `stech` and `mg` records together |
 | `max_freeforms` | 0 | `curv`, `curv2` and `surf` elements together |
 | `max_basis_values` | 0 | `bmat` values, across every line |
 | `max_freeform_bodies` | 0 | `parm`, `trim`, `hole`, `scrv` and `sp` lines together |
@@ -1426,10 +1491,18 @@ model.
 Free-form elements are written with the polylines and the points, in the
 same two passes and for the same reason - they take a material too. Their
 state directives are written the way the render attributes are, only where
-one of the four differs, and the basis spans are compared rather than the
+one of the seven differs, and the basis spans are compared rather than the
 values: within one parse two elements share a span exactly when they share a
 matrix, and for a hand-built model the comparison errs towards writing a
 `bmat` twice, which reloads the same.
+
+The technique and merging directives are written after the rest of the
+state, so that a run of elements differing only in how finely they are drawn
+writes its geometry state once. A technique is written with exactly as many
+numbers as its row in 3.18 gives it, from the same table the parser reads, so
+a technique cannot be written with more numbers than it is read back with. An
+`mg` whose `merge_count` is 1 writes the group alone - writing `mg 2 0`
+instead would put a distance into the file the document never gave.
 
 Each element's body statements are written between it and its `end`, one
 line per record and in the order the file wrote them (3.19). A body span or
@@ -1471,11 +1544,14 @@ Four things a `GMDL_OK` model may hold cannot be written back, because the
 format has no spelling for them rather than because the dumper is wrong: a
 material no element uses, an index below -1, a name - or a texture map path -
 ending in a backslash, and an element that names **no** material while one is
-in force. The free-form state adds four more of that last shape - a
-`cstype`, `deg`, `step` or `bmat` returning to "none in force" - and none of
-them is reachable from a parse either, for the same reason: each directive
-only ever sets a value and the format gives none of them an "off". Section 10 says what each one is and how the fuzzers account for
-it.
+in force. The free-form state adds six more of that last shape - a
+`cstype`, `deg`, `step`, `bmat`, `ctech` or `stech` returning to "none in
+force" - and none of them is reachable from a parse either, for the same
+reason: each directive only ever sets a value and the format gives none of
+them an "off". `mg` is the exception among the seven and is worth the
+sentence: `mg off` is a spelling the format does have, so `_OFF` writes a
+line and only `_NONE` writes nothing. Section 10 says what each one is and
+how the fuzzers account for it.
 
 That last one is not a state a parse can reach: `material_index` moves from
 -1 to a mapping and never back, because OBJ can change the material in force
@@ -1778,11 +1854,6 @@ section 12 is where they are written down.
   tessellates a surface or walks a trimming loop, and a polygon-mesh consumer
   like `libs/cjelly` wants neither. Recording it costs a consumer nothing and
   loses nothing; evaluating it is a different library.
-- **Retyping `ctech`, `stech` and `mg`.** Now unblocked rather than open:
-  those three are held as text because the geometry they describe was not
-  read when they landed, and it is now. Giving them a typed home beside
-  3.19's model is the breaking change 3.18 documents as coming, and the only
-  thing still deciding it is when to make it.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is now the only place 4.5
   takes it further than either: `-type` on a colour map was the other, and it
@@ -1831,11 +1902,27 @@ every array (`kGrow` exceeds every initial capacity, and `check-lists.py`
 holds it there); what was missing is a second shape beside the one designed
 document per format.
 
-**Done for OBJ, not for MTL.** `regrow_obj()` is the same shape as
-`rich_obj()` at 600 entries, past three doublings of the largest initial
-capacity, so every array in it regrows and a refusal lands on second and
-third growths as well as first ones - 427 (site, context) pairs that the
-smaller sweep does not contain. MTL still has exactly one designed document,
-so for MTL the paragraph above stands unchanged: a defect in a later growth
-of an MTL array is out of the population of every instrument here. What that
-would take is `regrow_mtl()` beside `regrow_obj()`, not new machinery.
+**Done for OBJ; for MTL it was never open.** `regrow_obj()` is the same
+shape as `rich_obj()` at 600 entries, past three doublings of the largest
+initial capacity, so every array in it regrows and a refusal lands on second
+and third growths as well as first ones - 770 (site, context) pairs that the
+smaller sweep does not contain.
+
+The version of this paragraph written on 2026-09-23 went on to say that MTL
+had the same gap and wanted a `regrow_mtl()` beside `regrow_obj()`. **That was
+wrong, and wrong for a reason worth keeping**: it carried a measurement from
+OBJ to MTL across the fact that decides it. The OBJ gap exists because
+`kGrow` is 160 against a largest initial capacity of 128, so the biggest
+arrays grow exactly once. MTL has one array, `materials`, and its initial
+capacity is **8** - so growth at 1.5x puts a reallocation at 9, 13, 19, 28,
+41, 61, 91 and 136 materials, and `rich_mtl()`'s 160 crosses all eight. The
+sweep refuses each of that parse's 21 allocations in turn, so second through
+eighth growths are already in its population. Measured directly by counting
+allocations per material count and reading where the count steps, rather than
+inferred from the growth constant.
+
+A `regrow_mtl()` at 600 would add three further growth positions (203, 303,
+454) and nothing else, since a map path is a plain copy and not an array. It
+is not worth a second full sweep, and saying so is the point: the work the
+previous paragraph asked for would have been done against a gap that was not
+there.

@@ -211,6 +211,39 @@ const char * gmdl_cstype_name(GMDL_Obj_Cstype type);
  */
 const char * gmdl_body_kind_name(GMDL_Obj_Body_Kind kind);
 
+/**
+ * The approximation technique a `ctech` word names, and its arity (3.18).
+ *
+ * `ctech` and `stech` get a function each rather than one that takes a flag,
+ * for the reason ::GMDL_Obj_Ctech is a separate enumeration from
+ * ::GMDL_Obj_Stech: the two accept different words, and a shared lookup
+ * would read `ctech cparma` as a surface technique on a curve.
+ *
+ * @param word The text after `ctech`, ended by the matcher's whitespace rule.
+ * @param out Receives the technique.
+ * @param out_arity Receives how many numbers the line must carry, 1 or 2.
+ * @param out_rest Receives the text after the word, past any blanks.
+ * @return true when the word names one.
+ */
+bool gmdl_ctech_from_name(const char * word, GMDL_Obj_Ctech * out,
+    size_t * out_arity, const char ** out_rest);
+
+/**
+ * The word a curve technique is spelled with, and its arity, for the dump.
+ *
+ * @param technique The technique.
+ * @param out_arity Receives how many numbers to write; untouched on NULL.
+ * @return Its spelling, or NULL for ::GMDL_OBJ_CTECH_NONE, which has none.
+ */
+const char * gmdl_ctech_name(GMDL_Obj_Ctech technique, size_t * out_arity);
+
+/** ::gmdl_ctech_from_name() for `stech`. */
+bool gmdl_stech_from_name(const char * word, GMDL_Obj_Stech * out,
+    size_t * out_arity, const char ** out_rest);
+
+/** ::gmdl_ctech_name() for `stech`. */
+const char * gmdl_stech_name(GMDL_Obj_Stech technique, size_t * out_arity);
+
 #ifdef __cplusplus
 }
 #endif

@@ -215,11 +215,6 @@ bool names_are_representable(const GMDL_Obj * obj) {
       return false;
     }
   }
-  for (size_t i = 0; i < obj->freeform_attr_count; i++) {
-    if (ends_with_backslash(obj->freeform_attrs[i].text)) {
-      return false;
-    }
-  }
   return true;
 }
 
@@ -306,6 +301,21 @@ bool same_freeform_state(const GMDL_Obj * a_obj,
       || a.step_count != b.step_count || a.basis_u_count != b.basis_u_count
       || a.basis_v_count != b.basis_v_count) {
     return false;
+  }
+  // The approximation directives, which are state on the element like the
+  // rest of this struct (3.18). Their numbers go through same_float() for
+  // the reason every other float here does: the dump writes them as text and
+  // the reparse reads that text back.
+  if (a.ctech != b.ctech || a.stech != b.stech || a.merge != b.merge
+      || a.merge_group != b.merge_group || a.merge_count != b.merge_count
+      || !same_float(a.merge_resolution, b.merge_resolution)) {
+    return false;
+  }
+  for (size_t i = 0; i < 2; i++) {
+    if (!same_float(a.ctech_value[i], b.ctech_value[i])
+        || !same_float(a.stech_value[i], b.stech_value[i])) {
+      return false;
+    }
   }
   for (size_t i = 0; i < a.basis_u_count; i++) {
     if (a.basis_u_start + i >= a_obj->basis_value_count
@@ -578,17 +588,6 @@ void check_round_trip(const GMDL_Obj * obj) {
     REQUIRE(strcmp(obj->statements[i].text, again->statements[i].text) == 0,
         "statement text");
   }
-  REQUIRE(obj->freeform_attr_count == again->freeform_attr_count,
-      "freeform_attr_count");
-  for (size_t i = 0; i < obj->freeform_attr_count; i++) {
-    REQUIRE(obj->freeform_attrs[i].kind == again->freeform_attrs[i].kind,
-        "freeform attribute kind");
-    REQUIRE(strcmp(obj->freeform_attrs[i].text,
-                again->freeform_attrs[i].text)
-            == 0,
-        "freeform attribute text");
-  }
-
   if (indices_are_representable(obj)) {
     // Free-form control points are indices like any other, so they belong
     // under this guard and not up with the element's kind and range. They

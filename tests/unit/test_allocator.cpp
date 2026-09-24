@@ -275,6 +275,13 @@ std::string rich_obj() {
       t += "step " + std::to_string(i + 1) + "\n";
       t += "bmat u 1 0 -1 " + std::to_string(i) + "\n";
       t += "bmat v 1 0 -1 " + std::to_string(i) + "\n";
+      // The approximation directives ride on the same state (3.18). They
+      // allocate nothing - they are fixed fields on a record already
+      // counted - but a document that never sets them leaves the dump's
+      // arms for them out of the write-failure sweep this shares.
+      t += (i % 20 ? "ctech cparm 0.5\n" : "ctech curv 0.5 30\n");
+      t += (i % 20 ? "stech cparmb 4\n" : "stech cparma 4 8\n");
+      t += (i % 30 ? "mg " + std::to_string(i + 1) + " 0.5\n" : "mg off\n");
     }
     if (i % 3 == 0) {
       t += "curv 0 1 1 2 3\n";
@@ -346,10 +353,6 @@ std::string rich_obj() {
   for (size_t i = 0; i < kGrow; i++) {
     t += (i % 2 ? "call something.obj " : "csh echo hello ") +
         std::to_string(i) + "\n";
-    // The approximation directives allocate a text copy each, the way the
-    // statements above do, and grow their own array.
-    t += "ctech cparm 0." + std::to_string(i) + "\n";
-    t += "mg " + std::to_string(i) + " 0.5\n";
   }
   return t;
 }
@@ -372,11 +375,13 @@ std::string rich_obj() {
  * This document is the same shape at `kRegrow` entries, past three doublings
  * of the largest capacity, so every array here regrows and a refusal lands
  * on second and third growths as well as first ones. Measured 2026-09-24,
- * after the free-form body statements joined both documents: 1421 allocation
- * sites against `rich_obj()`'s 982, so 439 (site, context) pairs that are not
- * in the smaller sweep at all. The figures were 1286 and 542 when this
- * document was added and have grown twice since; what has to stay true is
- * that this one is the larger, not either number.
+ * after `ctech`, `stech` and `mg` stopped being text: 1420 allocation sites
+ * against `rich_obj()`'s 650, so 770 (site, context) pairs that are not in
+ * the smaller sweep at all. The figures were 1286 and 542 when this document
+ * was added and have moved several times since - `rich_obj()` lost a third
+ * of its sites the day those three directives became fixed fields on a
+ * record, which is a directive costing *less*, not a sweep reaching less.
+ * What has to stay true is that this one is the larger, not either number.
  *
  * What has NOT been shown is a defect this catches and `rich_obj()` misses.
  * The argument for it is the larger population, not a demonstrated find, and
@@ -417,6 +422,9 @@ std::string regrow_obj() {
     if (i % 10 == 0) {
       t += "cstype bmatrix\ndeg " + std::to_string(i + 1) + "\n";
       t += "bmat u 1 0 -1 " + std::to_string(i) + "\n";
+      t += (i % 20 ? "ctech cparm 0.5\n" : "ctech curv 0.5 30\n");
+      t += (i % 20 ? "stech cparmb 4\n" : "stech cparma 4 8\n");
+      t += (i % 30 ? "mg " + std::to_string(i + 1) + " 0.5\n" : "mg off\n");
     }
     t += "curv 0 1 1 2 3\n";
     // Body statements on every fourth element, which is enough for each of
@@ -466,6 +474,17 @@ std::string regrow_obj() {
  * path is a plain copy, not an array, so the hundredth one reaches no arm the
  * third did not - it is only another parse for the sweep to sit through. The
  * material count is what has to clear the capacity, and it does.
+ *
+ * **There is no `regrow_mtl()` and there should not be**, which is the
+ * opposite of what `regrow_obj()` exists for. MTL has one array and its
+ * initial capacity is 8, not the 128 of the largest OBJ one - so 1.5x growth
+ * reallocates at 9, 13, 19, 28, 41, 61, 91 and 136 materials, and `kGrow`'s
+ * 160 crosses all eight. The sweep refuses each of this parse's 21
+ * allocations in turn, so later growths are already in its population and a
+ * larger document would add three positions and no new arm. Measured by
+ * counting allocations per material count and reading where the count steps;
+ * section 12 carried the OBJ conclusion here for a day before that was
+ * checked.
  */
 std::string rich_mtl() {
   std::string t;

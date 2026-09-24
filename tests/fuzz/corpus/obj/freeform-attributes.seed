@@ -1,6 +1,30 @@
-ctech cparm 0.5
-stech cparma 4 4
-mg 1 0.5
-mg off
+# The approximation state (3.18), which lands on the elements after it.
+# Every technique and all three merging states, because each is a distinct
+# arity in the writer and the round trip compares the values rather than
+# only the technique.
 v 0 0 0
+v 1 0 0
+vp 0
+vp 1
+cstype bspline
+deg 1
+ctech cparm 0.5
+stech cparma 4 8
+mg 1 0.25
+curv 0 1 1 2
+end
+ctech cspace 2
+stech cparmb 6
+mg 0
+curv2 1 2
+end
+ctech curv 0.5 30
+stech cspace 1.5
+mg 7
+surf 0 1 0 1 1 2
+end
+stech curv 0.25 15
+mg off
+curv 0 1 1 2
+end
 f 1 1 1

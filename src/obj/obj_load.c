@@ -84,7 +84,6 @@ typedef struct {
   GCU_Array statements;
   GCU_Array mtllibs;
   GCU_Array maplibs;
-  GCU_Array freeform_attrs;
   GCU_Array shadow_objs;
   GCU_Array trace_objs;
   const GMDL_Allocator * allocator;
@@ -143,8 +142,6 @@ static bool obj_builder_init(
       && gcu_array_create_in_place(
           &b->maplibs, sizeof(GMDL_Obj_Maplib), 4, allocator)
       && gcu_array_create_in_place(
-          &b->freeform_attrs, sizeof(GMDL_Obj_Freeform_Attr), 4, allocator)
-      && gcu_array_create_in_place(
           &b->shadow_objs, sizeof(GMDL_Obj_Render_Object), 4, allocator)
       && gcu_array_create_in_place(
           &b->trace_objs, sizeof(GMDL_Obj_Render_Object), 4, allocator);
@@ -165,14 +162,8 @@ static void obj_builder_destroy(obj_builder_t * b) {
         (GMDL_Obj_Statement *)gcu_array_at(&b->statements, i);
     gcu_allocator_free(b->allocator, statement->text);
   }
-  for (size_t i = 0; i < gcu_array_count(&b->freeform_attrs); i++) {
-    GMDL_Obj_Freeform_Attr * attr =
-        (GMDL_Obj_Freeform_Attr *)gcu_array_at(&b->freeform_attrs, i);
-    gcu_allocator_free(b->allocator, attr->text);
-  }
   gcu_array_destroy_in_place(&b->mtllibs);
   gcu_array_destroy_in_place(&b->maplibs);
-  gcu_array_destroy_in_place(&b->freeform_attrs);
   gcu_array_destroy_in_place(&b->shadow_objs);
   gcu_array_destroy_in_place(&b->trace_objs);
   gcu_array_destroy_in_place(&b->vertices);
@@ -438,12 +429,12 @@ static int32_t obj_index(long long value, size_t declared) {
  * Copy the text after a directive, exactly as written, trailing blanks
  * removed.
  *
- * Shared by the two kinds of line this parser keeps whole rather than
- * reading: the `call` and `csh` statements it refuses to execute (3.13) and
- * the `ctech`, `stech` and `mg` lines it has nothing to attach to yet
- * (3.18). The trimming and the empty check are the part worth having in one
- * place; each caller does its own emplace, because the records are different
- * types with different meanings.
+ * Used by the `call` and `csh` statements this parser refuses to execute
+ * (3.13), which are the only lines it still keeps whole rather than reading.
+ * `ctech`, `stech` and `mg` shared it until 3.18's model existed for them to
+ * attach to. It stays a function of its own because the trimming and the
+ * empty check are a rule about a directive's text rather than about those
+ * two statements.
  *
  * @param rest The text after the directive, already past leading blanks.
  * @param allocator The allocator for the copy.
@@ -502,35 +493,6 @@ static GMDL_Result obj_record_statement(const char * rest,
   return GMDL_OK;
 }
 
-/**
- * Record a `ctech`, `stech` or `mg` line as text (3.18).
- *
- * @param rest The text after the directive.
- * @param kind Which directive it was.
- * @param allocator The allocator for the copy.
- * @param attrs The array to append to.
- * @return ::GMDL_OK, ::GMDL_ERR_FORMAT when there is no text, or
- *   ::GMDL_ERR_OOM.
- */
-static GMDL_Result obj_record_freeform(const char * rest,
-    GMDL_Obj_Freeform_Attr_Kind kind, const GMDL_Allocator * allocator,
-    GCU_Array * attrs) {
-  char * copy = NULL;
-  GMDL_Result copied = obj_copy_line_text(rest, allocator, &copy);
-  if (copied != GMDL_OK) {
-    return copied;
-  }
-
-  GMDL_Obj_Freeform_Attr * stored =
-      (GMDL_Obj_Freeform_Attr *)gcu_array_emplace(attrs);
-  if (!stored) {
-    gcu_allocator_free(allocator, copy);
-    return GMDL_ERR_OOM;
-  }
-  stored->kind = kind;
-  stored->text = copy;
-  return GMDL_OK;
-}
 
 // Every list of whole-line paths holds elements that are exactly one
 // char[GMDL_OBJ_MAX_PATH_LENGTH] and nothing else, which is what lets
@@ -703,7 +665,9 @@ static GMDL_Result obj_take_int32s(
 
 /** The free-form state a file starts in: nothing set (3.19). */
 static const GMDL_Obj_Freeform_State obj_freeform_state_none = {
-    GMDL_OBJ_CSTYPE_NONE, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    GMDL_OBJ_CSTYPE_NONE, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    GMDL_OBJ_CTECH_NONE, {0, 0}, GMDL_OBJ_STECH_NONE, {0, 0},
+    GMDL_OBJ_MERGE_NONE, 0, 0, 0};
 
 /**
  * Read the basis a `cstype` line names, and whether it said `rat`.
@@ -930,6 +894,138 @@ static bool obj_take_one_index(const char ** cursor, long long * out) {
   *out = value;
   *cursor = end;
   return true;
+}
+
+/**
+ * Read the numbers a `ctech` or `stech` technique calls for (3.18).
+ *
+ * **Exactly as many as the technique names**, no more and no fewer. This is
+ * stricter than `deg` and `step`, which accept one number or two, and the
+ * difference is in the format rather than in taste: those two directives
+ * define both forms, so a reader must count to tell an absent second number
+ * from a written one. A technique defines one arity, and a `ctech curv` with
+ * one number has lost its `maxangle` somewhere - recording it as though the
+ * file had said 0 would put a value into the model the document never wrote.
+ *
+ * Each number must be a whole token, for the reason obj_take_one_float()
+ * gives: `ctech curv 1.5.2` would otherwise read as `1.5` and `0.2`, which
+ * is a line the file did not write.
+ *
+ * @param cursor The text after the technique word.
+ * @param arity How many numbers to read, 1 or 2.
+ * @param out Receives them; the unused entry is left at 0.
+ * @return ::GMDL_OK or ::GMDL_ERR_FORMAT.
+ */
+static GMDL_Result obj_take_technique_values(
+    const char * cursor, size_t arity, float * out) {
+  for (size_t i = 0; i < arity; i++) {
+    if (!obj_take_one_float(&cursor, &out[i])) {
+      return GMDL_ERR_FORMAT;
+    }
+  }
+  return GMDL_OK;
+}
+
+/**
+ * Read a `ctech` line into the free-form state (3.18).
+ *
+ * An unrecognised technique is ::GMDL_ERR_FORMAT for the reason
+ * obj_parse_cstype() gives: the format defines the spellings and there is no
+ * other reading to guess at. `ctech cparma` is one of them - that is a
+ * surface technique, and accepting it here would record a curve as
+ * approximated by a rule the format does not give curves.
+ */
+static GMDL_Result obj_parse_ctech(
+    const char * rest, GMDL_Obj_Freeform_State * state) {
+  GMDL_Obj_Ctech technique = GMDL_OBJ_CTECH_NONE;
+  size_t arity = 0;
+  const char * after = NULL;
+  if (!gmdl_ctech_from_name(rest, &technique, &arity, &after)) {
+    return GMDL_ERR_FORMAT;
+  }
+  float value[2] = {0, 0};
+  GMDL_Result taken = obj_take_technique_values(after, arity, value);
+  if (taken != GMDL_OK) {
+    return taken;
+  }
+  state->ctech = technique;
+  state->ctech_value[0] = value[0];
+  state->ctech_value[1] = value[1];
+  return GMDL_OK;
+}
+
+/** obj_parse_ctech() for `stech`. */
+static GMDL_Result obj_parse_stech(
+    const char * rest, GMDL_Obj_Freeform_State * state) {
+  GMDL_Obj_Stech technique = GMDL_OBJ_STECH_NONE;
+  size_t arity = 0;
+  const char * after = NULL;
+  if (!gmdl_stech_from_name(rest, &technique, &arity, &after)) {
+    return GMDL_ERR_FORMAT;
+  }
+  float value[2] = {0, 0};
+  GMDL_Result taken = obj_take_technique_values(after, arity, value);
+  if (taken != GMDL_OK) {
+    return taken;
+  }
+  state->stech = technique;
+  state->stech_value[0] = value[0];
+  state->stech_value[1] = value[1];
+  return GMDL_OK;
+}
+
+/**
+ * Read an `mg` line into the free-form state (3.18).
+ *
+ * `mg off` and `mg group [res]`. The resolution is optional because the
+ * specification gives a group of 0 as the other way to turn merging off, and
+ * a line turning it off carries no distance - so refusing `mg 0` would
+ * reject a document that said exactly what the format tells it to say. How
+ * many numbers there were is recorded, because an absent `res` and a written
+ * `res 0` are different lines (::GMDL_Obj_Freeform_State.merge_count).
+ *
+ * A group outside `int32_t` is ::GMDL_ERR_LIMIT, which is the answer `s` and
+ * `lod` already give to a number the model cannot hold.
+ */
+static GMDL_Result obj_parse_mg(
+    const char * rest, GMDL_Obj_Freeform_State * state) {
+  if (gmdl_line_is(rest, "off", NULL)) {
+    state->merge = GMDL_OBJ_MERGE_OFF;
+    state->merge_group = 0;
+    state->merge_resolution = 0;
+    state->merge_count = 0;
+    return GMDL_OK;
+  }
+  long long group = 0;
+  const char * cursor = rest;
+  if (!obj_take_one_index(&cursor, &group)) {
+    return GMDL_ERR_FORMAT;
+  }
+  if (group > INT32_MAX || group < INT32_MIN) {
+    return GMDL_ERR_LIMIT;
+  }
+  float resolution = 0;
+  bool has_resolution = obj_take_one_float(&cursor, &resolution);
+  if (!has_resolution) {
+    // A second token that is not a number is a malformed line rather than
+    // trailing text to ignore, which is what `v` does with it: there the
+    // numbers are all required and anything after them is a fourth field the
+    // format does not define, while here the resolution is optional, so
+    // `mg 1 half` is a line that says a resolution and does not give one.
+    // The blanks are skipped first because a line may end in them and that
+    // is not text.
+    while (*cursor == ' ' || *cursor == '\t') {
+      cursor++;
+    }
+    if (*cursor != '\0') {
+      return GMDL_ERR_FORMAT;
+    }
+  }
+  state->merge = GMDL_OBJ_MERGE_ON;
+  state->merge_group = (int32_t)group;
+  state->merge_resolution = resolution;
+  state->merge_count = has_resolution ? 2 : 1;
+  return GMDL_OK;
 }
 
 /**
@@ -2017,31 +2113,29 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         goto cleanup;
       }
     }
-    // `ctech`, `stech` and `mg` are state for the free-form sub-language,
-    // which this library did not read when they landed - so the line is kept
-    // as text rather than parsed, because choosing a representation before
-    // the model it describes existed would have attached it to nothing. That
-    // model is here now (3.19) and giving these a typed home beside it is
-    // the breaking change 3.18 documents as coming (3.18).
-    else if (gmdl_line_is(line_text, "ctech", &rest)
-        || gmdl_line_is(line_text, "stech", &rest)
-        || gmdl_line_is(line_text, "mg", &rest)) {
-      GMDL_Obj_Freeform_Attr_Kind kind = GMDL_OBJ_FREEFORM_MG;
-      if (gmdl_line_is(line_text, "ctech", NULL)) {
-        kind = GMDL_OBJ_FREEFORM_CTECH;
-      }
-      else if (gmdl_line_is(line_text, "stech", NULL)) {
-        kind = GMDL_OBJ_FREEFORM_STECH;
-      }
-      if (gmdl_limit_reached(gcu_array_count(&builder.freeform_attrs),
-              limits->max_freeform_attrs)) {
-        result = GMDL_ERR_LIMIT;
+    // `ctech`, `stech` and `mg` are state for the free-form sub-language the
+    // same way `cstype` and `deg` are, so they go onto the element rather
+    // than into a list of their own (3.18). They were text until the model
+    // they describe existed; it does now (3.19), and this is the breaking
+    // change 3.18 documented as coming.
+    else if (gmdl_line_is(line_text, "ctech", &rest)) {
+      GMDL_Result parsed = obj_parse_ctech(rest, &current_freeform);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
-      GMDL_Result recorded = obj_record_freeform(
-          rest, kind, allocator, &builder.freeform_attrs);
-      if (recorded != GMDL_OK) {
-        result = recorded;
+    }
+    else if (gmdl_line_is(line_text, "stech", &rest)) {
+      GMDL_Result parsed = obj_parse_stech(rest, &current_freeform);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "mg", &rest)) {
+      GMDL_Result parsed = obj_parse_mg(rest, &current_freeform);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
     }
@@ -2099,8 +2193,6 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         obj_steal_into(&builder.shadow_objs, &obj->shadow_obj_count);
     obj->trace_objs =
         obj_steal_into(&builder.trace_objs, &obj->trace_obj_count);
-    obj->freeform_attrs =
-        obj_steal_into(&builder.freeform_attrs, &obj->freeform_attr_count);
 
     // The compatibility field is derived from the list rather than
     // maintained alongside it, so the two cannot disagree. They did: a bare
@@ -2202,12 +2294,6 @@ void gmdl_obj_free(GMDL_Obj * obj) {
       gcu_allocator_free(allocator, obj->statements[i].text);
     }
     gcu_allocator_free(allocator, obj->statements);
-  }
-  if (obj->freeform_attrs) {
-    for (size_t i = 0; i < obj->freeform_attr_count; i++) {
-      gcu_allocator_free(allocator, obj->freeform_attrs[i].text);
-    }
-    gcu_allocator_free(allocator, obj->freeform_attrs);
   }
   gcu_allocator_free(allocator, obj);
 }

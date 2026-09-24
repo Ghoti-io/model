@@ -26,6 +26,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/obj.h>
@@ -132,7 +133,9 @@ typedef struct {
 
 /** The free-form state a file starts in: nothing set (3.19). */
 static const GMDL_Obj_Freeform_State obj_dump_freeform_none = {
-    GMDL_OBJ_CSTYPE_NONE, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    GMDL_OBJ_CSTYPE_NONE, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    GMDL_OBJ_CTECH_NONE, {0, 0}, GMDL_OBJ_STECH_NONE, {0, 0},
+    GMDL_OBJ_MERGE_NONE, 0, 0, 0};
 
 /**
  * Print a "usemtl" line naming a material.
@@ -391,6 +394,110 @@ static int obj_dump_int_pair(FILE * fd, const char * directive, int32_t u,
  * @param state Carried state, updated.
  * @return 0, or -1 on a write failure.
  */
+/**
+ * Write a `ctech` or `stech` line: the directive, the technique, its numbers.
+ *
+ * The arity comes from the same table the parser reads, so a technique
+ * cannot be written with more numbers than it is read back with.
+ */
+static int obj_dump_technique(FILE * fd, const char * directive,
+    const char * technique, size_t arity, const float * value) {
+  if (fprintf(fd, "%s %s", directive, technique) < 0) {
+    return -1;
+  }
+  for (size_t i = 0; i < arity; i++) {
+    if (fprintf(fd, " %.9g", value[i]) < 0) {
+      return -1;
+    }
+  }
+  return fprintf(fd, "\n") < 0 ? -1 : 0;
+}
+
+/**
+ * Write `ctech` and `stech` when the technique or its numbers changed (3.18).
+ *
+ * **The numbers are compared as bytes rather than with `==`**, which is the
+ * question this is actually asking: two states are the same state when the
+ * file would write the same line for them. A `NaN` resolution compares
+ * unequal to itself, so `==` would re-emit the directive before every
+ * element that carried it - a document the reload agrees with and that no
+ * file ever looked like.
+ *
+ * A technique of ::GMDL_OBJ_CTECH_NONE writes nothing, as
+ * ::GMDL_OBJ_CSTYPE_NONE does: the format has no spelling for "no technique
+ * in force", and the reload keeps whatever it had. A parse cannot reach it -
+ * `ctech` only ever sets one - and a model built through the struct can.
+ */
+static int obj_dump_tech_change(FILE * fd,
+    const GMDL_Obj_Freeform_State * wanted, GMDL_Obj_Freeform_State * have) {
+  if (wanted->ctech != have->ctech
+      || memcmp(wanted->ctech_value, have->ctech_value,
+             sizeof(wanted->ctech_value))
+          != 0) {
+    have->ctech = wanted->ctech;
+    memcpy(have->ctech_value, wanted->ctech_value,
+        sizeof(have->ctech_value));
+    size_t arity = 0;
+    const char * name = gmdl_ctech_name(wanted->ctech, &arity);
+    if (name
+        && obj_dump_technique(fd, "ctech", name, arity, wanted->ctech_value)
+            < 0) {
+      return -1;
+    }
+  }
+  if (wanted->stech != have->stech
+      || memcmp(wanted->stech_value, have->stech_value,
+             sizeof(wanted->stech_value))
+          != 0) {
+    have->stech = wanted->stech;
+    memcpy(have->stech_value, wanted->stech_value,
+        sizeof(have->stech_value));
+    size_t arity = 0;
+    const char * name = gmdl_stech_name(wanted->stech, &arity);
+    if (name
+        && obj_dump_technique(fd, "stech", name, arity, wanted->stech_value)
+            < 0) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Write an `mg` line when the merging state changed (3.18).
+ *
+ * ::GMDL_OBJ_MERGE_NONE writes nothing, for the reason
+ * obj_dump_tech_change() gives; ::GMDL_OBJ_MERGE_OFF writes `mg off`, which
+ * the format does spell. A count outside 1 and 2 cannot come from a parse
+ * and a hand-built model can hold one; it writes the group it is sure of,
+ * the same call ::GMDL_Obj_Param_Vertex gets.
+ */
+static int obj_dump_merge_change(FILE * fd,
+    const GMDL_Obj_Freeform_State * wanted, GMDL_Obj_Freeform_State * have) {
+  if (wanted->merge == have->merge && wanted->merge_group == have->merge_group
+      && wanted->merge_count == have->merge_count
+      && memcmp(&wanted->merge_resolution, &have->merge_resolution,
+             sizeof(wanted->merge_resolution))
+          == 0) {
+    return 0;
+  }
+  have->merge = wanted->merge;
+  have->merge_group = wanted->merge_group;
+  have->merge_resolution = wanted->merge_resolution;
+  have->merge_count = wanted->merge_count;
+  if (wanted->merge == GMDL_OBJ_MERGE_NONE) {
+    return 0;
+  }
+  if (wanted->merge == GMDL_OBJ_MERGE_OFF) {
+    return fprintf(fd, "mg off\n") < 0 ? -1 : 0;
+  }
+  int written = wanted->merge_count >= 2
+      ? fprintf(fd, "mg %lld %.9g\n", (long long)wanted->merge_group,
+            wanted->merge_resolution)
+      : fprintf(fd, "mg %lld\n", (long long)wanted->merge_group);
+  return written < 0 ? -1 : 0;
+}
+
 static int obj_dump_freeform_change(FILE * fd, const GMDL_Obj * obj,
     const GMDL_Obj_Freeform_State * wanted, obj_dump_state_t * state) {
   if (wanted->type != state->freeform.type
@@ -422,9 +529,18 @@ static int obj_dump_freeform_change(FILE * fd, const GMDL_Obj * obj,
       < 0) {
     return -1;
   }
-  return obj_dump_basis(fd, obj, "v", wanted->basis_v_start,
-      wanted->basis_v_count, &state->freeform.basis_v_start,
-      &state->freeform.basis_v_count);
+  if (obj_dump_basis(fd, obj, "v", wanted->basis_v_start,
+          wanted->basis_v_count, &state->freeform.basis_v_start,
+          &state->freeform.basis_v_count)
+      < 0) {
+    return -1;
+  }
+  // The approximation directives last, so that a file whose elements differ
+  // only in how finely they are drawn writes its geometry state once (3.18).
+  if (obj_dump_tech_change(fd, wanted, &state->freeform) < 0) {
+    return -1;
+  }
+  return obj_dump_merge_change(fd, wanted, &state->freeform);
 }
 
 /**
@@ -770,22 +886,6 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     const char * directive =
         obj->statements[i].kind == GMDL_OBJ_STATEMENT_CALL ? "call" : "csh";
     if (fprintf(fd, "%s %s\n", directive, obj->statements[i].text) < 0) {
-      return GMDL_ERR_IO;
-    }
-  }
-
-  // The free-form approximation directives, in file order (3.18). With them
-  // and the statements above, everything this dump writes before the
-  // elements is text it never acted on.
-  for (size_t i = 0; i < obj->freeform_attr_count; i++) {
-    const char * directive = "mg";
-    if (obj->freeform_attrs[i].kind == GMDL_OBJ_FREEFORM_CTECH) {
-      directive = "ctech";
-    }
-    else if (obj->freeform_attrs[i].kind == GMDL_OBJ_FREEFORM_STECH) {
-      directive = "stech";
-    }
-    if (fprintf(fd, "%s %s\n", directive, obj->freeform_attrs[i].text) < 0) {
       return GMDL_ERR_IO;
     }
   }

@@ -472,6 +472,9 @@ NOT_INDEX_FIELDS = {
     # numbering.  The dump spells these as names or re-derives them, so a
     # value below -1 cannot arrive and cannot fail to be written back.
     "index", "material_index", "map_index", "render_index",
+    # `mg`'s merging group, which is a number the file chooses and not a
+    # position in any list - two surfaces merge when they name the same one.
+    "merge_group", "merge_count",
 }
 carrying = set()
 unclassified = []

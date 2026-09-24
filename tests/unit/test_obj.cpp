@@ -62,6 +62,16 @@ std::string dump_text(const GMDL_Obj * obj) {
   return sink.finish();
 }
 
+/** How many times a dump wrote a directive, for the state-change tests. */
+size_t count_occurrences(const std::string & text, const std::string & what) {
+  size_t seen = 0;
+  for (size_t at = text.find(what); at != std::string::npos;
+      at = text.find(what, at + what.size())) {
+    seen++;
+  }
+  return seen;
+}
+
 } // namespace
 
 //
@@ -2759,7 +2769,8 @@ namespace {
  *  which the dumper writes in a pass of its own - a maplib, a usemap, the
  *  usemap off that turns it back around, a map change at a polyline and at a
  *  point, each render switch in both directions and a lod, a shadow and a
- *  trace object, one of each approximation directive, and a recorded call
+ *  trace object, every arity of every approximation directive and all three
+ *  merging states, and a recorded call
  *  and
  *  csh. A directive the model
  *  does not carry has its
@@ -2769,9 +2780,6 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "maplib maps.map\n"
                           "shadow_obj shade.obj\n"
                           "trace_obj trace.obj\n"
-                          "ctech cparm 0.5\n"
-                          "stech cparma 4 4\n"
-                          "mg 1 0.5\n"
                           "call parts.obj 1\n"
                           "csh -date\n"
                           "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
@@ -2798,6 +2806,15 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "cstype bmatrix\n"
                           "deg 1\n"
                           "step 2\n"
+                          // The approximation directives ride along with the
+                          // rest of the free-form state (3.18). Each arity
+                          // appears, because the writer loops over as many
+                          // numbers as the technique names and a document
+                          // with only two-number techniques never writes a
+                          // one-number line.
+                          "ctech cparm 0.5\n"
+                          "stech cparma 4 8\n"
+                          "mg 1 0.25\n"
                           "bmat u 1 0 -1 1\n"
                           "bmat v 1 0 -1 1\n"
                           "curv 0 1 1 2\n"
@@ -2809,6 +2826,9 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "cstype rat bspline\n"
                           "deg 2 1\n"
                           "step 3 4\n"
+                          "ctech curv 0.5 30\n"
+                          "stech cspace 2\n"
+                          "mg off\n"
                           "surf 0 1 0 1 1/1/1 2\n"
                           // Every body statement, because each writes its
                           // entries through a printf of its own: `parm` both
@@ -2880,6 +2900,11 @@ const char * kRichModel = "mtllib m.mtl\n"
                           // once never evaluates either.
                           "cstype bspline\n"
                           "deg 2 3\n"
+                          // `ctech` unchanged across this state, so the arm
+                          // that writes nothing is walked too; `mg` with a
+                          // group and no resolution, which is its own printf.
+                          "stech cparmb 6\n"
+                          "mg 3\n"
                           "curv 0 1 1 2\n"
                           "end\n";
 
@@ -3511,40 +3536,169 @@ TEST(ObjDirectives, UnreadOnesAreSkippedRatherThanRefused) {
 
 //
 // `ctech`, `stech` and `mg` (3.18). State for the free-form sub-language,
-// which this library does not read - so the line is kept as text and
-// attached to nothing, and that is provisional rather than final.
+// the way `cstype` and `deg` are - so each lands on the elements that follow
+// it rather than in a list of its own. They were kept as text until the
+// model they describe existed (3.19).
 //
 
-TEST(ObjFreeform, AllThreeAreRecordedInFileOrder) {
+TEST(ObjFreeform, AllThreeLandOnTheElementAfterThem) {
   GMDL_Obj * obj = load_text("v 0 0 0\n"
                              "ctech cparm 0.5\n"
-                             "mg 1 0.5\n"
-                             "stech cparma 4 4\n"
-                             "mg off\n"
-                             "f 1 1 1\n");
+                             "stech cparma 4 8\n"
+                             "mg 1 0.25\n"
+                             "curv 0 1 1 1\nend\n");
   ASSERT_NE(obj, nullptr);
-  ASSERT_EQ(obj->freeform_attr_count, 4u);
-  EXPECT_EQ(obj->freeform_attrs[0].kind, GMDL_OBJ_FREEFORM_CTECH);
-  EXPECT_STREQ(obj->freeform_attrs[0].text, "cparm 0.5");
-  EXPECT_EQ(obj->freeform_attrs[1].kind, GMDL_OBJ_FREEFORM_MG);
-  EXPECT_STREQ(obj->freeform_attrs[1].text, "1 0.5");
-  EXPECT_EQ(obj->freeform_attrs[2].kind, GMDL_OBJ_FREEFORM_STECH);
-  EXPECT_STREQ(obj->freeform_attrs[2].text, "cparma 4 4");
-  EXPECT_EQ(obj->freeform_attrs[3].kind, GMDL_OBJ_FREEFORM_MG);
-  EXPECT_STREQ(obj->freeform_attrs[3].text, "off")
-      << "`mg off` is a spelling the format defines and text keeps it";
-  EXPECT_EQ(obj->face_count, 1u) << "the geometry still parses";
+  ASSERT_EQ(obj->freeform_count, 1u);
+  const GMDL_Obj_Freeform_State & state = obj->freeforms[0].state;
+  EXPECT_EQ(state.ctech, GMDL_OBJ_CTECH_CPARM);
+  EXPECT_FLOAT_EQ(state.ctech_value[0], 0.5f);
+  EXPECT_EQ(state.stech, GMDL_OBJ_STECH_CPARMA);
+  EXPECT_FLOAT_EQ(state.stech_value[0], 4.0f);
+  EXPECT_FLOAT_EQ(state.stech_value[1], 8.0f);
+  EXPECT_EQ(state.merge, GMDL_OBJ_MERGE_ON);
+  EXPECT_EQ(state.merge_group, 1);
+  EXPECT_FLOAT_EQ(state.merge_resolution, 0.25f);
+  EXPECT_EQ(state.merge_count, 2);
   gmdl_obj_free(obj);
 }
 
-// Trailing blanks are not part of the line, which is the reading `call` and
-// `csh` use (3.13) - these share the trimming with them.
-TEST(ObjFreeform, TrailingBlanksAreNotPartOfTheText) {
-  GMDL_Obj * obj = load_text("v 0 0 0\nctech curv 0.5 30   \n");
+// The point of making them state rather than records: an element declared
+// before any of the three carries none of them, and one declared after
+// carries what was in force. A list in file order cannot answer either
+// question, which is what the text representation could not do.
+TEST(ObjFreeform, AnElementBeforeTheDirectivesCarriesNone) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "curv 0 1 1 1\nend\n"
+                             "ctech curv 0.5 30\n"
+                             "mg off\n"
+                             "curv 0 1 1 1\nend\n");
   ASSERT_NE(obj, nullptr);
-  ASSERT_EQ(obj->freeform_attr_count, 1u);
-  EXPECT_STREQ(obj->freeform_attrs[0].text, "curv 0.5 30");
+  ASSERT_EQ(obj->freeform_count, 2u);
+  EXPECT_EQ(obj->freeforms[0].state.ctech, GMDL_OBJ_CTECH_NONE);
+  EXPECT_EQ(obj->freeforms[0].state.merge, GMDL_OBJ_MERGE_NONE);
+  EXPECT_EQ(obj->freeforms[1].state.ctech, GMDL_OBJ_CTECH_CURV);
+  EXPECT_FLOAT_EQ(obj->freeforms[1].state.ctech_value[0], 0.5f);
+  EXPECT_FLOAT_EQ(obj->freeforms[1].state.ctech_value[1], 30.0f);
+  EXPECT_EQ(obj->freeforms[1].state.merge, GMDL_OBJ_MERGE_OFF);
   gmdl_obj_free(obj);
+}
+
+// `cparm` is a curve technique and `cparma` a surface one. One lookup for
+// both directives would accept each in the other's line, and the file would
+// come back saying a curve is approximated by a rule the format gives only
+// to surfaces - which is why the two are separate tables and separate
+// enumerations.
+TEST(ObjFreeform, ACurveTechniqueIsNotASurfaceOne) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nctech cparma 4 8\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nctech cparmb 4\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nstech cparm 0.5\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(ObjFreeform, AnUnknownTechniqueIsAFormatError) {
+  for (const char * line : {"ctech spline 1", "stech spline 1", "ctech rat"}) {
+    EXPECT_EQ(
+        load_text_expecting_failure(std::string("v 0 0 0\n") + line + "\n"),
+        GMDL_ERR_FORMAT)
+        << line;
+  }
+}
+
+// The technique fixes the arity, so a line short of it has lost a number
+// rather than chosen a shorter form: recording `ctech curv 0.5` as though
+// the file had written a `maxangle` of 0 puts a value into the model that
+// the document never said. This is where `ctech` parts company with `deg`,
+// which the format gives both a one-number and a two-number form.
+TEST(ObjFreeform, ATechniqueCarriesExactlyItsNumbers) {
+  for (const char * line : {"ctech cparm", "ctech curv 0.5", "stech cparmb",
+           "stech cparma 4", "stech curv 0.5"}) {
+    EXPECT_EQ(
+        load_text_expecting_failure(std::string("v 0 0 0\n") + line + "\n"),
+        GMDL_ERR_FORMAT)
+        << line;
+  }
+}
+
+// The same strictness the body statements need, and for the same reason: a
+// loose reader takes `1.5` and leaves `.2`, which is a whole number of its
+// own and completes the pair - so the line is accepted as a *different*
+// line. `ctech curv 1.5.2` is the input that tells the two apart; a trailing
+// `x` would be refused either way, one token later, for the wrong reason.
+TEST(ObjFreeform, ATechniqueTokenThatOnlyStartsWithANumberIsAFormatError) {
+  for (const char * line : {"ctech curv 1.5.2", "stech cparma 1.5.2",
+           "stech cparmb 0.5-1", "ctech cparm 0.5-1"}) {
+    EXPECT_EQ(
+        load_text_expecting_failure(std::string("v 0 0 0\n") + line + "\n"),
+        GMDL_ERR_FORMAT)
+        << line;
+  }
+}
+
+// The format gives two spellings for "not merging": the `off` keyword and a
+// group of 0. Which one the file wrote is kept, the call `g` and `o` get -
+// a consumer acting on the state reads them alike, and one writing the file
+// back out writes what it was given.
+TEST(ObjFreeform, MgOffAndMgZeroAreDifferentLines) {
+  GMDL_Obj * off = load_text("v 0 0 0\nmg off\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(off, nullptr);
+  ASSERT_EQ(off->freeform_count, 1u);
+  EXPECT_EQ(off->freeforms[0].state.merge, GMDL_OBJ_MERGE_OFF);
+  EXPECT_EQ(off->freeforms[0].state.merge_count, 0);
+  gmdl_obj_free(off);
+
+  GMDL_Obj * zero = load_text("v 0 0 0\nmg 0\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(zero, nullptr);
+  ASSERT_EQ(zero->freeform_count, 1u);
+  EXPECT_EQ(zero->freeforms[0].state.merge, GMDL_OBJ_MERGE_ON);
+  EXPECT_EQ(zero->freeforms[0].state.merge_group, 0);
+  EXPECT_EQ(zero->freeforms[0].state.merge_count, 1);
+  gmdl_obj_free(zero);
+}
+
+// A resolution means nothing to a line turning merging off, and the count
+// records that it was absent rather than a float standing for it: `mg 1 0`
+// is a different line and 0 is a resolution a file may write.
+TEST(ObjFreeform, AnMgResolutionIsOptionalAndItsAbsenceIsCounted) {
+  // Tabs among the trailing blanks, because the skip that reaches the end of
+  // the line tests for both and a document written with spaces alone leaves
+  // half of it unrun - the same miss the body statements had (3.19).
+  GMDL_Obj * bare = load_text("v 0 0 0\nmg 2 \t \ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(bare, nullptr);
+  ASSERT_EQ(bare->freeform_count, 1u);
+  EXPECT_EQ(bare->freeforms[0].state.merge_count, 1)
+      << "trailing blanks are not a second token";
+  EXPECT_FLOAT_EQ(bare->freeforms[0].state.merge_resolution, 0.0f);
+  gmdl_obj_free(bare);
+
+  GMDL_Obj * zero = load_text("v 0 0 0\nmg 2 0\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(zero, nullptr);
+  ASSERT_EQ(zero->freeform_count, 1u);
+  EXPECT_EQ(zero->freeforms[0].state.merge_count, 2);
+  EXPECT_FLOAT_EQ(zero->freeforms[0].state.merge_resolution, 0.0f);
+  gmdl_obj_free(zero);
+}
+
+// Unlike `v`, where everything after the numbers is a field the format does
+// not define, a second token here is the optional resolution: one that is
+// not a number is a line that says a resolution and does not give one.
+TEST(ObjFreeform, AnMgResolutionThatIsNotANumberIsAFormatError) {
+  for (const char * line : {"mg 1 half", "mg 1 0.5-1", "mg one 0.5"}) {
+    EXPECT_EQ(
+        load_text_expecting_failure(std::string("v 0 0 0\n") + line + "\n"),
+        GMDL_ERR_FORMAT)
+        << line;
+  }
+}
+
+// A merging group the field cannot hold is a limit, not a saturated value,
+// which is the answer `s`, `lod` and `illum` already give.
+TEST(ObjFreeform, AMergingGroupTooLargeForTheModelIsALimit) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nmg 99999999999 1\n"),
+      GMDL_ERR_LIMIT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nmg -99999999999 1\n"),
+      GMDL_ERR_LIMIT);
 }
 
 TEST(ObjFreeform, ABareDirectiveIsAFormatError) {
@@ -3556,47 +3710,148 @@ TEST(ObjFreeform, ABareDirectiveIsAFormatError) {
   }
 }
 
-TEST(ObjFreeform, ADocumentWithNoneHoldsNoRecords) {
-  GMDL_Obj * obj = load_text("v 0 0 0\nf 1 1 1\n");
-  ASSERT_NE(obj, nullptr);
-  EXPECT_EQ(obj->freeform_attr_count, 0u);
-  EXPECT_EQ(obj->freeform_attrs, nullptr);
-  gmdl_obj_free(obj);
-}
-
 TEST(ObjDump, TheApproximationDirectivesSurviveARoundTrip) {
   GMDL_Obj * obj = load_text("v 0 0 0\n"
                              "ctech cparm 0.5\n"
-                             "mg 1 0.5\n"
-                             "stech cparma 4 4\n"
+                             "stech cparma 4 8\n"
+                             "mg 1 0.25\n"
+                             "curv 0 1 1 1\nend\n"
+                             "ctech curv 0.5 30\n"
+                             "stech cspace 2\n"
                              "mg off\n"
-                             "f 1 1 1\n");
+                             "curv 0 1 1 1\nend\n");
   ASSERT_NE(obj, nullptr);
 
-  TempFile out("");
-  ASSERT_TRUE(out.valid());
-  FILE * sink = fopen(out.path(), "wb");
-  ASSERT_NE(sink, nullptr);
-  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
-  fclose(sink);
-
+  std::string text = dump_text(obj);
+  MemStream stream(text);
   GMDL_Obj * again = nullptr;
-  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
   ASSERT_NE(again, nullptr);
-  ASSERT_EQ(again->freeform_attr_count, 4u);
+  ASSERT_EQ(again->freeform_count, 2u);
+
   // Against what the source said, not against what this library parsed. A
-  // loader that recorded every one of the three as `mg` and a dumper that
-  // wrote every one back as `mg` agree with each other perfectly: measured,
-  // the mutation that does exactly that survived the self-comparison this
-  // test used to make, and is caught by naming the kinds here.
-  const GMDL_Obj_Freeform_Attr_Kind expected[4] = {GMDL_OBJ_FREEFORM_CTECH,
-      GMDL_OBJ_FREEFORM_MG, GMDL_OBJ_FREEFORM_STECH, GMDL_OBJ_FREEFORM_MG};
-  const char * texts[4] = {"cparm 0.5", "1 0.5", "cparma 4 4", "off"};
-  for (size_t i = 0; i < 4; i++) {
-    EXPECT_EQ(again->freeform_attrs[i].kind, expected[i]) << i;
-    EXPECT_STREQ(again->freeform_attrs[i].text, texts[i]) << i;
-  }
+  // loader that read every technique as one kind and a dumper that wrote it
+  // back as that kind agree with each other perfectly; naming the values
+  // here is what catches it.
+  EXPECT_EQ(again->freeforms[0].state.ctech, GMDL_OBJ_CTECH_CPARM) << text;
+  EXPECT_FLOAT_EQ(again->freeforms[0].state.ctech_value[0], 0.5f);
+  EXPECT_EQ(again->freeforms[0].state.stech, GMDL_OBJ_STECH_CPARMA);
+  EXPECT_FLOAT_EQ(again->freeforms[0].state.stech_value[1], 8.0f);
+  EXPECT_EQ(again->freeforms[0].state.merge, GMDL_OBJ_MERGE_ON);
+  EXPECT_EQ(again->freeforms[0].state.merge_group, 1);
+  EXPECT_FLOAT_EQ(again->freeforms[0].state.merge_resolution, 0.25f);
+
+  EXPECT_EQ(again->freeforms[1].state.ctech, GMDL_OBJ_CTECH_CURV) << text;
+  EXPECT_FLOAT_EQ(again->freeforms[1].state.ctech_value[1], 30.0f);
+  EXPECT_EQ(again->freeforms[1].state.stech, GMDL_OBJ_STECH_CSPACE);
+  EXPECT_FLOAT_EQ(again->freeforms[1].state.stech_value[0], 2.0f);
+  EXPECT_EQ(again->freeforms[1].state.merge, GMDL_OBJ_MERGE_OFF);
   gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// A group with no resolution keeps that shape on the way out: writing
+// `mg 2 0` instead would put a distance into the file the document never
+// gave, and the reload would come back with a different record.
+TEST(ObjDump, AnMgWithNoResolutionIsWrittenWithout) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nmg 2\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("mg 2\n"), std::string::npos) << text;
+  gmdl_obj_free(obj);
+}
+
+// State, so a run of elements sharing it writes it once. Asserted on the
+// text: a dumper that repeated the directive before every element would
+// round-trip through this library perfectly and write a file no exporter
+// produces.
+TEST(ObjDump, TheApproximationStateIsWrittenOncePerRun) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "ctech cparm 0.5\nmg 1 0.25\n"
+                             "curv 0 1 1 1\nend\n"
+                             "curv 0 1 1 1\nend\n"
+                             "ctech cparm 0.75\n"
+                             "curv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  std::string text = dump_text(obj);
+  EXPECT_EQ(count_occurrences(text, "ctech "), 2u) << text;
+  EXPECT_EQ(count_occurrences(text, "mg "), 1u) << text;
+  EXPECT_NE(text.find("ctech cparm 0.75\n"), std::string::npos) << text;
+  gmdl_obj_free(obj);
+}
+
+// A technique with no spelling, which a parse cannot produce - `ctech` only
+// ever sets one - and a caller writing through the struct can. Nothing is
+// written and the reload keeps what it had, the call
+// ::GMDL_OBJ_CSTYPE_NONE already gets.
+TEST(ObjDump, AnApproximationStateReturningToNoneWritesNothing) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "ctech cparm 0.5\nstech cparmb 4\nmg 1 0.25\n"
+                             "curv 0 1 1 1\nend\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 2u);
+  obj->freeforms[1].state.ctech = GMDL_OBJ_CTECH_NONE;
+  obj->freeforms[1].state.stech = GMDL_OBJ_STECH_NONE;
+  obj->freeforms[1].state.merge = GMDL_OBJ_MERGE_NONE;
+
+  std::string text = dump_text(obj);
+  EXPECT_EQ(count_occurrences(text, "ctech "), 1u) << text;
+  EXPECT_EQ(count_occurrences(text, "stech "), 1u) << text;
+  EXPECT_EQ(count_occurrences(text, "mg "), 1u) << text;
+  MemStream stream(text);
+  GMDL_Obj * again = nullptr;
+  EXPECT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// Each of these comparisons is two halves - which technique or merging state
+// is in force, and the numbers beside it - and a document whose states differ
+// in both at once never evaluates the second half. These differ in the
+// numbers alone, so a dumper comparing only the technique would write one
+// `stech` where the file wrote two and the reload would draw the surface at
+// the wrong resolution.
+TEST(ObjDump, AStateDifferingOnlyInItsNumbersIsWrittenAgain) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n"
+                             "stech cparmb 4\nmg 3 0.5\n"
+                             "curv 0 1 1 1\nend\n"
+                             "stech cparmb 6\nmg 3 0.75\n"
+                             "curv 0 1 1 1\nend\n"
+                             // A resolution of zero, and then the same group
+                             // with the resolution *dropped*. That pair
+                             // differs in the count and in nothing else -
+                             // which is what it takes to see the count
+                             // comparison, because a state that also moved
+                             // its resolution is rewritten either way. The
+                             // first version of this test used `mg 3 0.75`
+                             // followed by `mg 3` and passed with the count
+                             // comparison deleted.
+                             "mg 3 0\n"
+                             "curv 0 1 1 1\nend\n"
+                             "mg 3\n"
+                             "curv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  std::string text = dump_text(obj);
+  EXPECT_EQ(count_occurrences(text, "stech "), 2u) << text;
+  EXPECT_NE(text.find("stech cparmb 6\n"), std::string::npos) << text;
+  EXPECT_EQ(count_occurrences(text, "mg "), 4u) << text;
+  EXPECT_NE(text.find("mg 3 0.75\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("mg 3 0\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("mg 3\n"), std::string::npos) << text;
+  gmdl_obj_free(obj);
+}
+
+// A merge count outside 1 and 2, which no parse produces: the group is
+// written and the resolution is not, rather than reading a field the record
+// does not vouch for. The same call ::GMDL_Obj_Param_Vertex gets.
+TEST(ObjDump, AnMgCountTheFormatCannotSpellWritesTheGroupAlone) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nmg 2 0.5\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  obj->freeforms[0].state.merge_count = 0;
+
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("mg 2\n"), std::string::npos) << text;
   gmdl_obj_free(obj);
 }
 
@@ -4159,10 +4414,6 @@ const LimitCase kLimitCases[] = {
         {"shadow_obj a.obj\nshadow_obj b.obj\nshadow_obj c.obj\n"}},
     {offsetof(GMDL_Limits, max_trace_objs), "max_trace_objs",
         {"trace_obj a.obj\ntrace_obj b.obj\ntrace_obj c.obj\n"}},
-    // Read once for each of the three directives; only `ctech` was driven.
-    {offsetof(GMDL_Limits, max_freeform_attrs), "max_freeform_attrs",
-        {"ctech a\nctech b\nctech c\n", "stech a\nstech b\nstech c\n",
-            "mg 1 1\nmg 2 1\nmg off\n"}},
     // Read once for each of the three element directives; only `curv` was
     // driven when this row was written.
     {offsetof(GMDL_Limits, max_freeforms), "max_freeforms",

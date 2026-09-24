@@ -280,6 +280,81 @@ const char * gmdl_body_kind_name(GMDL_Obj_Body_Kind kind) {
   return NULL; // Unreachable while the table covers the enumeration.
 }
 
+// The approximation techniques, read and written from one list each, for
+// the reason the cstype table above is shared. The arity lives in the table
+// beside the spelling because it is a property of the technique and not of
+// the line: `ctech curv` carries two numbers wherever it appears, and a
+// parser and a dumper that each held their own idea of that would disagree
+// about how much of a line to read back.
+//
+// Two tables rather than one with a flag: `cparm` is a curve technique and
+// `cparma` a surface one, and the words are close enough that a single
+// lookup would accept each in the other's line without anything noticing.
+static const struct {
+  const char * name;
+  GMDL_Obj_Ctech technique;
+  size_t arity;
+} gmdl_ctechs[] = {
+    {"cparm", GMDL_OBJ_CTECH_CPARM, 1},
+    {"cspace", GMDL_OBJ_CTECH_CSPACE, 1},
+    {"curv", GMDL_OBJ_CTECH_CURV, 2},
+};
+
+static const struct {
+  const char * name;
+  GMDL_Obj_Stech technique;
+  size_t arity;
+} gmdl_stechs[] = {
+    {"cparma", GMDL_OBJ_STECH_CPARMA, 2},
+    {"cparmb", GMDL_OBJ_STECH_CPARMB, 1},
+    {"cspace", GMDL_OBJ_STECH_CSPACE, 1},
+    {"curv", GMDL_OBJ_STECH_CURV, 2},
+};
+
+bool gmdl_ctech_from_name(const char * word, GMDL_Obj_Ctech * out,
+    size_t * out_arity, const char ** out_rest) {
+  for (size_t i = 0; i < sizeof(gmdl_ctechs) / sizeof(gmdl_ctechs[0]); i++) {
+    if (gmdl_line_is(word, gmdl_ctechs[i].name, out_rest)) {
+      *out = gmdl_ctechs[i].technique;
+      *out_arity = gmdl_ctechs[i].arity;
+      return true;
+    }
+  }
+  return false;
+}
+
+const char * gmdl_ctech_name(GMDL_Obj_Ctech technique, size_t * out_arity) {
+  for (size_t i = 0; i < sizeof(gmdl_ctechs) / sizeof(gmdl_ctechs[0]); i++) {
+    if (gmdl_ctechs[i].technique == technique) {
+      *out_arity = gmdl_ctechs[i].arity;
+      return gmdl_ctechs[i].name;
+    }
+  }
+  return NULL; // GMDL_OBJ_CTECH_NONE, which the format cannot spell.
+}
+
+bool gmdl_stech_from_name(const char * word, GMDL_Obj_Stech * out,
+    size_t * out_arity, const char ** out_rest) {
+  for (size_t i = 0; i < sizeof(gmdl_stechs) / sizeof(gmdl_stechs[0]); i++) {
+    if (gmdl_line_is(word, gmdl_stechs[i].name, out_rest)) {
+      *out = gmdl_stechs[i].technique;
+      *out_arity = gmdl_stechs[i].arity;
+      return true;
+    }
+  }
+  return false;
+}
+
+const char * gmdl_stech_name(GMDL_Obj_Stech technique, size_t * out_arity) {
+  for (size_t i = 0; i < sizeof(gmdl_stechs) / sizeof(gmdl_stechs[0]); i++) {
+    if (gmdl_stechs[i].technique == technique) {
+      *out_arity = gmdl_stechs[i].arity;
+      return gmdl_stechs[i].name;
+    }
+  }
+  return NULL; // GMDL_OBJ_STECH_NONE, which the format cannot spell.
+}
+
 const GMDL_Obj_Freeform * gmdl_obj_freeform_of_kind(
     const GMDL_Obj * obj, GMDL_Obj_Freeform_Kind kind, int32_t ordinal) {
   if (!obj || ordinal < 0) {
