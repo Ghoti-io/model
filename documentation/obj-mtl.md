@@ -1676,7 +1676,9 @@ section 12 is where they are written down.
   they ought to write. Until then the accepted set is "what was measured",
   which is a smaller claim than "what exists".
 
-**No instrument refuses an allocation in a large document.**
+**No instrument refuses an allocation in a large MTL document.** Half of
+this is closed and half is not, so it is worth saying which half.
+
 `test_allocator.cpp` refuses every allocation against one designed document
 per format, and the fuzz harnesses refuse one allocation against every corpus
 document - so document shape is varied and allocation position is swept, but
@@ -1696,5 +1698,14 @@ unlikely to be.
 So closing it wants allocation positions swept against a second, larger
 document shape - not a bigger corpus. The unit sweep already forces growth on
 every array (`kGrow` exceeds every initial capacity, and `check-lists.py`
-holds it there); what is missing is a second shape beside the one designed
-document per format. Not done.
+holds it there); what was missing is a second shape beside the one designed
+document per format.
+
+**Done for OBJ, not for MTL.** `regrow_obj()` is the same shape as
+`rich_obj()` at 600 entries, past three doublings of the largest initial
+capacity, so every array in it regrows and a refusal lands on second and
+third growths as well as first ones - 427 (site, context) pairs that the
+smaller sweep does not contain. MTL still has exactly one designed document,
+so for MTL the paragraph above stands unchanged: a defect in a later growth
+of an MTL array is out of the population of every instrument here. What that
+would take is `regrow_mtl()` beside `regrow_obj()`, not new machinery.
