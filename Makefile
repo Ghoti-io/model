@@ -315,6 +315,18 @@ ifeq ($(OS_NAME), Windows)
 # See GMDL_API in macros.h.
 CFLAGS += -DGMDL_STATIC
 CXXFLAGS += -DGMDL_STATIC
+# MinGW-w64 against msvcrt.dll (MSYS2's MINGW64, as opposed to UCRT64) has no
+# per-thread locale: its _configthreadlocale() refuses and does nothing. The
+# LC_NUMERIC pin can only be process-wide there, and src/core/number.c refuses
+# to build without the opt-in, so it is given here, where the trade is
+# recorded. CXXFLAGS too, so the locale tests know which arm they are testing.
+# _UCRT is defined by MinGW's own headers, hence -include rather than asking
+# for the compiler's predefines.
+GMDL_CRT_IS_UCRT := $(shell $(CC) -dM -E -include stdio.h -x c /dev/null 2>/dev/null | grep -c '^\#define _UCRT\b')
+ifeq ($(GMDL_CRT_IS_UCRT),0)
+CFLAGS += -DGMDL_ALLOW_PROCESS_WIDE_LOCALE
+CXXFLAGS += -DGMDL_ALLOW_PROCESS_WIDE_LOCALE
+endif
 endif
 LIB_CFLAGS := $(CFLAGS) -fvisibility=hidden -DGMDL_BUILD $(EXTRA_CFLAGS)
 LDFLAGS := -L /usr/lib -lstdc++ -lm $(EXTRA_LDFLAGS)

@@ -105,7 +105,7 @@ GMDL_INTERNAL_API bool gmdl_numeric_pin_is_thread_local(void) {
   return true;
 }
 
-#elif defined(_WIN32)
+#elif defined(_WIN32) && (defined(_UCRT) || defined(_MSC_VER))
 
 // The Windows CRT has no uselocale(), but _configthreadlocale() gives the
 // calling thread a locale of its own, after which setlocale() changes only
@@ -117,9 +117,18 @@ GMDL_INTERNAL_API bool gmdl_numeric_pin_is_thread_local(void) {
 // per-thread must stay so - switching it back to the global locale would
 // discard whatever the caller had set in it.
 //
-// TODO(windows): the notes/suite/WINDOWS-TODO.md entry for the model library
-// asks for this to be run, not assumed: the thread-locality test exercises it,
-// and it passing under MINGW64 is what verifies it.
+// **Only the UCRT (and MSVC's own runtimes) can do this.** MinGW-w64 built
+// against the old msvcrt.dll - MSYS2's MINGW64 environment - declares
+// _configthreadlocale() and links it, but msvcrt.dll has no per-thread
+// locale, and the function MinGW supplies in its place answers -1 to
+// _ENABLE_PER_THREAD_LOCALE and does nothing. This arm was first selected by
+// _WIN32 alone, and under MINGW64 every scope therefore came back inert:
+// numbers went through the caller's locale, "v 0.5 0.25 0.125" loaded as a
+// parse error under German_Germany.1252, and gmdl_numeric_pin_is_thread_local()
+// said true throughout. The locale tests found it the first time they ran
+// there. msvcrt MinGW now falls to the arms below, which is where a platform
+// with no per-thread locale belongs; _UCRT comes from MinGW's own headers,
+// which <locale.h> has included by this point.
 typedef struct {
   int mode;    // _configthreadlocale()'s previous setting.
   char name[]; // LC_NUMERIC as it was, in the thread's own locale.
@@ -246,11 +255,10 @@ GMDL_INTERNAL_API bool gmdl_numeric_pin_is_thread_local(void) {
 // instead, with the trade recorded in your build system where someone can
 // find it.
 //
-// For MSVC the implementation is _configthreadlocale(_ENABLE_PER_THREAD_LOCALE)
-// followed by setlocale(LC_NUMERIC, "C") and a restore, which IS thread-local
-// there. It is deliberately not written blind: an arm nobody compiles is an
-// arm nobody has checked, and a wrong one here misparses silently rather than
-// failing to build.
+// The UCRT and MSVC have _configthreadlocale(), and the arm above uses it.
+// MinGW-w64 against msvcrt.dll (MSYS2's MINGW64) arrives here: it has no
+// per-thread locale at all, so it builds only with the opt-in, which this
+// library's Makefile passes for that toolchain.
 #error "No per-thread locale (uselocale/newlocale) on this platform, so gmdl cannot keep number parsing independent of LC_NUMERIC. Numbers in OBJ and MTL always use '.', and without a pin this library would misread and miswrite every float wherever the C locale's separator is a comma. Implement the platform's per-thread locale in src/core/number.c (for MSVC: _configthreadlocale plus setlocale(LC_NUMERIC, \"C\")), or define GMDL_ALLOW_PROCESS_WIDE_LOCALE to pin LC_NUMERIC for the whole process instead - correct numbers, but another thread's separator moves while this library converts."
 
 #endif

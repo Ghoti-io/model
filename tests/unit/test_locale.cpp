@@ -81,6 +81,95 @@ extern "C" const char * __lsan_default_suppressions(void) {
 
 namespace {
 
+#ifdef _WIN32
+
+// The Windows CRT has no locale_t to hold, so "being in a locale" is a mode
+// and a name: _configthreadlocale() gives the calling thread a locale of its
+// own, and setlocale() then changes that one only. That is the mechanism the
+// library's Windows pin uses as well, which is why these tests are what
+// verify it - the pin has to win against a thread already in its own comma
+// locale, and has to leave both the mode and the name as it found them.
+//
+// Where the CRT has no per-thread locale at all - MinGW against msvcrt.dll -
+// _configthreadlocale() refuses and setlocale() moves the process. The
+// library is then built with the process-wide pin, the thread-local tests
+// skip themselves, and the global-locale tests are the ones that bite.
+//
+// Nothing is generated: Windows ships every locale. What differs is the
+// names. The CRT takes BCP 47 tags ("de-DE") and the older
+// Language_Country.codepage spelling, but not POSIX's "de_DE.UTF-8", so the
+// list is tried in order and the positive control below decides - a name
+// that is accepted but does not produce "0,5" is no use here.
+const char * const kCommaLocaleNames[] = {"de-DE", "German_Germany.1252",
+    "fr-FR", "French_France.1252", "deu", "german"};
+
+/** Puts the calling thread in its own locale, with LC_NUMERIC set to @p name,
+ *  and restores the thread's mode and LC_NUMERIC on destruction. */
+class ThreadNumericLocale {
+public:
+  explicit ThreadNumericLocale(const char * name)
+      : mode_(_configthreadlocale(_ENABLE_PER_THREAD_LOCALE)) {
+    const char * current = setlocale(LC_NUMERIC, nullptr);
+    saved_ = current ? current : "C";
+    ok_ = setlocale(LC_NUMERIC, name) != nullptr;
+  }
+  ~ThreadNumericLocale() {
+    setlocale(LC_NUMERIC, saved_.c_str());
+    // -1 is msvcrt refusing: there was no mode change to undo, and handing
+    // -1 back would be an invalid argument to a CRT that does implement it.
+    if (mode_ != -1) {
+      _configthreadlocale(mode_);
+    }
+  }
+  ThreadNumericLocale(const ThreadNumericLocale &) = delete;
+  ThreadNumericLocale & operator=(const ThreadNumericLocale &) = delete;
+
+  bool ok() const { return ok_; }
+
+private:
+  int mode_;
+  std::string saved_;
+  bool ok_ = false;
+};
+
+/** Does snprintf, as the calling thread stands right now, write a comma? */
+bool separator_is_comma_here() {
+  char buffer[16];
+  snprintf(buffer, sizeof buffer, "%.1f", 0.5);
+  return std::string(buffer) == "0,5";
+}
+
+/** A comma-decimal locale name the CRT accepts, or none. */
+class CommaLocale {
+public:
+  CommaLocale() {
+    for (const char * name : kCommaLocaleNames) {
+      ThreadNumericLocale probe(name);
+      if (probe.ok() && separator_is_comma_here()) {
+        name_ = name;
+        return;
+      }
+    }
+  }
+
+  bool usable() const { return !name_.empty(); }
+  const char * name() const { return name_.c_str(); }
+
+private:
+  std::string name_;
+};
+
+/** Held for the body of a test, so an assertion cannot leave it applied. */
+class InComma {
+public:
+  explicit InComma(const CommaLocale & loc) : held_(loc.name()) {}
+
+private:
+  ThreadNumericLocale held_;
+};
+
+#else
+
 /** A comma-decimal locale, generated on demand, or nullptr if impossible. */
 class CommaLocale {
 public:
@@ -163,6 +252,8 @@ private:
   locale_t previous_;
 };
 
+#endif
+
 CommaLocale & comma() {
   static CommaLocale instance;
   return instance;
@@ -224,6 +315,84 @@ TEST(Locale, AGloballySetCommaLocaleIsAlsoPinned) {
   setlocale(LC_NUMERIC, saved.c_str());
 }
 
+// The same for the writer, and for what is left behind: the pin must put the
+// caller's separator back when it ends. Under the process-wide arm that is
+// the arm's whole restore path, and this is the only test that reaches it -
+// the two thread-local tests below skip themselves there. It is where a
+// platform without per-thread locales is checked at all.
+TEST(Locale, AGloballySetCommaLocaleIsPinnedForWritingAndPutBack) {
+  ASSERT_TRUE(comma().usable());
+  const char * previous = setlocale(LC_NUMERIC, NULL);
+  const std::string saved = previous ? previous : "C";
+  struct Restore {
+    const std::string & name;
+    ~Restore() { setlocale(LC_NUMERIC, name.c_str()); }
+  } restore{saved};
+  if (!setlocale(LC_NUMERIC, comma().name())) {
+    GTEST_SKIP() << "the generated locale is not reachable through setlocale";
+  }
+  char control[16];
+  snprintf(control, sizeof control, "%.1f", 0.5);
+  ASSERT_STREQ(control, "0,5") << "the global locale did not take effect";
+
+  MemStream stream("v 0.5 0.25 0.125\n");
+  GMDL_Obj * obj = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &obj), GMDL_OK);
+  snprintf(control, sizeof control, "%.1f", 0.5);
+  EXPECT_STREQ(control, "0,5") << "the load did not put the locale back";
+
+  gmdltest::CapturedOutput sink;
+  ASSERT_NE(sink.get(), nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink.get()), GMDL_OK);
+  gmdl_obj_free(obj);
+  const std::string written = sink.finish();
+  EXPECT_NE(written.find("0.5"), std::string::npos) << "wrote: " << written;
+  EXPECT_EQ(written.find(','), std::string::npos)
+      << "a comma in the output is not OBJ: " << written;
+
+  snprintf(control, sizeof control, "%.1f", 0.5);
+  EXPECT_STREQ(control, "0,5") << "the dump did not put the locale back";
+  EXPECT_STREQ(setlocale(LC_NUMERIC, NULL), comma().name());
+}
+
+#ifdef _WIN32
+// The Windows pin changes two things to take effect - the thread's locale
+// mode and its LC_NUMERIC - and has to put both back. A thread that was on
+// the global locale must return to it rather than keep a private copy that
+// no longer follows setlocale(); one that had its own locale must keep it.
+// Neither is visible in the bytes a load produces, so it is checked directly.
+TEST(Locale, ThePinPutsBackTheThreadsLocaleModeAndName) {
+  ASSERT_TRUE(comma().usable());
+  for (bool own_locale : {false, true}) {
+    SCOPED_TRACE(own_locale ? "thread with its own locale"
+                            : "thread on the global locale");
+    ThreadNumericLocale held(comma().name());
+    ASSERT_TRUE(held.ok());
+    if (!own_locale) {
+      // ThreadNumericLocale asked for a per-thread locale; go back to the
+      // global one, which it has just set to the comma locale on a CRT that
+      // cannot do otherwise, and set it here explicitly on one that can.
+      _configthreadlocale(_DISABLE_PER_THREAD_LOCALE);
+      ASSERT_NE(setlocale(LC_NUMERIC, comma().name()), nullptr);
+    }
+    const int mode_before = _configthreadlocale(0);
+    ASSERT_TRUE(separator_is_comma_here());
+
+    GMDL_Numeric_Scope scope;
+    gmdl_numeric_scope_begin(&scope);
+    EXPECT_NE(scope.applied, nullptr) << "the pin did not take";
+    char inside[16];
+    snprintf(inside, sizeof inside, "%.1f", 0.5);
+    EXPECT_STREQ(inside, "0.5");
+    gmdl_numeric_scope_end(&scope);
+
+    EXPECT_EQ(_configthreadlocale(0), mode_before);
+    EXPECT_TRUE(separator_is_comma_here());
+    EXPECT_STREQ(setlocale(LC_NUMERIC, NULL), comma().name());
+  }
+}
+#endif
+
 TEST(Locale, ReadingIsUnaffectedByTheCallersLocale) {
   if (!gmdl_numeric_pin_is_thread_local()) {
     GTEST_SKIP() << "the process-wide arm cannot override a thread that has "
@@ -265,19 +434,15 @@ TEST(Locale, WritingUsesTheFormatsSeparatorNotTheLocales) {
   GMDL_Obj * obj = nullptr;
   ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &obj), GMDL_OK);
 
-  char * buffer = nullptr;
-  size_t size = 0;
-  FILE * sink = open_memstream(&buffer, &size);
-  ASSERT_NE(sink, nullptr);
-  ASSERT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
-  fclose(sink);
+  gmdltest::CapturedOutput sink;
+  ASSERT_NE(sink.get(), nullptr);
+  ASSERT_EQ(gmdl_obj_dump(obj, sink.get()), GMDL_OK);
 
-  const std::string written(buffer, size);
+  const std::string written = sink.finish();
   EXPECT_NE(written.find("0.5"), std::string::npos)
       << "wrote: " << written;
   EXPECT_EQ(written.find(','), std::string::npos)
       << "a comma in the output is not OBJ: " << written;
-  free(buffer);
   gmdl_obj_free(obj);
 }
 

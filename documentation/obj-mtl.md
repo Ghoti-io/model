@@ -131,6 +131,11 @@ are absent - MSVC has no `LC_NUMERIC_MASK`, and this library claims Windows -
 the alternative was stubs that silently did nothing, which is a correctness
 bug shipped quietly on a platform we cannot test.
 
+On Windows the pin is `_configthreadlocale` plus `setlocale`, which is
+per-thread under the UCRT and MSVC. MinGW-w64 against the older `msvcrt.dll`
+(MSYS2's MINGW64 environment) has no per-thread locale at all, so there the
+Makefile defines `GMDL_ALLOW_PROCESS_WIDE_LOCALE`, described next.
+
 Defining `GMDL_ALLOW_PROCESS_WIDE_LOCALE` pins `LC_NUMERIC` with `setlocale`
 instead. Numbers are then read and written correctly, and the cost is the
 promise `uselocale` buys: another thread formatting output during a load or
