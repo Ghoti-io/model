@@ -116,6 +116,33 @@ bool indices_are_representable(const GMDL_Obj * obj) {
       return false;
     }
   }
+  // The body statements and `con` carry indices too, into populations of
+  // their own: a GMDL_Obj_Curve_Ref names a `curv2` by ordinal, a
+  // GMDL_Obj_Connection_End names a `surf`, and `sp` names a `vp`. All three
+  // resolve the same way and so reach the same below--1 case. They are here
+  // because check-lists.py required it: the first version of that gate
+  // recognised an index by the field name `vertex` and could not see a
+  // `curve2d` or a `surface`, which is how the previous element kind got in
+  // without this list.
+  for (size_t i = 0; i < obj->curve_ref_count; i++) {
+    if (obj->curve_refs[i].curve2d < -1) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < obj->connection_count; i++) {
+    const GMDL_Obj_Connection_End * ends[2] = {
+        &obj->connections[i].a, &obj->connections[i].b};
+    for (size_t e = 0; e < 2; e++) {
+      if (ends[e]->surface < -1 || ends[e]->curve.curve2d < -1) {
+        return false;
+      }
+    }
+  }
+  for (size_t i = 0; i < obj->special_point_count; i++) {
+    if (obj->special_points[i] < -1) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -349,6 +376,15 @@ void check_round_trip(const GMDL_Obj * obj) {
   REQUIRE(obj->param_vertex_count == again->param_vertex_count,
       "param_vertex_count");
   REQUIRE(obj->freeform_count == again->freeform_count, "freeform_count");
+  REQUIRE(obj->freeform_body_count == again->freeform_body_count,
+      "freeform_body_count");
+  REQUIRE(obj->parm_value_count == again->parm_value_count,
+      "parm_value_count");
+  REQUIRE(obj->curve_ref_count == again->curve_ref_count, "curve_ref_count");
+  REQUIRE(obj->special_point_count == again->special_point_count,
+      "special_point_count");
+  REQUIRE(obj->connection_count == again->connection_count,
+      "connection_count");
   REQUIRE(obj->freeform_vertex_count == again->freeform_vertex_count,
       "freeform_vertex_count");
   REQUIRE(obj->face_count == again->face_count, "face_count");
@@ -439,6 +475,36 @@ void check_round_trip(const GMDL_Obj * obj) {
     REQUIRE(same_freeform_state(obj, a.state, again, b.state),
         "freeform state");
     REQUIRE(a.count == b.count, "freeform reference count");
+    // One record per body line, so a dumper that merged two `trim` lines
+    // into one would join two trimming loops and be caught here rather than
+    // agreeing with itself.
+    REQUIRE(a.body_count == b.body_count, "freeform body count");
+    for (size_t k = 0; k < a.body_count && k < b.body_count; k++) {
+      const GMDL_Obj_Freeform_Body & x = obj->freeform_bodies[a.body_start + k];
+      const GMDL_Obj_Freeform_Body & y =
+          again->freeform_bodies[b.body_start + k];
+      REQUIRE(x.kind == y.kind, "body kind");
+      REQUIRE(x.count == y.count, "body entry count");
+      if (x.count != y.count) {
+        continue;
+      }
+      if (x.kind == GMDL_OBJ_BODY_PARM_U || x.kind == GMDL_OBJ_BODY_PARM_V) {
+        for (size_t e = 0; e < x.count; e++) {
+          REQUIRE(same_float(obj->parm_values[x.start + e],
+                      again->parm_values[y.start + e]),
+              "parm value");
+        }
+      }
+      else if (x.kind != GMDL_OBJ_BODY_SP) {
+        for (size_t e = 0; e < x.count; e++) {
+          REQUIRE(same_float(obj->curve_refs[x.start + e].u0,
+                      again->curve_refs[y.start + e].u0)
+                  && same_float(obj->curve_refs[x.start + e].u1,
+                      again->curve_refs[y.start + e].u1),
+              "curve reference range");
+        }
+      }
+    }
     REQUIRE(strcmp(material_name(obj, a.material_index),
                 material_name(again, b.material_index))
             == 0,
@@ -544,6 +610,28 @@ void check_round_trip(const GMDL_Obj * obj) {
                 && x.normal == y.normal,
             "freeform reference");
       }
+    }
+    for (size_t i = 0; i < obj->curve_ref_count; i++) {
+      REQUIRE(obj->curve_refs[i].curve2d == again->curve_refs[i].curve2d,
+          "curve reference index");
+    }
+    for (size_t i = 0; i < obj->special_point_count; i++) {
+      REQUIRE(obj->special_points[i] == again->special_points[i],
+          "special point index");
+    }
+    for (size_t i = 0; i < obj->connection_count; i++) {
+      const GMDL_Obj_Connection & a = obj->connections[i];
+      const GMDL_Obj_Connection & b = again->connections[i];
+      REQUIRE(a.a.surface == b.a.surface && a.b.surface == b.b.surface,
+          "connection surface index");
+      REQUIRE(a.a.curve.curve2d == b.a.curve.curve2d
+              && a.b.curve.curve2d == b.b.curve.curve2d,
+          "connection curve index");
+      REQUIRE(same_float(a.a.curve.u0, b.a.curve.u0)
+              && same_float(a.a.curve.u1, b.a.curve.u1)
+              && same_float(a.b.curve.u0, b.b.curve.u0)
+              && same_float(a.b.curve.u1, b.b.curve.u1),
+          "connection range");
     }
     for (size_t i = 0; i < obj->line_vertex_count; i++) {
       REQUIRE(obj->line_vertices[i].vertex == again->line_vertices[i].vertex,

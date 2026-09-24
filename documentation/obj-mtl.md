@@ -115,7 +115,9 @@ A directive this library does not implement is ignored with its whole line.
 **3.14 is the list**, and this section deliberately does not repeat it: the
 set was written out in both places, the copy here fell behind, and for three
 commits it described `s`, `l` and `p` as ignored while the parser was reading
-them. One list, in the section whose subject it is.
+them. One list, in the section whose subject it is - which as of 2026-09-24
+is empty, so what this rule covers today is an exporter's private
+extensions.
 
 **Numbers do not depend on the caller's locale.** A decimal point is `.` in
 every OBJ and MTL file, whatever `LC_NUMERIC` says in the program that linked
@@ -483,29 +485,35 @@ where they sit is not something a consumer of it can observe.
 
 ### 3.14 Not read
 
-**The free-form geometry sub-language**: `parm`, `trim`, `hole`, `scrv`,
-`sp` and `con`, which are what is left of it. These describe curves and surfaces - NURBS and their trimming - which
-is a different kind of geometry from the polygon mesh this library holds,
-not another record to append to it. Supporting them means a second data
-model, not a field.
+**Nothing, as of 2026-09-24.** Every directive this section once listed is
+read; the section stays because what it got wrong is worth keeping.
 
-That reading was right, and it is being built rather than declined: 3.19 is
-the second data model, recorded and not evaluated. `vp`, `cstype`, `deg`,
-`bmat`, `step`, `curv`, `curv2`, `surf` and `end` are read as of 2026-09-23;
-the six above move into 3.19 as they land.
+It listed twenty-six directives in three groups and gave one reason for all
+of them. Two of the three groups fell to writing the reason down. The nine
+**render attributes** were three different things that this section's own
+grouping had made look like one: four are per-element state (3.16), two are
+file-level paths the blocker never applied to (3.17), and three belong to
+the free-form sub-language (3.18). `maplib` and `usemap` were declined
+because "almost nothing writes them", which is a claim about one exporter's
+output, and because the work was "a second name-to-index mapping beside the
+material one", which describes the work rather than arguing against it
+(3.15).
 
-All nine of what this section used to call the render attributes are read as
-of 2026-09-23: the four switches in 3.16, the two object references in 3.17,
-and the three approximation directives in 3.18. What is left here is the
-free-form sub-language itself.
+The **free-form sub-language** was the one where the reason held: fifteen
+directives describing NURBS curves and surfaces with trimming really is a
+second data model rather than more fields on the polygon mesh. What followed
+from that was *where to stop*, not whether to start. 3.19 records free-form
+geometry and does not evaluate it: `vp`, the state and the elements landed on
+2026-09-23, the body statements and `con` on 2026-09-24, and nothing
+tessellates a surface or walks a trimming loop. A file carrying a `curv` used
+to lose it in silence.
 
-`maplib` and `usemap` were a third group here until 2026-09-23. They are
-read now; 3.15 is what they do and why the argument for leaving them out did
-not survive being written down.
+What remains not *done* is in 12, and it is a different kind of thing: places
+where the specification and the two references disagree and a side has to be
+picked. Those are decisions, not absences.
 
-A line whose directive is none of the above and none of 3.1-3.13 or
-3.15-3.18 is skipped, which is how a file carrying an exporter's private
-extension still loads.
+A line whose directive is none of 3.1-3.13 or 3.15-3.19 is skipped, which is
+how a file carrying an exporter's private extension still loads.
 
 ### 3.15 `maplib path` and `usemap name`
 
@@ -657,20 +665,23 @@ a curve or a surface is approximated; `mg` sets the merging group and
 resolution for the free-form surfaces that follow, with `mg off` turning
 adjacency detection off.
 
-All three are state for the **free-form sub-language this library does not
-read** (3.14). There is nothing in this model for them to apply to, so they
-are kept as text: `GMDL_Obj.freeform_attrs` holds them in file order, each
-with the directive it came from and everything after it, trailing blanks
-removed - the reading `call` and `csh` use (3.13), with which they share the
-trimming. A bare one is `GMDL_ERR_FORMAT`.
+All three are state for the free-form sub-language, which this library did
+not read when they landed. They are kept as text:
+`GMDL_Obj.freeform_attrs` holds them in file order, each with the directive
+it came from and everything after it, trailing blanks removed - the reading
+`call` and `csh` use (3.13), with which they share the trimming. A bare one
+is `GMDL_ERR_FORMAT`.
 
 **Text is a provisional answer and is meant to look like one.** Parsing them
-into typed records now would mean choosing a representation before the model
-they describe exists, and then attaching it to nothing; keeping the line
-loses no bytes and commits to nothing. When free-form geometry arrives these
-get a typed home beside it, and that will be a breaking change to a field
-this documents as provisional rather than a silent loss of data in the
-meantime.
+into typed records then would have meant choosing a representation before the
+model they describe existed, and attaching it to nothing; keeping the line
+loses no bytes and commits to nothing.
+
+**That model now exists** (3.19, 2026-09-24), so the reason for the text has
+expired and the change it promised is due: these three get a typed home
+beside the elements they describe, which is a breaking change to a field this
+section documents as provisional rather than a silent loss of data in the
+meantime. Not done, and listed in 12.
 
 Unlike `call` and `csh` these name no file and no command, so none of the
 warnings section 3.13 carries apply. The dump writes them in file order
@@ -684,9 +695,9 @@ one array.
 
 Fifteen directives describing NURBS curves and surfaces: `vp`, `cstype`,
 `deg`, `bmat`, `step`, `curv`, `curv2`, `surf`, `parm`, `trim`, `hole`,
-`scrv`, `sp`, `end` and `con`. 3.14 declined all of them together, and the
-reason it gave was right: this is a second data model, not another field on
-the polygon mesh.
+`scrv`, `sp`, `end` and `con`. All fifteen are read as of 2026-09-24. 3.14
+declined all of them together, and the reason it gave was right: this is a
+second data model, not another field on the polygon mesh.
 
 **What follows from that is where to stop, not whether to start.** This
 library *records* free-form geometry and does not *evaluate* it. Nothing
@@ -797,8 +808,108 @@ values across every line, and `max_face_indices` the references in one
 element - the same budget it already applies to one `f` and one `l`, because
 it is the same quantity.
 
-**What is not read yet**: the body statements `parm`, `trim`, `hole`, `scrv`
-and `sp`, and `con`. Those are 3.14's remaining list.
+#### `parm`, `trim`, `hole`, `scrv` and `sp` - the body statements
+
+Five directives that stand between an element and its `end` and describe the
+element they stand in. `parm` gives the knot vector, `trim` and `hole` the
+outer and inner trimming loops, `scrv` a special curve and `sp` the special
+points.
+
+**Each line is its own record**, in `GMDL_Obj.freeform_bodies`, and each
+element names the span of them that belongs to it. That is not the shape
+`bmat` uses, and the difference matters for three of the five: **each `trim`
+builds a separate loop**, and so does each `hole` and each `scrv`. Merging
+two `trim` lines into one list of curve references would join two loops into
+one and change the shape the file describes - while still round-tripping
+through this library's own dump, because the merged model writes one `trim`
+and reads one back. A loss that agrees with itself is the kind this library
+is built against.
+
+The span is kept across all five kinds in file order rather than grouped by
+directive, because `trim` and `hole` interleave to describe a surface with
+holes in it and the order they were written in is the order they have to be
+written back in.
+
+`GMDL_Obj_Freeform_Body.kind` says which array its span indexes, because the
+five carry three different payloads: `parm` floats in `GMDL_Obj.parm_values`,
+the three loop directives curve references in `GMDL_Obj.curve_refs`, and `sp`
+indices in `GMDL_Obj.special_points`.
+
+- **`parm u|v p1 p2 ...`** is the one that carries a direction, and unlike
+  `bmat`'s the direction picks which *record* the line becomes rather than
+  which of two spans it fills. A direction that is neither `u` nor `v`, and a
+  bare `parm`, are `GMDL_ERR_FORMAT`.
+- **`trim`, `hole` and `scrv`** each take curve references in threes: `u0`,
+  `u1`, and the index of a `curv2`. A triple that stops short is
+  `GMDL_ERR_FORMAT` rather than kept as far as it got - two of the three name
+  a range with no curve in it, and the format gives them no shorter form.
+- **`sp vp1 vp2 ...`** names points in parameter space, so it counts into
+  `vp` **whatever kind of element it belongs to** - including a `curv`, whose
+  own control points count into `v`. It is the one free-form reference that
+  does not change array with the element's kind.
+
+**A body statement outside an element is `GMDL_ERR_FORMAT`.** It describes
+the element it stands in, so there is nothing to attach it to: recording it
+against the previous element would change which patch is trimmed, and
+dropping it would lose what the file said while reporting success. `end`
+closes an element, and so does declaring the next one - which is what lets a
+file that omits `end` still attach each statement to the element it was
+written under.
+
+**The whole token has to be a number.** `strtof()` stops at the first
+character it cannot use and reports success for what it read, which is how
+the `bmat` and parameter-range loops find the end of a list. A body statement
+cannot afford that: `trim 0 1 2.5` would read the index as `2`, leave `.5`,
+and take that as the next triple's `u0` - accepting a line as a different
+line, silently. So a token that begins with a number and continues into
+something else is refused.
+
+`GMDL_Limits.max_freeform_bodies` caps the statements across every element,
+`max_parm_values` the `parm` values, `max_curve_refs` the references `trim`,
+`hole` and `scrv` name, and `max_special_points` the `sp` indices.
+
+#### `con` - joining two surfaces
+
+`con surf_1 q0_1 q1_1 curv2d_1 surf_2 q0_2 q1_2 curv2d_2` says that two
+surfaces meet, and which curve in each one's parameter space they meet along.
+It is the one free-form directive that is neither state nor a body statement:
+it stands at file level, names its surfaces, and neither needs an open
+element nor closes one. All eight numbers or none - a `con` naming one
+surface and half of the other describes no join.
+
+Recorded and not acted on. Nothing here checks that the surfaces exist, that
+the curves lie in their parameter spaces, or that the join is geometrically
+possible. The dump writes connections after every element, because each names
+its surfaces by ordinal and a `con` written first would name patches a reader
+has not seen.
+
+#### How `trim`, `hole`, `scrv` and `con` number what they name
+
+These four reference a `curv2` or a `surf` **by its ordinal within its own
+kind**, which is how the format numbers everything else: `vt 2` is the second
+`vt`, not the second line of the file. `GMDL_Obj.freeforms` holds all three
+kinds together in file order, so the two numbers part company as soon as a
+document mixes them - `trim 0 1 2` names the file's second `curv2`, which may
+be `freeforms[3]`.
+
+`gmdl_obj_freeform_of_kind()` is the way across, and it is a search rather
+than a second index array because the population is dozens of patches: a
+parallel array would cost every document memory so that trimmed surfaces,
+which few documents have at all, could skip a walk.
+
+**The ordinal is held rather than resolved**, for the same reason
+`GMDL_Obj_Face` holds an out-of-range vertex index. A positive index counts
+from the start of the file and nothing in the format says the curve it names
+has been read yet, so resolving here would mean refusing a forward reference
+the format allows. Range checking is the consumer's (section 1), and an index
+that cannot be resolved *yet* is not an index that is wrong.
+
+**This numbering is a reading, not a quotation.** The specification names the
+argument `curv2d` in one place and `surf` in another, which is what makes
+per-kind numbering the consistent reading; it does not say so in as many
+words, and neither reference reads any of these directives, so nothing
+external settles it. Recorded here so that a consumer disagreeing knows which
+call to undo.
 
 ---
 
@@ -1087,6 +1198,11 @@ assuming a surface would record something the file never said.
 | `max_freeform_attrs` | 0 | `ctech`, `stech` and `mg` records together |
 | `max_freeforms` | 0 | `curv`, `curv2` and `surf` elements together |
 | `max_basis_values` | 0 | `bmat` values, across every line |
+| `max_freeform_bodies` | 0 | `parm`, `trim`, `hole`, `scrv` and `sp` lines together |
+| `max_parm_values` | 0 | `parm` values, across every line |
+| `max_curve_refs` | 0 | curve references in `trim`, `hole` and `scrv` |
+| `max_special_points` | 0 | `sp` indices, across every line |
+| `max_connections` | 0 | `con` records |
 
 `0` means no limit. When a record would take a count from `limit` to
 `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
@@ -1314,6 +1430,19 @@ one of the four differs, and the basis spans are compared rather than the
 values: within one parse two elements share a span exactly when they share a
 matrix, and for a hand-built model the comparison errs towards writing a
 `bmat` twice, which reloads the same.
+
+Each element's body statements are written between it and its `end`, one
+line per record and in the order the file wrote them (3.19). A body span or
+an entry span that leaves its array writes **nothing at all** rather than a
+directive with no entries after it - a bare `trim` is a line this parser
+refuses, so the alternative would be a dump of a hand-built model that fails
+to reload. So is a `kind` outside the enumeration, which has no directive to
+spell it with. A parse can produce neither; a caller assembling a model by
+hand can produce both.
+
+Connections are written last, after every element, because each names its
+surfaces by ordinal (3.19) and a `con` written first would name patches a
+reader has not seen.
 
 The dump writes `usemtl` when the material changes, `usemap` when the
 texture map does, `s` when the smoothing group does, a render attribute when
@@ -1643,16 +1772,17 @@ section 12 is where they are written down.
   not one anybody is having in practice. 3.6 now keeps the whole line, which
   loses nothing either way and leaves this decidable later; what remains is
   whether to act on it.
-- **Free-form geometry: evaluating it.** Decided in part and open in part.
-  *Recording* it is settled and built - 3.19 holds `vp`, the state and the
-  elements, and the body statements follow. *Evaluating* it is not, and is
-  the question that was actually behind 3.14: nothing here tessellates a
-  surface or walks a trimming loop, and a polygon-mesh consumer like
-  `libs/cjelly` wants neither. Recording it costs a consumer nothing and
-  loses nothing; evaluating it is a different library. Once the body
-  statements land, 3.18's three directives get a typed home beside the model
-  they describe, which is the breaking change that section documents as
-  coming.
+- **Free-form geometry: evaluating it.** *Recording* it is settled and built
+  - 3.19 holds all fifteen directives as of 2026-09-24. *Evaluating* it is
+  not, and is the question that was actually behind 3.14: nothing here
+  tessellates a surface or walks a trimming loop, and a polygon-mesh consumer
+  like `libs/cjelly` wants neither. Recording it costs a consumer nothing and
+  loses nothing; evaluating it is a different library.
+- **Retyping `ctech`, `stech` and `mg`.** Now unblocked rather than open:
+  those three are held as text because the geometry they describe was not
+  read when they landed, and it is now. Giving them a typed home beside
+  3.19's model is the breaking change 3.18 documents as coming, and the only
+  thing still deciding it is when to make it.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is now the only place 4.5
   takes it further than either: `-type` on a colour map was the other, and it

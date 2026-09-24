@@ -90,6 +90,13 @@ typedef struct GMDL_Limits {
   size_t max_freeform_attrs; ///< Cap on `ctech`, `stech` and `mg` records.
   size_t max_freeforms;   ///< Cap on `curv`, `curv2` and `surf` elements.
   size_t max_basis_values; ///< Cap on `bmat` values, across every line.
+  size_t max_freeform_bodies; ///< Cap on `parm`, `trim`, `hole`, `scrv` and
+                              ///< `sp` lines, across every element.
+  size_t max_parm_values;  ///< Cap on `parm` values, across every line.
+  size_t max_curve_refs;   ///< Cap on the curve references `trim`, `hole`
+                           ///< and `scrv` name, across every line.
+  size_t max_special_points; ///< Cap on `sp` indices, across every line.
+  size_t max_connections;  ///< Cap on `con` records.
 } GMDL_Limits;
 
 /**

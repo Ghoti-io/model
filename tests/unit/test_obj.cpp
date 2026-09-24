@@ -640,6 +640,371 @@ TEST(ObjFreeform, AnEndWithNoElementIsIgnored) {
   gmdl_obj_free(obj);
 }
 
+//
+// Free-form body statements: `parm`, `trim`, `hole`, `scrv` and `sp` (3.19)
+//
+
+TEST(ObjFreeformBody, AParmLineKeepsItsValuesAndDirection) {
+  GMDL_Obj * obj = load_text("vp 0\nvp 1\n"
+                             "curv2 1 2\nparm u 0 0 1 1\nparm v 0 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  const GMDL_Obj_Freeform & c = obj->freeforms[0];
+  ASSERT_EQ(c.body_count, 2u);
+  const GMDL_Obj_Freeform_Body & u = obj->freeform_bodies[c.body_start];
+  const GMDL_Obj_Freeform_Body & v = obj->freeform_bodies[c.body_start + 1];
+  EXPECT_EQ(u.kind, GMDL_OBJ_BODY_PARM_U);
+  ASSERT_EQ(u.count, 4u);
+  EXPECT_FLOAT_EQ(obj->parm_values[u.start + 2], 1.0f);
+  EXPECT_EQ(v.kind, GMDL_OBJ_BODY_PARM_V);
+  ASSERT_EQ(v.count, 2u);
+  EXPECT_FLOAT_EQ(obj->parm_values[v.start], 0.0f);
+  EXPECT_FLOAT_EQ(obj->parm_values[v.start + 1], 1.0f);
+  gmdl_obj_free(obj);
+}
+
+// The reason a body statement is one record per line rather than one span
+// per directive. Each `trim` is a separate outer loop, so merging two into
+// one list of references would join two loops into one - and a model that
+// did would round-trip through this library's own dump perfectly.
+TEST(ObjFreeformBody, TwoTrimLinesStayTwoLoops) {
+  GMDL_Obj * obj = load_text("vp 0\n"
+                             "curv2 1\nend\n"
+                             "curv2 1\nend\n"
+                             "surf 0 1 0 1 1\ntrim 0 1 1\ntrim 0 1 2\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 3u);
+  const GMDL_Obj_Freeform & surface = obj->freeforms[2];
+  ASSERT_EQ(surface.body_count, 2u);
+  ASSERT_EQ(obj->curve_ref_count, 2u);
+  for (size_t i = 0; i < 2; i++) {
+    const GMDL_Obj_Freeform_Body & loop =
+        obj->freeform_bodies[surface.body_start + i];
+    EXPECT_EQ(loop.kind, GMDL_OBJ_BODY_TRIM);
+    EXPECT_EQ(loop.count, 1u) << "loop " << i << " swallowed the other";
+    EXPECT_EQ(obj->curve_refs[loop.start].curve2d, (int32_t)i);
+  }
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeformBody, EachStatementIsItsOwnRecordInFileOrder) {
+  GMDL_Obj * obj = load_text("vp 0\ncurv2 1\nend\n"
+                             "surf 0 1 0 1 1\n"
+                             "trim 0 1 1\nhole 0 1 1\ntrim 0 1 1\n"
+                             "scrv 0 1 1\nsp 1\nparm u 0\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 2u);
+  const GMDL_Obj_Freeform & surface = obj->freeforms[1];
+  ASSERT_EQ(surface.body_count, 6u);
+  const GMDL_Obj_Body_Kind expected[6] = {GMDL_OBJ_BODY_TRIM,
+      GMDL_OBJ_BODY_HOLE, GMDL_OBJ_BODY_TRIM, GMDL_OBJ_BODY_SCRV,
+      GMDL_OBJ_BODY_SP, GMDL_OBJ_BODY_PARM_U};
+  for (size_t i = 0; i < 6; i++) {
+    EXPECT_EQ(obj->freeform_bodies[surface.body_start + i].kind, expected[i])
+        << "body " << i;
+  }
+  gmdl_obj_free(obj);
+}
+
+// `trim` numbers its curves within the `curv2` elements, not within
+// `freeforms`, which holds all three kinds in file order. The document mixes
+// them so that the two numbers differ: the second `curv2` is `freeforms[3]`.
+TEST(ObjFreeformBody, ATrimIndexCountsCurve2ElementsNotEveryElement) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nvp 0\n"
+                             "curv 0 1 1\nend\n"  // freeforms[0]
+                             "curv2 1\nend\n"     // freeforms[1], curv2 #1
+                             "curv 0 1 1\nend\n"  // freeforms[2]
+                             "curv2 1\nend\n"     // freeforms[3], curv2 #2
+                             "surf 0 1 0 1 1\ntrim 0 1 2\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 5u);
+  ASSERT_EQ(obj->curve_ref_count, 1u);
+  EXPECT_EQ(obj->curve_refs[0].curve2d, 1) << "counted freeforms, not curv2s";
+  const GMDL_Obj_Freeform * named =
+      gmdl_obj_freeform_of_kind(obj, GMDL_OBJ_CURVE2, 1);
+  EXPECT_EQ(named, &obj->freeforms[3]);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeformBody, ARelativeTrimIndexCountsBackThroughTheCurves) {
+  GMDL_Obj * obj = load_text("vp 0\ncurv2 1\nend\ncurv2 1\nend\n"
+                             "surf 0 1 0 1 1\ntrim 0.25 0.75 -1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->curve_ref_count, 1u);
+  EXPECT_FLOAT_EQ(obj->curve_refs[0].u0, 0.25f);
+  EXPECT_FLOAT_EQ(obj->curve_refs[0].u1, 0.75f);
+  EXPECT_EQ(obj->curve_refs[0].curve2d, 1) << "-1 is the last curv2 declared";
+  gmdl_obj_free(obj);
+}
+
+// A special point is a point in parameter space whatever kind of element it
+// belongs to - so unlike a control-point reference, `sp` does not change
+// array with the element's kind. The document gives `v` and `vp` different
+// counts so that the wrong array would answer differently.
+TEST(ObjFreeformBody, ASpecialPointCountsIntoTheParameterPoints) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nv 2 0 0\nv 3 0 0\n"
+                             "vp 0\nvp 1\n"
+                             "curv 0 1 1 2\nsp -1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->special_point_count, 1u);
+  EXPECT_EQ(obj->special_points[0], 1) << "resolved against the vertices";
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeformBody, ABodyStatementOutsideAnElementIsAFormatError) {
+  const char * const documents[] = {
+      "vp 0\nparm u 0 1\n",                    // Before any element.
+      "vp 0\ncurv2 1\nend\ntrim 0 1 1\n",      // After the element closed.
+      "vp 0\ncurv2 1\nend\nsp 1\n",
+      "vp 0\nhole 0 1 1\ncurv2 1\nend\n",
+  };
+  for (const char * document : documents) {
+    MemStream stream(document);
+    GMDL_Obj * obj = nullptr;
+    EXPECT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &obj),
+        GMDL_ERR_FORMAT)
+        << document;
+    gmdl_obj_free(obj);
+  }
+}
+
+// Declaring an element closes the one before it, so a file that omits `end`
+// still attaches each body statement to the element it was written under.
+TEST(ObjFreeformBody, ANewElementClosesTheOneBeforeIt) {
+  GMDL_Obj * obj = load_text("vp 0\n"
+                             "curv2 1\nsp 1\n"
+                             "curv2 1\ntrim 0 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 2u);
+  ASSERT_EQ(obj->freeforms[0].body_count, 1u);
+  ASSERT_EQ(obj->freeforms[1].body_count, 1u);
+  EXPECT_EQ(obj->freeform_bodies[obj->freeforms[0].body_start].kind,
+      GMDL_OBJ_BODY_SP);
+  EXPECT_EQ(obj->freeform_bodies[obj->freeforms[1].body_start].kind,
+      GMDL_OBJ_BODY_TRIM);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeformBody, AStatementNamingNothingIsAFormatError) {
+  const char * const documents[] = {
+      "vp 0\ncurv2 1\nparm u\nend\n",
+      "vp 0\ncurv2 1\ntrim\nend\n",
+      "vp 0\ncurv2 1\nhole\nend\n",
+      "vp 0\ncurv2 1\nscrv\nend\n",
+      "vp 0\ncurv2 1\nsp\nend\n",
+      "vp 0\ncurv2 1\nparm\nend\n",     // No direction at all.
+      "vp 0\ncurv2 1\nparm w 0 1\nend\n", // A direction the format has not.
+  };
+  for (const char * document : documents) {
+    MemStream stream(document);
+    GMDL_Obj * obj = nullptr;
+    EXPECT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &obj),
+        GMDL_ERR_FORMAT)
+        << document;
+    gmdl_obj_free(obj);
+  }
+}
+
+// A curve reference is three numbers and there is no shorter conforming
+// form, so a triple that stops short is refused rather than kept as far as
+// it got - two of the three name a range with no curve in it.
+TEST(ObjFreeformBody, AShortOrMalformedCurveReferenceIsAFormatError) {
+  const char * const documents[] = {
+      "vp 0\ncurv2 1\ntrim 0 1\nend\n",
+      "vp 0\ncurv2 1\ntrim 0\nend\n",
+      "vp 0\ncurv2 1\ntrim 0 1 1 0 1\nend\n", // The second triple stops.
+      // Each of the three numbers refused in turn, because each is its own
+      // call and a triple that always fails in the same place leaves the
+      // other two unmeasured.
+      "vp 0\ncurv2 1\ntrim x 1 1\nend\n",
+      "vp 0\ncurv2 1\ntrim 0 x 1\nend\n",
+      "vp 0\ncurv2 1\ntrim 0 1 x\nend\n",
+  };
+  for (const char * document : documents) {
+    MemStream stream(document);
+    GMDL_Obj * obj = nullptr;
+    EXPECT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &obj),
+        GMDL_ERR_FORMAT)
+        << document;
+    gmdl_obj_free(obj);
+  }
+}
+
+// The whole token has to be the number. `trim 0 1 2.5` would otherwise read
+// the index as 2, leave `.5`, and take that as the next triple's `u0` -
+// accepting a line as a different line, silently.
+//
+// **The documents that matter are the ones that would still parse** with the
+// check removed. `trim 0 1 2.5` is not one of them: the leftover `.5` starts
+// a triple that runs out of line, so a loose reader refuses it too, for the
+// wrong reason. Every case here was chosen so that the leftover text
+// *completes* - `trim 0 1 2.5 1 3` reads as two loops where the file wrote
+// one - which is the only shape where strict and loose disagree. Three
+// mutations survived this test before it was written that way: the two
+// token checks and nothing else in the file was holding them.
+TEST(ObjFreeformBody, ATokenThatOnlyStartsWithANumberIsAFormatError) {
+  const char * const documents[] = {
+      // The index's leftover `.5` would begin a second, complete triple.
+      "vp 0\ncurv2 1\ntrim 0 1 2.5 1 3\nend\n",
+      // A float's leftover `-1` is a whole number of its own.
+      "vp 0\ncurv2 1\ntrim 0 1.5-1 1\nend\n",
+      "vp 0\ncurv2 1\nparm u 0.5-1\nend\n",
+      "vp 0\ncurv2 1\nsp 1-2\nend\n",
+      "v 0 0 0\nvp 0\ncurv2 1\nend\nsurf 0 1 0 1 1\nend\n"
+      "con 1-1 0 1 1 1 0 1 1\n",
+      // And the plainer spellings, which a loose reader refuses too - kept
+      // so the refusal is pinned for both reasons.
+      "vp 0\ncurv2 1\ntrim 0 1 2.5\nend\n",
+      "vp 0\ncurv2 1\nsp 1x\nend\n",
+      "vp 0\ncurv2 1\nparm u 0.5x\nend\n",
+  };
+  for (const char * document : documents) {
+    MemStream stream(document);
+    GMDL_Obj * obj = nullptr;
+    EXPECT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &obj),
+        GMDL_ERR_FORMAT)
+        << document;
+    gmdl_obj_free(obj);
+  }
+}
+
+// Tabs separate a body statement's numbers exactly as spaces do, which is
+// its own branch in every place that skips blanks or decides where a token
+// ends. A suite of space-separated documents leaves all of them unmeasured.
+TEST(ObjFreeformBody, TabsSeparateABodyStatementsNumbers) {
+  GMDL_Obj * obj = load_text("vp 0\nvp 1\ncurv2 1\nend\n"
+                             "surf 0 1 0 1 1\n"
+                             "\tparm\tu\t0\t1\n"
+                             "\ttrim\t0\t1\t1\n"
+                             "\tsp\t1\t2\n"
+                             "end\n"
+                             "con\t1\t0\t1\t1\t1\t0\t1\t1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 2u);
+  const GMDL_Obj_Freeform & surface = obj->freeforms[1];
+  ASSERT_EQ(surface.body_count, 3u);
+  EXPECT_EQ(obj->parm_value_count, 2u);
+  ASSERT_EQ(obj->curve_ref_count, 1u);
+  EXPECT_EQ(obj->curve_refs[0].curve2d, 0);
+  EXPECT_EQ(obj->special_point_count, 2u);
+  EXPECT_EQ(obj->connection_count, 1u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeformBody, AConnectionKeepsBothSurfacesAndBothCurves) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nvp 0\n"
+                             "curv2 1\nend\ncurv2 1\nend\n"
+                             "surf 0 1 0 1 1\nend\nsurf 0 1 0 1 1\nend\n"
+                             "con 1 0 0.5 2 2 0.5 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->connection_count, 1u);
+  const GMDL_Obj_Connection & c = obj->connections[0];
+  EXPECT_EQ(c.a.surface, 0);
+  EXPECT_FLOAT_EQ(c.a.curve.u0, 0.0f);
+  EXPECT_FLOAT_EQ(c.a.curve.u1, 0.5f);
+  EXPECT_EQ(c.a.curve.curve2d, 1);
+  EXPECT_EQ(c.b.surface, 1);
+  EXPECT_FLOAT_EQ(c.b.curve.u0, 0.5f);
+  EXPECT_FLOAT_EQ(c.b.curve.u1, 1.0f);
+  EXPECT_EQ(c.b.curve.curve2d, 0);
+  gmdl_obj_free(obj);
+}
+
+// A `con`'s surface ordinal counts `surf` elements and its curve ordinal
+// counts `curv2` ones, which a document with one of each cannot tell apart -
+// and a positive index cannot either, because it does not consult the count
+// at all. So: one curve, two surfaces, and a relative index. The mutation
+// resolving a surface against the curve count survived the suite until this
+// document existed.
+TEST(ObjFreeformBody, AConnectionCountsSurfacesAndCurvesSeparately) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nvp 0\n"
+                             "curv2 1\nend\n"
+                             "surf 0 1 0 1 1\nend\n"
+                             "surf 0 1 0 1 1\nend\n"
+                             "con -1 0 1 -1 1 0 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->connection_count, 1u);
+  const GMDL_Obj_Connection & c = obj->connections[0];
+  EXPECT_EQ(c.a.surface, 1) << "-1 counted through the curves, not the surfaces";
+  EXPECT_EQ(c.a.curve.curve2d, 0);
+  EXPECT_EQ(c.b.surface, 0);
+  gmdl_obj_free(obj);
+}
+
+// All eight numbers or none: a `con` naming one surface and half of the
+// other describes no join, and there is no shorter conforming form.
+TEST(ObjFreeformBody, AShortConnectionIsAFormatError) {
+  const char * const documents[] = {
+      "con\n",
+      "con 1 0 1 1\n",
+      "con 1 0 1 1 1 0 1\n",
+      // Each of the eight in turn: the two ordinals are read as integers and
+      // the four ranges as floats, which are different calls.
+      "con x 0 1 1 1 0 1 1\n",
+      "con 1 x 1 1 1 0 1 1\n",
+      "con 1 0 x 1 1 0 1 1\n",
+      "con 1 0 1 x 1 0 1 1\n",
+      "con 1 0 1 1 x 0 1 1\n",
+      "con 1 0 1 1 1 x 1 1\n",
+      "con 1 0 1 1 1 0 x 1\n",
+      "con 1 0 1 1 1 0 1 x\n",
+  };
+  for (const char * document : documents) {
+    MemStream stream(document);
+    GMDL_Obj * obj = nullptr;
+    EXPECT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &obj),
+        GMDL_ERR_FORMAT)
+        << document;
+    gmdl_obj_free(obj);
+  }
+}
+
+// `con` is the one free-form directive that is neither state nor a body
+// statement, so it needs no open element and does not close one.
+TEST(ObjFreeformBody, AConnectionNeitherNeedsNorClosesAnElement) {
+  GMDL_Obj * obj = load_text("vp 0\ncurv2 1\n"
+                             "con 1 0 1 1 1 0 1 1\n"
+                             "sp 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->connection_count, 1u);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  EXPECT_EQ(obj->freeforms[0].body_count, 1u)
+      << "the con closed the element";
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeformBody, TheOrdinalHelperFindsTheNthOfThatKind) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nvp 0\n"
+                             "curv2 1\nend\ncurv 0 1 1\nend\ncurv2 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 3u);
+  EXPECT_EQ(gmdl_obj_freeform_of_kind(obj, GMDL_OBJ_CURVE2, 0),
+      &obj->freeforms[0]);
+  EXPECT_EQ(gmdl_obj_freeform_of_kind(obj, GMDL_OBJ_CURVE2, 1),
+      &obj->freeforms[2]);
+  EXPECT_EQ(gmdl_obj_freeform_of_kind(obj, GMDL_OBJ_CURVE, 0),
+      &obj->freeforms[1]);
+  // A forward reference the file never satisfied, and a negative ordinal -
+  // which is what an index below -1 resolves to.
+  EXPECT_EQ(gmdl_obj_freeform_of_kind(obj, GMDL_OBJ_CURVE2, 2), nullptr);
+  EXPECT_EQ(gmdl_obj_freeform_of_kind(obj, GMDL_OBJ_SURFACE, 0), nullptr);
+  EXPECT_EQ(gmdl_obj_freeform_of_kind(obj, GMDL_OBJ_CURVE2, -1), nullptr);
+  EXPECT_EQ(gmdl_obj_freeform_of_kind(nullptr, GMDL_OBJ_CURVE2, 0), nullptr);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeformBody, ADocumentWithNoBodyStatementsAllocatesNone) {
+  GMDL_Obj * obj = load_text("v 0 0 0\ncurv 0 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->freeform_body_count, 0u);
+  EXPECT_EQ(obj->freeform_bodies, nullptr);
+  EXPECT_EQ(obj->parm_value_count, 0u);
+  EXPECT_EQ(obj->curve_ref_count, 0u);
+  EXPECT_EQ(obj->special_point_count, 0u);
+  EXPECT_EQ(obj->connection_count, 0u);
+  gmdl_obj_free(obj);
+}
+
 TEST(ObjFreeform, AFileWithNoFreeformGeometryAllocatesNone) {
   GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
   ASSERT_NE(obj, nullptr);
@@ -738,6 +1103,211 @@ TEST(ObjDump, FreeformGeometrySurvivesARoundTrip) {
     }
   }
   gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// The text rather than only the reparse, for the reason the `vp` dump test
+// gives: a writer and a reader that agreed on a wrong spelling would agree
+// with each other perfectly.
+TEST(ObjDump, BodyStatementsAreWrittenInsideTheirElement) {
+  GMDL_Obj * obj = load_text("vp 0\nvp 1\n"
+                             "curv2 1 2\nend\n"
+                             "surf 0 1 0 1 1\n"
+                             "parm u 0 1\nparm v 0 1\n"
+                             "trim 0 1 1\nhole 0 0.5 1\nscrv 0 1 1\nsp 1 2\n"
+                             "end\n");
+  ASSERT_NE(obj, nullptr);
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("surf 0 1 0 1 1\n"
+                      "parm u 0 1\n"
+                      "parm v 0 1\n"
+                      "trim 0 1 1\n"
+                      "hole 0 0.5 1\n"
+                      "scrv 0 1 1\n"
+                      "sp 1 2\n"
+                      "end\n"),
+      std::string::npos)
+      << text;
+  gmdl_obj_free(obj);
+}
+
+// Each `trim` is its own loop, so the dump has to write two lines. A dumper
+// that flattened the element's body span into one `trim` would reload into a
+// model with the same references and one loop instead of two - and every
+// comparison but this one would agree.
+TEST(ObjDump, TwoTrimLoopsAreWrittenAsTwoLines) {
+  GMDL_Obj * obj = load_text("vp 0\ncurv2 1\nend\ncurv2 1\nend\n"
+                             "surf 0 1 0 1 1\ntrim 0 1 1\ntrim 0 1 2\nend\n");
+  ASSERT_NE(obj, nullptr);
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("trim 0 1 1\ntrim 0 1 2\n"), std::string::npos) << text;
+
+  MemStream stream(text);
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_EQ(again->freeform_count, 3u);
+  EXPECT_EQ(again->freeforms[2].body_count, 2u);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjDump, FreeformBodyStatementsSurviveARoundTrip) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nvp 0\nvp 0.5\nvp 1\n"
+                             "cstype bspline\ndeg 1\n"
+                             "curv2 1 2\nparm u 0 1\nend\n"
+                             "curv2 2 3\nsp 1 3\nend\n"
+                             "surf 0 1 0 1 1 2\n"
+                             "parm u 0 0 1 1\nparm v 0 1\n"
+                             "trim 0 0.5 1\nhole 0.5 1 2\ntrim 0 1 -1\n"
+                             "scrv 0.25 0.75 1\nsp 2\n"
+                             "end\n"
+                             "con 1 0 1 1 1 0.5 1 2\n");
+  ASSERT_NE(obj, nullptr);
+
+  MemStream stream(dump_text(obj));
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->freeform_body_count, obj->freeform_body_count);
+  ASSERT_EQ(again->parm_value_count, obj->parm_value_count);
+  ASSERT_EQ(again->curve_ref_count, obj->curve_ref_count);
+  ASSERT_EQ(again->special_point_count, obj->special_point_count);
+  ASSERT_EQ(again->connection_count, obj->connection_count);
+
+  for (size_t i = 0; i < obj->freeform_count; i++) {
+    const GMDL_Obj_Freeform & a = obj->freeforms[i];
+    const GMDL_Obj_Freeform & b = again->freeforms[i];
+    ASSERT_EQ(a.body_count, b.body_count) << "element " << i;
+    for (size_t k = 0; k < a.body_count; k++) {
+      const GMDL_Obj_Freeform_Body & x = obj->freeform_bodies[a.body_start + k];
+      const GMDL_Obj_Freeform_Body & y =
+          again->freeform_bodies[b.body_start + k];
+      ASSERT_EQ(x.kind, y.kind) << "element " << i << " body " << k;
+      ASSERT_EQ(x.count, y.count) << "element " << i << " body " << k;
+      for (size_t e = 0; e < x.count; e++) {
+        if (x.kind == GMDL_OBJ_BODY_PARM_U || x.kind == GMDL_OBJ_BODY_PARM_V) {
+          EXPECT_FLOAT_EQ(obj->parm_values[x.start + e],
+              again->parm_values[y.start + e]);
+        }
+        else if (x.kind == GMDL_OBJ_BODY_SP) {
+          EXPECT_EQ(obj->special_points[x.start + e],
+              again->special_points[y.start + e]);
+        }
+        else {
+          const GMDL_Obj_Curve_Ref & p = obj->curve_refs[x.start + e];
+          const GMDL_Obj_Curve_Ref & q = again->curve_refs[y.start + e];
+          EXPECT_FLOAT_EQ(p.u0, q.u0);
+          EXPECT_FLOAT_EQ(p.u1, q.u1);
+          EXPECT_EQ(p.curve2d, q.curve2d);
+        }
+      }
+    }
+  }
+  const GMDL_Obj_Connection & c = obj->connections[0];
+  const GMDL_Obj_Connection & d = again->connections[0];
+  EXPECT_EQ(c.a.surface, d.a.surface);
+  EXPECT_EQ(c.b.surface, d.b.surface);
+  EXPECT_EQ(c.a.curve.curve2d, d.a.curve.curve2d);
+  EXPECT_EQ(c.b.curve.curve2d, d.b.curve.curve2d);
+  EXPECT_FLOAT_EQ(c.b.curve.u0, d.b.curve.u0);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// The connections go out after every element, because each names its
+// surfaces by ordinal and a `con` written first would name patches the
+// reader has not seen.
+TEST(ObjDump, ConnectionsAreWrittenAfterTheSurfacesTheyName) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nvp 0\ncurv2 1\nend\n"
+                             "surf 0 1 0 1 1\nend\nsurf 0 1 0 1 1\nend\n"
+                             "con 1 0 1 1 2 0 1 1\n");
+  ASSERT_NE(obj, nullptr);
+  std::string text = dump_text(obj);
+  size_t con = text.find("con 1 0 1 1 2 0 1 1\n");
+  ASSERT_NE(con, std::string::npos) << text;
+  EXPECT_LT(text.rfind("surf"), con) << text;
+  gmdl_obj_free(obj);
+}
+
+// A span that leaves its array writes nothing at all, rather than the
+// directive with no entries after it - which is a line this parser refuses,
+// so a dump of a hand-built model would fail to reload. A parse cannot make
+// such a span; assembling one by hand can.
+TEST(ObjDump, ABodySpanPastItsArrayWritesNothing) {
+  // Three ways a span can fail to name entries, each its own condition: no
+  // entries at all, a start past the array, and a count that runs off the
+  // end. Driven separately because one `if` with three clauses is three
+  // guards, and a test reaching one of them leaves the other two unmeasured.
+  struct Broken {
+    size_t start;
+    size_t count;
+    const char * what;
+  };
+  const Broken kBroken[] = {
+      {0, 0, "no entries"},
+      {9, 1, "a start past the array"},
+      {0, 4, "a count past the end"},
+  };
+  for (const Broken & broken : kBroken) {
+    GMDL_Obj * obj = load_text("vp 0\ncurv2 1\ntrim 0 1 1\nend\n");
+    ASSERT_NE(obj, nullptr);
+    ASSERT_EQ(obj->freeform_body_count, 1u);
+    obj->freeform_bodies[0].start = broken.start;
+    obj->freeform_bodies[0].count = broken.count;
+
+    std::string text = dump_text(obj);
+    EXPECT_EQ(text.find("trim"), std::string::npos) << broken.what << ":\n"
+                                                    << text;
+    MemStream stream(text);
+    GMDL_Obj * again = nullptr;
+    EXPECT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK)
+        << broken.what;
+    gmdl_obj_free(again);
+
+    obj->freeform_bodies[0].start = 0;
+    obj->freeform_bodies[0].count = 1;
+    gmdl_obj_free(obj);
+  }
+}
+
+// A kind outside the enumeration, which a parse cannot produce and a caller
+// writing a number into the field can. There is no directive to spell it
+// with, so nothing is written - and the dump still reloads, which is the
+// property that matters: the alternative, a made-up directive, would put a
+// statement in the file that the model does not hold.
+TEST(ObjDump, ABodyKindTheTableDoesNotCoverWritesNothing) {
+  GMDL_Obj * obj = load_text("vp 0\ncurv2 1\nsp 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_body_count, 1u);
+  obj->freeform_bodies[0].kind = static_cast<GMDL_Obj_Body_Kind>(99);
+
+  std::string text = dump_text(obj);
+  EXPECT_EQ(text.find("sp"), std::string::npos) << text;
+  MemStream stream(text);
+  GMDL_Obj * again = nullptr;
+  EXPECT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  gmdl_obj_free(again);
+
+  obj->freeform_bodies[0].kind = GMDL_OBJ_BODY_SP;
+  gmdl_obj_free(obj);
+}
+
+// An element whose body span itself runs past the array, which is the same
+// hazard one level up.
+TEST(ObjDump, AnElementBodySpanPastTheArrayWritesWhatItCan) {
+  GMDL_Obj * obj = load_text("vp 0\ncurv2 1\nsp 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  obj->freeforms[0].body_count = 3; // Two past the end of freeform_bodies.
+
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("sp 1\n"), std::string::npos) << text;
+  MemStream stream(text);
+  GMDL_Obj * again = nullptr;
+  EXPECT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  gmdl_obj_free(again);
+
+  obj->freeforms[0].body_count = 1;
   gmdl_obj_free(obj);
 }
 
@@ -2240,7 +2810,21 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "deg 2 1\n"
                           "step 3 4\n"
                           "surf 0 1 0 1 1/1/1 2\n"
+                          // Every body statement, because each writes its
+                          // entries through a printf of its own: `parm` both
+                          // directions, the three that carry curve
+                          // references, and `sp`. A model carrying one of
+                          // them leaves the others' write-failure arms
+                          // unreached, which is what this comment above `vp`
+                          // is about.
+                          "parm u 0 1\n"
+                          "parm v 0 1\n"
+                          "trim 0 1 1\n"
+                          "hole 0 0.5 1\n"
+                          "scrv 0.25 0.75 1\n"
+                          "sp 1 2\n"
                           "end\n"
+                          "con 1 0 1 1 1 0 1 1\n"
                           "usemtl red\n"
                           "usemap chrome\n"
                           "bevel on\n"
@@ -3590,6 +4174,24 @@ const LimitCase kLimitCases[] = {
     // short matrices is the same unbounded quantity as one long one.
     {offsetof(GMDL_Limits, max_basis_values), "max_basis_values",
         {"bmat u 1 2 3\n", "bmat u 1\nbmat u 1\nbmat v 1\n"}},
+    // One budget across every body statement of every element, for the
+    // reason `max_basis_values` is one across every `bmat`.
+    {offsetof(GMDL_Limits, max_freeform_bodies), "max_freeform_bodies",
+        {"vp 0\ncurv2 1\nparm u 0 1\ntrim 0 1 1\nsp 1\nend\n"}},
+    {offsetof(GMDL_Limits, max_parm_values), "max_parm_values",
+        {"vp 0\ncurv2 1\nparm u 0 0.5 1\nend\n",
+            "vp 0\ncurv2 1\nparm u 0\nparm u 0\nparm v 0\nend\n"}},
+    // One budget across the three directives that fill the array. A `con`
+    // does not: it holds its two references by value, so it is capped by
+    // `max_connections` and adds nothing here.
+    {offsetof(GMDL_Limits, max_curve_refs), "max_curve_refs",
+        {"vp 0\ncurv2 1\ntrim 0 1 1 0 1 1 0 1 1\nend\n",
+            "vp 0\ncurv2 1\ntrim 0 1 1\nhole 0 1 1\nscrv 0 1 1\nend\n"}},
+    {offsetof(GMDL_Limits, max_special_points), "max_special_points",
+        {"vp 0\ncurv2 1\nsp 1 1 1\nend\n"}},
+    {offsetof(GMDL_Limits, max_connections), "max_connections",
+        {"con 1 0 1 1 1 0 1 1\ncon 1 0 1 1 1 0 1 1\n"
+         "con 1 0 1 1 1 0 1 1\n"}},
 };
 
 } // namespace

@@ -33,6 +33,7 @@
 #include <ghoti.io/cutil/array.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,6 +68,11 @@ typedef struct {
   GCU_Array freeforms;
   GCU_Array freeform_vertices;
   GCU_Array basis_values;
+  GCU_Array freeform_bodies;
+  GCU_Array parm_values;
+  GCU_Array curve_refs;
+  GCU_Array special_points;
+  GCU_Array connections;
   GCU_Array faces;
   GCU_Array lines;
   GCU_Array line_vertices;
@@ -104,6 +110,16 @@ static bool obj_builder_init(
           sizeof(GMDL_Obj_Freeform_Vertex), 16, allocator)
       && gcu_array_create_in_place(
           &b->basis_values, sizeof(float), 16, allocator)
+      && gcu_array_create_in_place(&b->freeform_bodies,
+          sizeof(GMDL_Obj_Freeform_Body), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->parm_values, sizeof(float), 16, allocator)
+      && gcu_array_create_in_place(
+          &b->curve_refs, sizeof(GMDL_Obj_Curve_Ref), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->special_points, sizeof(int32_t), 4, allocator)
+      && gcu_array_create_in_place(
+          &b->connections, sizeof(GMDL_Obj_Connection), 4, allocator)
       && gcu_array_create_in_place(
           &b->faces, sizeof(GMDL_Obj_Face), 128, allocator)
       && gcu_array_create_in_place(
@@ -167,6 +183,11 @@ static void obj_builder_destroy(obj_builder_t * b) {
   gcu_array_destroy_in_place(&b->freeforms);
   gcu_array_destroy_in_place(&b->freeform_vertices);
   gcu_array_destroy_in_place(&b->basis_values);
+  gcu_array_destroy_in_place(&b->freeform_bodies);
+  gcu_array_destroy_in_place(&b->parm_values);
+  gcu_array_destroy_in_place(&b->curve_refs);
+  gcu_array_destroy_in_place(&b->special_points);
+  gcu_array_destroy_in_place(&b->connections);
   gcu_array_destroy_in_place(&b->faces);
   gcu_array_destroy_in_place(&b->lines);
   gcu_array_destroy_in_place(&b->line_vertices);
@@ -773,6 +794,7 @@ static GMDL_Result obj_record_freeform_element(obj_builder_t * b,
   element.map_index = map;
   element.render_index = render;
   element.start = gcu_array_count(&b->freeform_vertices);
+  element.body_start = gcu_array_count(&b->freeform_bodies);
 
   const char * cursor = rest;
   size_t wanted = kind == GMDL_OBJ_SURFACE ? 4u
@@ -853,6 +875,208 @@ static GMDL_Result obj_record_freeform_element(obj_builder_t * b,
   return GMDL_OK;
 }
 
+/**
+ * Read one whitespace-delimited number from a line, as a float.
+ *
+ * **The whole token has to be the number.** `strtof()` stops at the first
+ * character it cannot use and reports success for what it did read, which is
+ * what the `bmat` and parameter-range loops rely on to find the end of a
+ * list. The body statements cannot: `trim 0 1 2.5` would read the index as
+ * `2`, leave `.5`, and take that as the next triple's `u0` - accepting a
+ * line no file meant to write, silently, as a different line. So a token
+ * that begins with a number and continues into something else is refused
+ * here rather than resynchronised.
+ *
+ * @param cursor Advanced past the number on success, untouched otherwise.
+ * @param out Receives the value.
+ * @return Whether a whole token was a number.
+ */
+static bool obj_take_one_float(const char ** cursor, float * out) {
+  const char * rest = *cursor;
+  while (*rest == ' ' || *rest == '\t') {
+    rest++;
+  }
+  char * end = NULL;
+  float value = strtof(rest, &end);
+  if (end == rest || (*end && *end != ' ' && *end != '\t')) {
+    return false;
+  }
+  *out = value;
+  *cursor = end;
+  return true;
+}
+
+/**
+ * Read one whitespace-delimited index from a line.
+ *
+ * Out of range saturates rather than wrapping, for the reason obj_index()
+ * gives: an index too large to represent must stay out of range and never
+ * arrive disguised as a valid one.
+ *
+ * @param cursor Advanced past the number on success, untouched otherwise.
+ * @param out Receives the value, as written and not yet resolved.
+ * @return Whether a whole token was an integer.
+ */
+static bool obj_take_one_index(const char ** cursor, long long * out) {
+  const char * rest = *cursor;
+  while (*rest == ' ' || *rest == '\t') {
+    rest++;
+  }
+  char * end = NULL;
+  long long value = strtoll(rest, &end, 10);
+  if (end == rest || (*end && *end != ' ' && *end != '\t')) {
+    return false;
+  }
+  *out = value;
+  *cursor = end;
+  return true;
+}
+
+/**
+ * Read the entries of one body statement and append them.
+ *
+ * The five body statements carry three different payloads - `parm` floats,
+ * `trim`, `hole` and `scrv` curve references, `sp` indices - and one loop
+ * around them, because the part that would drift if written three times is
+ * the appending, the cap and the count rather than the reading.
+ *
+ * A statement naming no entries at all is ::GMDL_ERR_FORMAT, as a `curv`
+ * naming no control points is: `trim` with nothing after it describes no
+ * loop, and recording an empty one would put a record in the model that
+ * corresponds to nothing in the file.
+ *
+ * @param b The builder.
+ * @param cursor The text after the directive.
+ * @param kind Which statement it is; selects the array and the cap.
+ * @param limits The caps.
+ * @param declared What a relative index is measured against: the `vp` count
+ *   for `sp`, the number of `curv2` elements so far for the other three, and
+ *   unused for `parm`.
+ * @param out_start Receives the first entry's index in its array.
+ * @param out_count Receives how many.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT, ::GMDL_ERR_LIMIT or ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_take_body_entries(obj_builder_t * b,
+    const char * cursor, GMDL_Obj_Body_Kind kind, const GMDL_Limits * limits,
+    size_t declared, size_t * out_start, size_t * out_count) {
+  GCU_Array * into = &b->curve_refs;
+  size_t cap = limits->max_curve_refs;
+  if (kind == GMDL_OBJ_BODY_PARM_U || kind == GMDL_OBJ_BODY_PARM_V) {
+    into = &b->parm_values;
+    cap = limits->max_parm_values;
+  }
+  else if (kind == GMDL_OBJ_BODY_SP) {
+    into = &b->special_points;
+    cap = limits->max_special_points;
+  }
+
+  *out_start = gcu_array_count(into);
+  size_t count = 0;
+  for (;;) {
+    while (*cursor == ' ' || *cursor == '\t') {
+      cursor++;
+    }
+    if (!*cursor) {
+      break;
+    }
+
+    GMDL_Obj_Curve_Ref ref;
+    float value = 0.0f;
+    int32_t point = 0;
+    long long index = 0;
+    void * entry = NULL;
+    // Branching on the array rather than on the kind again, so that what is
+    // read and what it is appended to cannot come apart: a kind added to the
+    // switch above and forgotten here would read curve references into the
+    // parameter values without either decision noticing the other.
+    if (into == &b->parm_values) {
+      if (!obj_take_one_float(&cursor, &value)) {
+        return GMDL_ERR_FORMAT;
+      }
+      entry = &value;
+    }
+    else if (into == &b->special_points) {
+      if (!obj_take_one_index(&cursor, &index)) {
+        return GMDL_ERR_FORMAT;
+      }
+      point = obj_index(index, declared);
+      entry = &point;
+    }
+    else {
+      // A triple that stops short is refused rather than kept as far as it
+      // got: two of the three numbers name a range with no curve in it.
+      if (!obj_take_one_float(&cursor, &ref.u0)
+          || !obj_take_one_float(&cursor, &ref.u1)
+          || !obj_take_one_index(&cursor, &index)) {
+        return GMDL_ERR_FORMAT;
+      }
+      ref.curve2d = obj_index(index, declared);
+      entry = &ref;
+    }
+
+    if (gmdl_limit_reached(gcu_array_count(into), cap)) {
+      return GMDL_ERR_LIMIT;
+    }
+    if (!gcu_array_append(into, entry)) {
+      return GMDL_ERR_OOM;
+    }
+    count++;
+  }
+
+  if (count == 0) {
+    return GMDL_ERR_FORMAT; // A body statement naming nothing.
+  }
+  *out_count = count;
+  return GMDL_OK;
+}
+
+/**
+ * Read one body statement and attach it to the element that is open.
+ *
+ * **A body statement outside an element is ::GMDL_ERR_FORMAT.** It describes
+ * the element it stands in, so there is nothing to attach it to and nothing
+ * honest to do with it: recording it against the previous element would
+ * change which patch is trimmed, and dropping it would lose what the file
+ * said while reporting success.
+ *
+ * @param b The builder.
+ * @param rest The text after the directive.
+ * @param kind Which statement it is.
+ * @param open The open element's index in the builder, or SIZE_MAX.
+ * @param limits The caps.
+ * @param declared What a relative index is measured against.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT, ::GMDL_ERR_LIMIT or ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_record_body(obj_builder_t * b, const char * rest,
+    GMDL_Obj_Body_Kind kind, size_t open, const GMDL_Limits * limits,
+    size_t declared) {
+  if (open == SIZE_MAX) {
+    return GMDL_ERR_FORMAT;
+  }
+  if (gmdl_limit_reached(
+          gcu_array_count(&b->freeform_bodies), limits->max_freeform_bodies)) {
+    return GMDL_ERR_LIMIT;
+  }
+
+  GMDL_Obj_Freeform_Body body;
+  memset(&body, 0, sizeof(body));
+  body.kind = kind;
+  GMDL_Result taken = obj_take_body_entries(
+      b, rest, kind, limits, declared, &body.start, &body.count);
+  if (taken != GMDL_OK) {
+    return taken;
+  }
+  if (!gcu_array_append(&b->freeform_bodies, &body)) {
+    return GMDL_ERR_OOM;
+  }
+  // The element lives in a different array from the one just appended to, so
+  // this pointer cannot have been invalidated by the append above.
+  GMDL_Obj_Freeform * element =
+      (GMDL_Obj_Freeform *)gcu_array_at(&b->freeforms, open);
+  element->body_count++;
+  return GMDL_OK;
+}
+
 static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     const GMDL_Limits * limits, const GMDL_Allocator * allocator,
     GMDL_Obj ** out_obj) {
@@ -900,6 +1124,17 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
   // declared (3.19). Nothing indexes it, so there is no second variable here
   // the way there is for the render attributes.
   GMDL_Obj_Freeform_State current_freeform = obj_freeform_state_none;
+  // Which free-form element a body statement belongs to: the last `curv`,
+  // `curv2` or `surf`, until an `end` or the next element closes it.
+  // SIZE_MAX is "none open", which is where a file starts and where `end`
+  // returns it - and the value a body statement is refused against (3.19).
+  size_t open_element = SIZE_MAX;
+  // How many elements of each kind have been declared. `trim`, `hole`,
+  // `scrv` and `con` number their references within a kind rather than
+  // across the three, so these are what a relative index is measured
+  // against, and neither is the length of the `freeforms` array.
+  size_t curve2_count = 0;
+  size_t surface_count = 0;
   // Smoothing group set by the last "s"; 0 is the format's own default, so a
   // file with no "s" line leaves every face at 0 and writes none back.
   int32_t current_smoothing = 0;
@@ -1133,6 +1368,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         result = recorded;
         goto cleanup;
       }
+      // Declaring an element closes whatever was open, which is what lets a
+      // file that omits `end` still parse the way 3.19 says it does.
+      open_element = gcu_array_count(&builder.freeforms) - 1;
+      curve2_count++;
     }
     else if (gmdl_line_is(line_text, "curv", &rest)) {
       GMDL_Result recorded = obj_record_freeform_element(&builder, rest,
@@ -1142,6 +1381,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         result = recorded;
         goto cleanup;
       }
+      // Declaring an element closes whatever was open, which is what lets a
+      // file that omits `end` still parse the way 3.19 says it does.
+      open_element = gcu_array_count(&builder.freeforms) - 1;
     }
     else if (gmdl_line_is(line_text, "surf", &rest)) {
       GMDL_Result recorded = obj_record_freeform_element(&builder, rest,
@@ -1149,6 +1391,112 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           current_map, current_render_index);
       if (recorded != GMDL_OK) {
         result = recorded;
+        goto cleanup;
+      }
+      // Declaring an element closes whatever was open, which is what lets a
+      // file that omits `end` still parse the way 3.19 says it does.
+      open_element = gcu_array_count(&builder.freeforms) - 1;
+      surface_count++;
+    }
+    // `end` closes the element a body statement would attach to, and is not
+    // recorded: a closed element and an unclosed one hold the same data, and
+    // what `end` decides is answered in the element's body span by the time
+    // parsing finishes (3.19). One with no element open is ignored rather
+    // than refused - there is nothing for it to lose.
+    else if (gmdl_line_is(line_text, "end", &rest)) {
+      open_element = SIZE_MAX;
+    }
+    // The body statements (3.19). Each describes the element it stands in,
+    // so each is refused outside one.
+    else if (gmdl_line_is(line_text, "parm", &rest)) {
+      // `parm u|v p1 p2 ...`. Unlike `bmat`, whose direction picks which of
+      // two spans on the state to fill, this one picks which kind of record
+      // the line becomes: a body statement is one record per line, so two
+      // `parm u` lines stay two records rather than one replacing the other.
+      GMDL_Obj_Body_Kind kind = GMDL_OBJ_BODY_PARM_U;
+      const char * after = NULL;
+      if (gmdl_line_is(rest, "u", &after)) {
+        kind = GMDL_OBJ_BODY_PARM_U;
+      }
+      else if (gmdl_line_is(rest, "v", &after)) {
+        kind = GMDL_OBJ_BODY_PARM_V;
+      }
+      else {
+        result = GMDL_ERR_FORMAT; // Including a bare `parm`.
+        goto cleanup;
+      }
+      GMDL_Result recorded = obj_record_body(
+          &builder, after, kind, open_element, limits, 0);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "trim", &rest)
+        || gmdl_line_is(line_text, "hole", &rest)
+        || gmdl_line_is(line_text, "scrv", &rest)) {
+      GMDL_Obj_Body_Kind kind = GMDL_OBJ_BODY_SCRV;
+      if (gmdl_line_is(line_text, "trim", NULL)) {
+        kind = GMDL_OBJ_BODY_TRIM;
+      }
+      else if (gmdl_line_is(line_text, "hole", NULL)) {
+        kind = GMDL_OBJ_BODY_HOLE;
+      }
+      GMDL_Result recorded = obj_record_body(
+          &builder, rest, kind, open_element, limits, curve2_count);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "sp", &rest)) {
+      // A special point is a point in parameter space whatever kind of
+      // element it belongs to, so this counts into `vp` even on a `curv` -
+      // which is the one place a free-form reference does not change array
+      // with the element's kind.
+      GMDL_Result recorded = obj_record_body(&builder, rest,
+          GMDL_OBJ_BODY_SP, open_element, limits,
+          gcu_array_count(&builder.param_vertices));
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
+    // `con` is the one free-form directive that is neither state nor a body
+    // statement: it stands at file level and names its two surfaces, so it
+    // is recorded whether or not an element is open and does not close one.
+    else if (gmdl_line_is(line_text, "con", &rest)) {
+      if (gmdl_limit_reached(gcu_array_count(&builder.connections),
+              limits->max_connections)) {
+        result = GMDL_ERR_LIMIT;
+        goto cleanup;
+      }
+      GMDL_Obj_Connection connection;
+      memset(&connection, 0, sizeof(connection));
+      GMDL_Obj_Connection_End * ends[2] = {&connection.a, &connection.b};
+      const char * cursor = rest;
+      bool complete = true;
+      for (size_t i = 0; i < 2 && complete; i++) {
+        long long surface = 0;
+        long long curve = 0;
+        complete = obj_take_one_index(&cursor, &surface)
+            && obj_take_one_float(&cursor, &ends[i]->curve.u0)
+            && obj_take_one_float(&cursor, &ends[i]->curve.u1)
+            && obj_take_one_index(&cursor, &curve);
+        if (complete) {
+          ends[i]->surface = obj_index(surface, surface_count);
+          ends[i]->curve.curve2d = obj_index(curve, curve2_count);
+        }
+      }
+      // All eight numbers or none. A `con` naming one surface and half of
+      // the other describes no join, and there is no shorter conforming
+      // form for it to be.
+      if (!complete) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      if (!gcu_array_append(&builder.connections, &connection)) {
+        result = GMDL_ERR_OOM;
         goto cleanup;
       }
     }
@@ -1669,11 +2017,12 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         goto cleanup;
       }
     }
-    // `ctech`, `stech` and `mg` are state for the free-form sub-language
-    // this library does not read (3.14), so there is nothing here for them
-    // to apply to. The line is kept as text rather than parsed: choosing a
-    // representation before the model it describes exists would attach it to
-    // nothing (3.18).
+    // `ctech`, `stech` and `mg` are state for the free-form sub-language,
+    // which this library did not read when they landed - so the line is kept
+    // as text rather than parsed, because choosing a representation before
+    // the model it describes existed would have attached it to nothing. That
+    // model is here now (3.19) and giving these a typed home beside it is
+    // the breaking change 3.18 documents as coming (3.18).
     else if (gmdl_line_is(line_text, "ctech", &rest)
         || gmdl_line_is(line_text, "stech", &rest)
         || gmdl_line_is(line_text, "mg", &rest)) {
@@ -1720,6 +2069,16 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         &builder.freeform_vertices, &obj->freeform_vertex_count);
     obj->basis_values =
         obj_steal_into(&builder.basis_values, &obj->basis_value_count);
+    obj->freeform_bodies = obj_steal_into(
+        &builder.freeform_bodies, &obj->freeform_body_count);
+    obj->parm_values =
+        obj_steal_into(&builder.parm_values, &obj->parm_value_count);
+    obj->curve_refs =
+        obj_steal_into(&builder.curve_refs, &obj->curve_ref_count);
+    obj->special_points =
+        obj_steal_into(&builder.special_points, &obj->special_point_count);
+    obj->connections =
+        obj_steal_into(&builder.connections, &obj->connection_count);
     obj->faces = obj_steal_into(&builder.faces, &obj->face_count);
     obj->lines = obj_steal_into(&builder.lines, &obj->line_count);
     obj->line_vertices = obj_steal_into(
@@ -1819,6 +2178,11 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   gcu_allocator_free(allocator, obj->param_vertices);
   gcu_allocator_free(allocator, obj->freeforms);
   gcu_allocator_free(allocator, obj->freeform_vertices);
+  gcu_allocator_free(allocator, obj->freeform_bodies);
+  gcu_allocator_free(allocator, obj->parm_values);
+  gcu_allocator_free(allocator, obj->curve_refs);
+  gcu_allocator_free(allocator, obj->special_points);
+  gcu_allocator_free(allocator, obj->connections);
   gcu_allocator_free(allocator, obj->basis_values);
   if (obj->faces) {
     for (size_t i = 0; i < obj->face_count; i++) {

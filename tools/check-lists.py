@@ -453,18 +453,52 @@ if invented:
 # `curv2` and `surf` arrived: faces, polylines and points were listed and the
 # new one was not, and 150 seconds of fuzzing found `curv 0 1 -10`.
 #
-# An index-carrying type is recognised by an `int32_t vertex` field, which is
-# the convention every one of them keeps.
+# An index-carrying type is recognised by the NAME of an `int32_t` field, and
+# every such field in obj.h has to appear in one of the two lists below.
+# Recognising `int32_t vertex` alone was the first version of this and it
+# rotted the moment the body statements landed: `trim` holds its reference in
+# an `int32_t curve2d` and `con` in an `int32_t surface`, neither of which is
+# a vertex, so both types were invisible to a gate written to notice exactly
+# this.  Making the classification exhaustive is what stops that recurring -
+# a new `int32_t` field now fails this gate until somebody says which it is,
+# rather than being silently assumed not to be an index.
+INDEX_FIELDS = {"vertex", "texcoord", "normal", "curve2d", "surface"}
+NOT_INDEX_FIELDS = {
+    # Counts and flags, which name no element.
+    "count", "lod", "smoothing_group",
+    "degree_u", "degree_v", "degree_count",
+    "step_u", "step_v", "step_count",
+    # Indices into this library's own arrays rather than into the file's
+    # numbering.  The dump spells these as names or re-derives them, so a
+    # value below -1 cannot arrive and cannot fail to be written back.
+    "index", "material_index", "map_index", "render_index",
+}
 carrying = set()
+unclassified = []
 for match in re.finditer(r"typedef struct \{(.*?)\n\}\s*(GMDL_Obj_\w+)\s*;",
                          obj_header, re.S):
     body, name = match.group(1), match.group(2)
     body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
     body = re.sub(r"///.*", "", body)
-    if re.search(r"\bint32_t\s+vertex\s*(\[\s*\d+\s*\])?\s*;", body):
-        carrying.add(name)
+    for field in re.findall(
+            r"\bint32_t\s+(\w+)\s*(?:\[\s*\d+\s*\])?\s*;", body):
+        if field in INDEX_FIELDS:
+            carrying.add(name)
+        elif field not in NOT_INDEX_FIELDS:
+            unclassified.append("%s.%s" % (name, field))
 if not carrying:
     fail("found no index-carrying types in obj.h; the pattern must have rotted")
+if unclassified:
+    fail("obj.h has %s that tools/check-lists.py does not classify: "
+         "%s.  Add each to INDEX_FIELDS if it holds an index the file wrote, "
+         "or to NOT_INDEX_FIELDS if it does not."
+         % ("int32_t fields" if len(unclassified) > 1 else "an int32_t field",
+            ", ".join(sorted(unclassified))))
+
+# A bare `int32_t *` on GMDL_Obj is an index array with no struct to carry the
+# convention - `sp` is one - so it is held to the same requirement by name.
+for field in re.findall(r"\bint32_t \* (\w+);", obj_body):
+    carrying.add(field)
 
 fuzz = read("tests/fuzz/fuzz_obj.cpp")
 exemption = re.search(

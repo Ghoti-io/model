@@ -285,7 +285,23 @@ std::string rich_obj() {
     else {
       t += "surf 0 1 0 1 1/1/1 2/2/1 3\n";
     }
+    // Body statements on some elements and not others, and every kind of
+    // them, so each one's own array grows past its initial capacity and each
+    // one's write arm is in the sweep. An element with no body is kept in
+    // the mix because a document where every element has one never takes the
+    // `body_count == 0` path.
+    if (i % 4 == 0) {
+      t += "parm u 0 0.5 1\n";
+      t += "parm v 0 1\n";
+      t += "trim 0 1 1\n";
+      t += "hole 0 0.5 1\n";
+      t += "scrv 0.25 0.75 1\n";
+      t += "sp 1 2\n";
+    }
     t += "end\n";
+  }
+  for (size_t i = 0; i < kGrow; i++) {
+    t += "con 1 0 1 1 1 0 1 1\n";
   }
   t += "s 3\n";
   for (size_t i = 0; i < kGrow; i++) {
@@ -355,12 +371,12 @@ std::string rich_obj() {
  *
  * This document is the same shape at `kRegrow` entries, past three doublings
  * of the largest capacity, so every array here regrows and a refusal lands
- * on second and third growths as well as first ones. Measured 2026-09-23,
- * after free-form geometry joined both documents: 1362 allocation sites
- * against `rich_obj()`'s 935, so 427 (site, context) pairs that are not in
- * the smaller sweep at all. The figures were 1286 and 542 when this document
- * was added and both have grown since; what has to stay true is that this
- * one is the larger, not either number.
+ * on second and third growths as well as first ones. Measured 2026-09-24,
+ * after the free-form body statements joined both documents: 1421 allocation
+ * sites against `rich_obj()`'s 982, so 439 (site, context) pairs that are not
+ * in the smaller sweep at all. The figures were 1286 and 542 when this
+ * document was added and have grown twice since; what has to stay true is
+ * that this one is the larger, not either number.
  *
  * What has NOT been shown is a defect this catches and `rich_obj()` misses.
  * The argument for it is the larger population, not a demonstrated find, and
@@ -402,7 +418,21 @@ std::string regrow_obj() {
       t += "cstype bmatrix\ndeg " + std::to_string(i + 1) + "\n";
       t += "bmat u 1 0 -1 " + std::to_string(i) + "\n";
     }
-    t += "curv 0 1 1 2 3\nend\n";
+    t += "curv 0 1 1 2 3\n";
+    // Body statements on every fourth element, which is enough for each of
+    // their arrays to pass three doublings - 150 elements give 900 body
+    // records against an initial capacity of four - and a quarter of the
+    // parsing that putting them on every element would cost. This sweep runs
+    // the whole document once per refused allocation, so its size is paid
+    // about 4,300 times over, and again under Valgrind.
+    if (i % 4 == 0) {
+      t += "parm u 0 0.5 1\nparm v 0 1\n";
+      t += "trim 0 1 1\nhole 0 0.5 1\nscrv 0.25 0.75 1\nsp 1 2\n";
+    }
+    t += "end\n";
+  }
+  for (size_t i = 0; i < kRegrow / 4; i++) {
+    t += "con 1 0 1 1 1 0 1 1\n";
   }
   t += "s 3\n";
   for (size_t i = 0; i < kRegrow; i++) {

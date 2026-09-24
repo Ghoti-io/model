@@ -83,5 +83,10 @@ void gmdl_limits_default(GMDL_Limits * limits) {
     .max_freeform_attrs = 0,
     .max_freeforms = 0,
     .max_basis_values = 0,
+    .max_freeform_bodies = 0,
+    .max_parm_values = 0,
+    .max_curve_refs = 0,
+    .max_special_points = 0,
+    .max_connections = 0,
   };
 }

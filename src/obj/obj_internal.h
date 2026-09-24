@@ -199,6 +199,18 @@ bool gmdl_cstype_from_name(const char * word, GMDL_Obj_Cstype * out);
  */
 const char * gmdl_cstype_name(GMDL_Obj_Cstype type);
 
+/**
+ * @brief The directive text a body statement is written back as (3.19).
+ *
+ * One table serves this and the parser, so a kind cannot be read under one
+ * spelling and written under another.
+ *
+ * @param kind The statement kind.
+ * @return The directive, including `parm`'s direction, or NULL for a kind
+ *   the table does not cover - which is none of them.
+ */
+const char * gmdl_body_kind_name(GMDL_Obj_Body_Kind kind);
+
 #ifdef __cplusplus
 }
 #endif

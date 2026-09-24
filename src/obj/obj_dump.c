@@ -428,6 +428,82 @@ static int obj_dump_freeform_change(FILE * fd, const GMDL_Obj * obj,
 }
 
 /**
+ * Write one curve reference, as `trim`, `hole`, `scrv` and `con` spell it.
+ */
+static int obj_dump_curve_ref(FILE * fd, const GMDL_Obj_Curve_Ref * ref) {
+  // +1 as a long long for the reason obj_dump_reference() gives: an index
+  // held at INT32_MIN because the file wrote one too large to represent
+  // overflows a plain int on the way back out.
+  return fprintf(fd, " %.9g %.9g %lld", ref->u0, ref->u1,
+             (long long)ref->curve2d + 1)
+      < 0
+      ? -1
+      : 0;
+}
+
+/**
+ * Write one body statement of a free-form element (3.19).
+ *
+ * **A span that leaves its array writes nothing at all**, the way
+ * obj_dump_basis() handles the same case and for a sharper reason: writing
+ * the directive and then no entries would produce a line - `trim` alone -
+ * that this parser refuses, so a dump of a hand-built model would fail to
+ * reload rather than losing a statement it could not spell. A parse cannot
+ * produce such a span; a caller assembling a model by hand can.
+ *
+ * @param fd The destination.
+ * @param obj The model, for whichever array the kind selects.
+ * @param body The statement.
+ * @return 0, or -1 on a write failure.
+ */
+static int obj_dump_body(
+    FILE * fd, const GMDL_Obj * obj, const GMDL_Obj_Freeform_Body * body) {
+  const char * directive = gmdl_body_kind_name(body->kind);
+  if (!directive) {
+    // A kind the table does not cover, which a parse cannot produce and a
+    // caller writing a number into the field can. Nothing is written, the
+    // way an out-of-range span writes nothing: there is no directive to
+    // spell it with, and inventing one would put a statement in the file
+    // that the model does not hold.
+    return 0;
+  }
+  size_t available = obj->curve_ref_count;
+  if (body->kind == GMDL_OBJ_BODY_PARM_U
+      || body->kind == GMDL_OBJ_BODY_PARM_V) {
+    available = obj->parm_value_count;
+  }
+  else if (body->kind == GMDL_OBJ_BODY_SP) {
+    available = obj->special_point_count;
+  }
+  if (body->count == 0 || body->start > available
+      || body->count > available - body->start) {
+    return 0;
+  }
+
+  if (fprintf(fd, "%s", directive) < 0) {
+    return -1;
+  }
+  for (size_t i = 0; i < body->count; i++) {
+    size_t at = body->start + i;
+    int written = 0;
+    if (body->kind == GMDL_OBJ_BODY_PARM_U
+        || body->kind == GMDL_OBJ_BODY_PARM_V) {
+      written = fprintf(fd, " %.9g", obj->parm_values[at]);
+    }
+    else if (body->kind == GMDL_OBJ_BODY_SP) {
+      written = fprintf(fd, " %lld", (long long)obj->special_points[at] + 1);
+    }
+    else if (obj_dump_curve_ref(fd, &obj->curve_refs[at]) < 0) {
+      return -1;
+    }
+    if (written < 0) {
+      return -1;
+    }
+  }
+  return fprintf(fd, "\n") < 0 ? -1 : 0;
+}
+
+/**
  * Write one free-form element, and the `end` that closes it.
  *
  * `end` is written although nothing records it: the specification requires
@@ -457,7 +533,22 @@ static int obj_dump_freeform(
       return -1;
     }
   }
-  return fprintf(fd, "\nend\n") < 0 ? -1 : 0;
+  if (fprintf(fd, "\n") < 0) {
+    return -1;
+  }
+  // The body statements, in the order the file wrote them - `trim` and
+  // `hole` interleave to describe a surface with holes in it, and each line
+  // is its own loop (3.19).
+  for (size_t k = 0; k < element->body_count; k++) {
+    size_t at = element->body_start + k;
+    if (at >= obj->freeform_body_count) {
+      break; // A hand-built span past the array; see obj_dump_body().
+    }
+    if (obj_dump_body(fd, obj, &obj->freeform_bodies[at]) < 0) {
+      return -1;
+    }
+  }
+  return fprintf(fd, "end\n") < 0 ? -1 : 0;
 }
 
 /**
@@ -737,6 +828,27 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
 
   if (obj_dump_nonface_elements(fd, obj, &state, false) < 0) {
     return GMDL_ERR_IO;
+  }
+
+  // The connections last, because each names surfaces by their ordinal and
+  // every `surf` has been written by now. A `con` before them would name
+  // patches a reader had not seen, which the format allows and no reader
+  // should have to accommodate.
+  for (size_t i = 0; i < obj->connection_count; i++) {
+    const GMDL_Obj_Connection_End * ends[2] = {
+        &obj->connections[i].a, &obj->connections[i].b};
+    if (fprintf(fd, "con") < 0) {
+      return GMDL_ERR_IO;
+    }
+    for (size_t e = 0; e < 2; e++) {
+      if (fprintf(fd, " %lld", (long long)ends[e]->surface + 1) < 0
+          || obj_dump_curve_ref(fd, &ends[e]->curve) < 0) {
+        return GMDL_ERR_IO;
+      }
+    }
+    if (fprintf(fd, "\n") < 0) {
+      return GMDL_ERR_IO;
+    }
   }
 
   return GMDL_OK;

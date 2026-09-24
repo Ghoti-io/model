@@ -81,6 +81,7 @@
 #define gmdl_mtl_load_file GHOTIIO_MODEL(gmdl_mtl_load_file)
 #define gmdl_obj_dump GHOTIIO_MODEL(gmdl_obj_dump)
 #define gmdl_obj_free GHOTIIO_MODEL(gmdl_obj_free)
+#define gmdl_obj_freeform_of_kind GHOTIIO_MODEL(gmdl_obj_freeform_of_kind)
 #define gmdl_obj_load GHOTIIO_MODEL(gmdl_obj_load)
 #define gmdl_obj_load_file GHOTIIO_MODEL(gmdl_obj_load_file)
 #define gmdl_result_string GHOTIIO_MODEL(gmdl_result_string)

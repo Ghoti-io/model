@@ -381,15 +381,18 @@ typedef enum GMDL_Obj_Freeform_Attr_Kind {
  *
  * These three are state for the **free-form** sub-language: `ctech` and
  * `stech` set how a curve or a surface is approximated, and `mg` sets the
- * merging group for the free-form surfaces that follow. This library does
- * not read free-form geometry (3.14), so there is nothing here for them to
- * apply to - which is why they are text and not parsed fields.
+ * merging group for the free-form surfaces that follow. This library did not
+ * read free-form geometry when they landed, so there was nothing here for
+ * them to apply to - which is why they are text and not parsed fields.
  *
- * That is deliberate and it is **provisional**. Parsing them into typed
- * records now would mean choosing a representation before the model they
- * describe exists, and attaching it to nothing. Keeping the line loses no
- * bytes and commits to nothing; when free-form geometry arrives, these get a
- * typed home beside it.
+ * That was deliberate and it is **provisional**. Parsing them into typed
+ * records then would have meant choosing a representation before the model
+ * they describe existed, and attaching it to nothing.
+ *
+ * **The model exists now** - ::GMDL_Obj_Freeform and its body statements, as
+ * of 2026-09-24 - so this field is the one part of 3.19's sub-language still
+ * spelled as text, and giving it a typed home is the breaking change 3.18
+ * documents as coming.
  *
  * `text` is everything after the directive with trailing blanks removed,
  * exactly as written. Unlike ::GMDL_Obj_Statement this names no file and no
@@ -496,6 +499,84 @@ typedef struct {
 } GMDL_Obj_Freeform_Vertex;
 
 /**
+ * @brief A stretch of one `curv2`, as `trim`, `hole`, `scrv` and `con` name it.
+ *
+ * All four of those directives reference a curve the same way - a parameter
+ * range and the curve's index - so they share one record rather than four
+ * that would drift apart.
+ *
+ * **`curve2d` counts `curv2` elements, not ::GMDL_Obj.freeforms entries.**
+ * The format numbers free-form elements within their own kind, the way it
+ * numbers `v` separately from `vt`: `trim 0 1 2` names the file's second
+ * `curv2`, whatever else stands between them. ::GMDL_Obj.freeforms holds all
+ * three kinds in file order, so the two numbers differ as soon as a document
+ * mixes kinds, and ::gmdl_obj_freeform_of_kind() is the way across.
+ *
+ * Resolving it here instead would mean refusing a forward reference, which
+ * the format allows: an index counts from the start of the file and nothing
+ * says the curve it names has been read yet. So this holds the ordinal for
+ * the same reason ::GMDL_Obj_Face holds an out-of-range vertex index - the
+ * range check is the consumer's (section 1), and an index that cannot be
+ * resolved yet is not an index that is wrong.
+ */
+typedef struct {
+  /**
+   * The start and end parameter values, the format's `u0` and `u1`.
+   *
+   * Named as the specification names them rather than `start` and `end`,
+   * because every other `start` in this header is the first index of a span
+   * and these are neither indices nor a span.
+   */
+  float u0;
+  float u1;         ///< See ::u0.
+  int32_t curve2d; ///< 0-based ordinal among the file's `curv2` elements.
+} GMDL_Obj_Curve_Ref;
+
+/**
+ * @brief Which body statement a ::GMDL_Obj_Freeform_Body holds (3.19).
+ *
+ * The kind also says which array the body's span indexes, because the five
+ * directives carry three different payloads. See ::GMDL_Obj_Freeform_Body.
+ */
+typedef enum GMDL_Obj_Body_Kind {
+  GMDL_OBJ_BODY_PARM_U = 0, ///< `parm u p1 p2 ...`; floats.
+  GMDL_OBJ_BODY_PARM_V,     ///< `parm v p1 p2 ...`; floats.
+  GMDL_OBJ_BODY_TRIM,       ///< `trim u0 u1 curv2d ...`; curve references.
+  GMDL_OBJ_BODY_HOLE,       ///< `hole u0 u1 curv2d ...`; curve references.
+  GMDL_OBJ_BODY_SCRV,       ///< `scrv u0 u1 curv2d ...`; curve references.
+  GMDL_OBJ_BODY_SP,         ///< `sp vp1 vp2 ...`; `vp` indices.
+} GMDL_Obj_Body_Kind;
+
+/**
+ * @brief One body statement of a free-form element (3.19).
+ *
+ * `parm`, `trim`, `hole`, `scrv` and `sp` stand between a `curv`, `curv2` or
+ * `surf` and its `end`, and describe the element they stand in. Each line
+ * becomes one of these, in file order, and ::GMDL_Obj_Freeform names the
+ * span of them that belongs to it.
+ *
+ * **One record per line, not one span per directive**, which matters for
+ * three of the five: each `trim` builds a *separate* outer trimming loop,
+ * and so does each `hole` and each `scrv`. Merging two `trim` lines into one
+ * list of curve references would join two loops into one and change the
+ * shape the file describes, while still round-tripping through this
+ * library's own dump - the kind of loss that agrees with itself.
+ *
+ * ::kind says which array ::start and ::count index:
+ *
+ * | kind | array |
+ * | --- | --- |
+ * | ::GMDL_OBJ_BODY_PARM_U, ::GMDL_OBJ_BODY_PARM_V | ::GMDL_Obj.parm_values |
+ * | ::GMDL_OBJ_BODY_TRIM, ::GMDL_OBJ_BODY_HOLE, ::GMDL_OBJ_BODY_SCRV | ::GMDL_Obj.curve_refs |
+ * | ::GMDL_OBJ_BODY_SP | ::GMDL_Obj.special_points |
+ */
+typedef struct {
+  GMDL_Obj_Body_Kind kind; ///< Which directive this was.
+  size_t start; ///< First entry, in the array ::kind selects.
+  size_t count; ///< How many entries.
+} GMDL_Obj_Freeform_Body;
+
+/**
  * @brief A free-form curve or surface (`curv`, `curv2` or `surf`), recorded
  * and not evaluated.
  *
@@ -505,10 +586,11 @@ typedef struct {
  * project from not discarding the patch. Section 3.19 says why the line is
  * drawn there.
  *
- * `end` closes an element in the file. It is not recorded, because a closed
- * element and an unclosed one hold the same data - the only thing `end`
- * decides is which element a body statement belongs to, and that question is
- * answered by the time parsing finishes.
+ * `end` closes an element in the file. It is not recorded as a field,
+ * because a closed element and an unclosed one hold the same data - what
+ * `end` decides is which element a body statement belongs to, and that is
+ * answered here, in ::body_start and ::body_count, by the time parsing
+ * finishes.
  */
 typedef struct {
   GMDL_Obj_Freeform_Kind kind; ///< Which directive declared it.
@@ -526,10 +608,52 @@ typedef struct {
   float range[4];
   size_t start; ///< Index of its first entry in ::GMDL_Obj.freeform_vertices.
   size_t count; ///< Number of entries.
+  /**
+   * Its body statements, as a span of ::GMDL_Obj.freeform_bodies.
+   *
+   * In file order, across all five directives together rather than grouped
+   * by kind, because `trim` and `hole` interleave to describe a surface with
+   * holes in it and the order they were written in is the order they have to
+   * be written back in.
+   *
+   * ::body_count is 0 for an element whose file gave it no body - which is
+   * every element in a document that states only `curv` and `end`, and is
+   * what an element looked like before 3.19 read these at all.
+   */
+  size_t body_start;
+  size_t body_count; ///< Number of body statements.
   int32_t material_index; ///< Index into the material mappings, or -1.
   int32_t map_index;      ///< Index into the map mappings, or -1.
   int32_t render_index;   ///< Index into the render states, or -1.
 } GMDL_Obj_Freeform;
+
+/**
+ * @brief One end of a `con` line: a surface, and a curve in its space.
+ */
+typedef struct {
+  int32_t surface;          ///< 0-based ordinal among the file's `surf`s.
+  GMDL_Obj_Curve_Ref curve; ///< The `q0 q1 curv2d` that follows it.
+} GMDL_Obj_Connection_End;
+
+/**
+ * @brief A `con` line: two surfaces joined along a curve (3.19).
+ *
+ * `con surf_1 q0_1 q1_1 curv2d_1 surf_2 q0_2 q1_2 curv2d_2` says that two
+ * surfaces meet, and which curve in each one's parameter space they meet
+ * along. It is the one free-form directive that is neither state nor a body
+ * statement: it stands at file level and names its surfaces, so it is kept
+ * in its own array rather than on an element.
+ *
+ * Both ordinals count within their own kind, for the reason
+ * ::GMDL_Obj_Curve_Ref gives; ::gmdl_obj_freeform_of_kind() resolves them.
+ * Recorded and not acted on - nothing here checks that the two surfaces
+ * exist, that the curves lie in their parameter spaces, or that the join is
+ * geometrically possible.
+ */
+typedef struct {
+  GMDL_Obj_Connection_End a; ///< The first surface and curve.
+  GMDL_Obj_Connection_End b; ///< The second.
+} GMDL_Obj_Connection;
 
 /**
  * @brief A parsed OBJ file.
@@ -565,7 +689,8 @@ typedef struct {
    * this array and `curv` and `surf` count into that one, so a file carrying
    * both has two independent numberings and a reader that merged them would
    * resolve every free-form reference to the wrong point. `sp` counts into
-   * this array too, in the format; this library does not read it yet (3.19).
+   * this array too, whatever kind of element it belongs to; see
+   * ::GMDL_Obj.special_points.
    */
   GMDL_Obj_Param_Vertex * param_vertices;
   size_t param_vertex_count; ///< Number of parameter-space points.
@@ -644,6 +769,58 @@ typedef struct {
    */
   float * basis_values;
   size_t basis_value_count; ///< Number of `bmat` values.
+
+  /**
+   * Every free-form element's body statements, in one flat array, or NULL.
+   *
+   * File order, with each element naming its own span - the shape
+   * ::line_vertices and ::freeform_vertices already use. See
+   * ::GMDL_Obj_Freeform_Body for which array a body's own span indexes.
+   */
+  GMDL_Obj_Freeform_Body * freeform_bodies;
+  size_t freeform_body_count; ///< Number of body statements.
+
+  /**
+   * Every `parm` line's values, in one flat array, or NULL.
+   *
+   * A knot vector's length follows from the degree and the number of control
+   * points, neither of which is on the `parm` line, so this is a flat array
+   * with spans for the reason ::basis_values is.
+   */
+  float * parm_values;
+  size_t parm_value_count; ///< Number of `parm` values.
+
+  /**
+   * Every `trim`, `hole` and `scrv` curve reference, or NULL.
+   *
+   * Those three name spans of this array. A ::GMDL_Obj_Connection holds its
+   * two by value instead, because a `con` names exactly two and a span would
+   * be a fixed length spelled as a variable one - so a `con` adds nothing
+   * here and is capped by `max_connections` rather than by
+   * `max_curve_refs`.
+   */
+  GMDL_Obj_Curve_Ref * curve_refs;
+  size_t curve_ref_count; ///< Number of curve references.
+
+  /**
+   * Every `sp` line's `vp` indices, in one flat array, or NULL.
+   *
+   * 0-based, resolved the way every other index in this file is, and
+   * counting into ::param_vertices - never ::vertices. A special point is a
+   * point in parameter space whatever kind of element it belongs to, so
+   * unlike a control-point reference this does not change array with the
+   * element's kind.
+   */
+  int32_t * special_points;
+  size_t special_point_count; ///< Number of special points.
+
+  /**
+   * `con` lines, in file order, or NULL.
+   *
+   * Recorded and not acted on - see ::GMDL_Obj_Connection.
+   */
+  GMDL_Obj_Connection * connections;
+  size_t connection_count; ///< Number of connections.
 
   /**
    * `call` and `csh` statements, in file order, or NULL.
@@ -761,6 +938,31 @@ GMDL_API void gmdl_obj_free(GMDL_Obj * obj);
  * @return GMDL_OK, GMDL_ERR_INVALID, or GMDL_ERR_IO.
  */
 GMDL_API GMDL_Result gmdl_obj_dump(const GMDL_Obj * obj, FILE * fd);
+
+/**
+ * @brief Find the nth free-form element of one kind.
+ *
+ * `trim`, `hole`, `scrv` and `con` name a `curv2` or a `surf` by its ordinal
+ * *within its own kind*, which is how the format numbers everything - `vt`
+ * 2 is the second `vt`, not the second line of the file. ::GMDL_Obj.freeforms
+ * holds the three kinds together in file order, so the two numbers part
+ * company as soon as a document mixes them, and every consumer of a
+ * ::GMDL_Obj_Curve_Ref would otherwise write this loop.
+ *
+ * It is a search rather than a second index array because the population is
+ * dozens of patches, not millions of faces: a parallel array would cost
+ * every document memory so that trimmed surfaces - which few documents have
+ * at all - could skip a walk.
+ *
+ * @param obj The model.
+ * @param kind Which kind to count.
+ * @param ordinal 0-based, as ::GMDL_Obj_Curve_Ref.curve2d holds it.
+ * @return The element, or NULL if `obj` is NULL or there is no such one -
+ *   which includes every negative ordinal and every forward reference the
+ *   file made but never satisfied.
+ */
+GMDL_API const GMDL_Obj_Freeform * gmdl_obj_freeform_of_kind(
+    const GMDL_Obj * obj, GMDL_Obj_Freeform_Kind kind, int32_t ordinal);
 
 #ifdef __cplusplus
 }

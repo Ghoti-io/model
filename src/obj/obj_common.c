@@ -250,3 +250,50 @@ const char * gmdl_cstype_name(GMDL_Obj_Cstype type) {
   }
   return NULL; // GMDL_OBJ_CSTYPE_NONE, which the format cannot spell.
 }
+
+// One table for the body statements' spellings, shared by the reader and the
+// writer for the reason the cstype table above is: five names written twice
+// is the shape that drifts, and a kind the dumper spells differently from
+// the parser round-trips through this library against its own output and
+// agrees with itself the whole way. `parm` carries its direction here
+// because that is what the file writes - `parm u` and `parm v` are two
+// statements, not one with an argument, once each line is its own record.
+static const struct {
+    const char * name;
+    GMDL_Obj_Body_Kind kind;
+} gmdl_body_kinds[] = {
+    {"parm u", GMDL_OBJ_BODY_PARM_U},
+    {"parm v", GMDL_OBJ_BODY_PARM_V},
+    {"trim", GMDL_OBJ_BODY_TRIM},
+    {"hole", GMDL_OBJ_BODY_HOLE},
+    {"scrv", GMDL_OBJ_BODY_SCRV},
+    {"sp", GMDL_OBJ_BODY_SP},
+};
+
+const char * gmdl_body_kind_name(GMDL_Obj_Body_Kind kind) {
+  for (size_t i = 0;
+      i < sizeof(gmdl_body_kinds) / sizeof(gmdl_body_kinds[0]); i++) {
+    if (gmdl_body_kinds[i].kind == kind) {
+      return gmdl_body_kinds[i].name;
+    }
+  }
+  return NULL; // Unreachable while the table covers the enumeration.
+}
+
+const GMDL_Obj_Freeform * gmdl_obj_freeform_of_kind(
+    const GMDL_Obj * obj, GMDL_Obj_Freeform_Kind kind, int32_t ordinal) {
+  if (!obj || ordinal < 0) {
+    return NULL;
+  }
+  int32_t seen = 0;
+  for (size_t i = 0; i < obj->freeform_count; i++) {
+    if (obj->freeforms[i].kind != kind) {
+      continue;
+    }
+    if (seen == ordinal) {
+      return &obj->freeforms[i];
+    }
+    seen++;
+  }
+  return NULL; // A forward reference the file never satisfied.
+}

@@ -1,0 +1,28 @@
+# trimming, knots and special points, attached to the element they stand in
+v 0 0 0
+v 1 0 0
+vp 0
+vp 0.5
+vp 1
+cstype bspline
+deg 1
+curv2 1 2
+parm u 0 1
+end
+curv2 2 3
+sp 1 3
+end
+surf 0 1 0 1 1 2
+parm u 0 0 1 1
+parm v 0 1
+trim 0 0.5 1
+hole 0.5 1 2
+trim 0 1 -1
+scrv 0.25 0.75 1
+sp 2
+end
+curv 0 1 1 2
+sp -1
+end
+con 1 0 1 1 1 0.5 1 2
+con 1 0 1 -1 -1 0 1 1
