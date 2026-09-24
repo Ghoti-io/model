@@ -280,8 +280,13 @@ static bool obj_color_append(obj_builder_t * b, const GMDL_Obj_Color * color) {
  * @param out_vn Receives the normal index, 0 when absent.
  * @return true when the token is a well-formed reference.
  */
+// Indices are read as long long rather than long because long is 32 bits on
+// Windows: strtol() saturated "f 2147483648" to LONG_MAX, which is INT32_MAX
+// already, so the index arrived one lower than written, and every larger one
+// arrived as that same in-range-looking value. long long is 64 bits on every
+// platform this library builds for, as long already was on Linux.
 static bool obj_parse_face_token(const char * token, const char * token_end,
-    long * out_v, long * out_vt, long * out_vn) {
+    long long * out_v, long long * out_vt, long long * out_vn) {
   *out_v = 0;
   *out_vt = 0;
   *out_vn = 0;
@@ -290,7 +295,7 @@ static bool obj_parse_face_token(const char * token, const char * token_end,
   char * end = NULL;
 
   // The vertex index is the one field that must be present.
-  long value = strtol(cursor, &end, 10);
+  long long value = strtoll(cursor, &end, 10);
   if (end == cursor) {
     return false;
   }
@@ -308,7 +313,7 @@ static bool obj_parse_face_token(const char * token, const char * token_end,
   // error, and no writer emits it either way.
   cursor++;
   if (cursor < token_end && *cursor != '/') {
-    value = strtol(cursor, &end, 10);
+    value = strtoll(cursor, &end, 10);
     if (end == cursor) {
       return false;
     }
@@ -324,7 +329,7 @@ static bool obj_parse_face_token(const char * token, const char * token_end,
 
   cursor++;
   if (cursor < token_end && *cursor != '/') {
-    value = strtol(cursor, &end, 10);
+    value = strtoll(cursor, &end, 10);
     if (end == cursor) {
       return false;
     }
@@ -355,15 +360,15 @@ static bool obj_parse_face_token(const char * token, const char * token_end,
  *   check against the final counts; a bogus index is not by itself a reason to
  *   reject the file, and readers differ on how to treat one.
  */
-static int32_t obj_index(long value, size_t declared) {
+static int32_t obj_index(long long value, size_t declared) {
   if (value == 0) {
     return -1;
   }
 
-  long resolved;
+  long long resolved;
   if (value < 0) {
     // Relative: -1 is the last one declared.
-    resolved = (long)declared + value;
+    resolved = (long long)declared + value;
   }
   else {
     resolved = value - 1;
@@ -802,9 +807,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           cursor++;
         }
 
-        long v = 0;
-        long vt = 0;
-        long vn = 0;
+        long long v = 0;
+        long long vt = 0;
+        long long vn = 0;
         if (!obj_parse_face_token(token, cursor, &v, &vt, &vn)) {
           gcu_array_destroy_in_place(&overflow);
           result = GMDL_ERR_FORMAT;
@@ -932,9 +937,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           cursor++;
         }
 
-        long v = 0;
-        long vt = 0;
-        long vn = 0;
+        long long v = 0;
+        long long vt = 0;
+        long long vn = 0;
         // The same token grammar as a face, and for the same reason: a file
         // that writes "1//2" on an l line is using a spelling the format
         // does not give lines, and refusing it would reject a file every
@@ -985,7 +990,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           break;
         }
         char * end = NULL;
-        long v = strtol(cursor, &end, 10);
+        long long v = strtoll(cursor, &end, 10);
         if (end == cursor) {
           result = GMDL_ERR_FORMAT;
           goto cleanup;
