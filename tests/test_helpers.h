@@ -10,6 +10,7 @@
 #define GHOTI_IO_GMDL_TEST_HELPERS_H
 
 #include <cerrno>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -129,9 +130,73 @@ private:
  * sink serves n writes and fails the one after. Sweeping n from zero upwards
  * walks the failure through the whole of a dump.
  *
- * `fopencookie` is glibc's; the tests run there. Everything else in this
- * header is portable, and this is the one thing that cannot be.
+ * `fopencookie` is glibc's, and Windows has nothing like it: a CRT `FILE *`
+ * cannot be given callbacks. There the failure is served one step higher, at
+ * the library's own call. The test links with `-Wl,--wrap=__mingw_fprintf`
+ * (the name MinGW's headers give `fprintf` in C), so every `fprintf` the
+ * dumpers make lands in the wrapper at the end of this header, which counts
+ * the ones aimed at the sink and returns -1 once the budget is spent. The
+ * dumpers see exactly what they see on Linux - `fprintf` answering negative
+ * with errno set - so the same arms run. What is not exercised on Windows is
+ * the CRT turning a failed write into that answer, which is the CRT's code.
+ * If the library ever writes through anything but `fprintf`, the wrapper
+ * stops seeing it, the sweeps find no failures to count, and their floors
+ * fail - so this cannot go quietly vacuous.
  */
+#ifdef _WIN32
+class FailingSink {
+public:
+  explicit FailingSink(size_t allow) : remaining_(allow) {
+    // The bytes that are allowed through have to go somewhere real, so that
+    // a write that is not refused behaves as a write.
+    file_ = fopen("NUL", "wb");
+    if (file_) {
+      setvbuf(file_, nullptr, _IONBF, 0);
+      EXPECT_EQ(active_, nullptr) << "one FailingSink at a time";
+      active_ = this;
+    }
+  }
+
+  FailingSink(const FailingSink &) = delete;
+  FailingSink & operator=(const FailingSink &) = delete;
+
+  ~FailingSink() {
+    if (file_) {
+      active_ = nullptr;
+      fclose(file_);
+    }
+  }
+
+  FILE * get() const { return file_; }
+
+  /** Whether the write budget ran out, i.e. a failure was actually served. */
+  bool failed() const { return failed_; }
+
+  /**
+   * Called by the fprintf wrapper for every call the linked code makes.
+   * Returns false when the call must fail.
+   */
+  static bool admit(FILE * stream) {
+    FailingSink * self = active_;
+    if (!self || stream != self->file_) {
+      return true;
+    }
+    if (self->remaining_ == 0) {
+      self->failed_ = true;
+      errno = ENOSPC;
+      return false;
+    }
+    self->remaining_--;
+    return true;
+  }
+
+private:
+  static inline FailingSink * active_ = nullptr;
+  size_t remaining_;
+  bool failed_ = false;
+  FILE * file_ = nullptr;
+};
+#else
 class FailingSink {
 public:
   explicit FailingSink(size_t allow) : remaining_(allow) {
@@ -174,6 +239,78 @@ private:
   bool failed_ = false;
   FILE * file_ = nullptr;
 };
+#endif
+
+/**
+ * A stream that collects what is written to it, for a test that inspects a
+ * dump's text.
+ *
+ * `open_memstream` is POSIX 2008 and the Windows CRT has no counterpart, so
+ * there the bytes go to a temporary file (binary, so nothing rewrites line
+ * endings) and are read back. finish() closes the stream either way; get()
+ * must not be used after it.
+ */
+class CapturedOutput {
+public:
+  CapturedOutput() {
+#ifdef _WIN32
+    if (gcu_file_temp_create(&temp_, nullptr, "gmdl_capture", nullptr)
+        == GCU_FILE_OK) {
+      file_ = gcu_file_temp_stream(&temp_);
+    }
+#else
+    file_ = open_memstream(&buffer_, &size_);
+#endif
+  }
+
+  CapturedOutput(const CapturedOutput &) = delete;
+  CapturedOutput & operator=(const CapturedOutput &) = delete;
+
+  ~CapturedOutput() {
+#ifdef _WIN32
+    gcu_file_temp_abort(&temp_);
+#else
+    if (file_) {
+      fclose(file_);
+    }
+    free(buffer_);
+#endif
+  }
+
+  FILE * get() const { return file_; }
+
+  /** Everything written so far. Ends the capture. */
+  std::string finish() {
+    std::string text;
+    if (!file_) {
+      return text;
+    }
+#ifdef _WIN32
+    fflush(file_);
+    rewind(file_);
+    char chunk[4096];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof chunk, file_)) > 0) {
+      text.append(chunk, got);
+    }
+    // The handle belongs to temp_, which the destructor closes.
+#else
+    fclose(file_);
+    text.assign(buffer_, size_);
+#endif
+    file_ = nullptr;
+    return text;
+  }
+
+private:
+  FILE * file_ = nullptr;
+#ifdef _WIN32
+  GCU_File_Temp temp_{};
+#else
+  char * buffer_ = nullptr;
+  size_t size_ = 0;
+#endif
+};
 
 /**
  * A stream over a string that lives as long as the holder, so that a test can
@@ -199,5 +336,28 @@ private:
 };
 
 } // namespace gmdltest
+
+#ifdef _WIN32
+/**
+ * The other half of the Windows FailingSink: the Makefile links every test
+ * with `-Wl,--wrap=__mingw_fprintf`, which sends each call to it here. Calls
+ * aimed at anything but the active sink pass straight through.
+ *
+ * Inline and `used`, so that every test program has exactly one definition
+ * whether or not it uses FailingSink - the wrap applies to all of them, and a
+ * program without the wrapper would not link.
+ */
+extern "C" __attribute__((used)) inline int __wrap___mingw_fprintf(
+    FILE * stream, const char * format, ...) {
+  if (!gmdltest::FailingSink::admit(stream)) {
+    return -1;
+  }
+  va_list args;
+  va_start(args, format);
+  int result = __mingw_vfprintf(stream, format, args);
+  va_end(args);
+  return result;
+}
+#endif
 
 #endif // GHOTI_IO_GMDL_TEST_HELPERS_H

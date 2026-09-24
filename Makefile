@@ -411,6 +411,15 @@ TEST_HELPER_OBJ := $(patsubst tests/%.cpp,$(OBJ_DIR)/tests/%.o,$(TEST_HELPER_SRC
 # something references by name.
 MODELLIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-archive $(CUTIL_LIBS)
 
+# Windows has no fopencookie, so FailingSink (tests/test_helpers.h) serves its
+# failures from a wrapper around the library's fprintf instead of from the
+# stream. MinGW's headers spell fprintf __mingw_fprintf in C.
+ifeq ($(OS_NAME), Windows)
+TEST_LDFLAGS := -Wl,--wrap=__mingw_fprintf
+else
+TEST_LDFLAGS :=
+endif
+
 # Discover test sources and compute an executable name for each, as
 # "path|name" pairs. test_foo.cpp -> testFoo.
 TEST_PAIRS := $(shell find tests -type f -name 'test_*.cpp' 2>/dev/null | sort | grep -v test_helpers | while read f; do \
@@ -559,7 +568,7 @@ $(APP_DIR)/$2$(EXE_EXTENSION): $$(TEST_OBJ_$1) $(TEST_HELPER_OBJ) \
 		$(APP_DIR)/$(STATIC_TARGET) | $(APP_DIR)/$(TARGET)
 	@printf "\n### Linking Test: $2 ###\n"
 	@mkdir -p $$(@D)
-	$(CXX) $(CXXFLAGS) -o $$@ $$(TEST_OBJ_$1) $(TEST_HELPER_OBJ) $(LDFLAGS) $(MODELLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS)
+	$(CXX) $(CXXFLAGS) -o $$@ $$(TEST_OBJ_$1) $(TEST_HELPER_OBJ) $(LDFLAGS) $(TEST_LDFLAGS) $(MODELLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS)
 endef
 
 $(foreach pair,$(TEST_PAIRS),\
@@ -1395,7 +1404,7 @@ help: ## Display this help
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(TEST_DATA) $(MODELLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(TEST_DATA) $(MODELLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(ASAN_FLAGS_STAMP): force-flags

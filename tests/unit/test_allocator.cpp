@@ -546,18 +546,13 @@ void sweep_allocation_failures(const char * label,
 /** Render a model the way a consumer would see it, for comparison. */
 template <typename Model, typename Dump>
 std::string dump_to_string(Model * model, Dump dump) {
-  char * buffer = nullptr;
-  size_t size = 0;
-  FILE * sink = open_memstream(&buffer, &size);
-  if (!sink) {
+  gmdltest::CapturedOutput sink;
+  if (!sink.get()) {
     return std::string();
   }
-  GMDL_Result result = dump(model, sink);
-  fclose(sink);
-  std::string text = result == GMDL_OK ? std::string(buffer, size)
-                                       : std::string("<dump failed>");
-  free(buffer);
-  return text;
+  GMDL_Result result = dump(model, sink.get());
+  std::string text = sink.finish();
+  return result == GMDL_OK ? text : std::string("<dump failed>");
 }
 
 // Measured floors, each set below what the mode actually finds, in the order

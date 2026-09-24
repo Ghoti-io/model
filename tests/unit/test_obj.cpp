@@ -1057,7 +1057,11 @@ TEST(ObjDump, RejectsNullArguments) {
 TEST(ObjDump, WritesSomethingForALoadedModel) {
   GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
   ASSERT_NE(obj, nullptr);
+#ifdef _WIN32
+  FILE * sink = fopen("NUL", "w");
+#else
   FILE * sink = fopen("/dev/null", "w");
+#endif
   ASSERT_NE(sink, nullptr);
   EXPECT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
   fclose(sink);
@@ -3196,15 +3200,11 @@ TEST(ObjDump, AMaximalIndexIsWrittenWithoutOverflowing) {
   ASSERT_EQ(obj->face_count, 1u);
   ASSERT_EQ(obj->faces[0].vertex[0], 2147483647);
 
-  char * buffer = nullptr;
-  size_t size = 0;
-  FILE * sink = open_memstream(&buffer, &size);
-  ASSERT_NE(sink, nullptr);
-  EXPECT_EQ(gmdl_obj_dump(obj, sink), GMDL_OK);
-  fclose(sink);
-  EXPECT_NE(std::string(buffer, size).find("2147483648"), std::string::npos)
+  gmdltest::CapturedOutput sink;
+  ASSERT_NE(sink.get(), nullptr);
+  EXPECT_EQ(gmdl_obj_dump(obj, sink.get()), GMDL_OK);
+  EXPECT_NE(sink.finish().find("2147483648"), std::string::npos)
       << "the index did not survive the round trip";
-  free(buffer);
   gmdl_obj_free(obj);
 }
 
