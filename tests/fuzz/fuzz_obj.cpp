@@ -60,6 +60,13 @@ bool same_float(float a, float b) {
  * which 3.5 says to record rather than reject - is written as a negative
  * number, and OBJ reads a negative index as relative. There is no OBJ
  * spelling for it, so the index comparison does not apply to such a model.
+ *
+ * **Every element kind that carries an index has to be named here.** One
+ * that is not makes the harness call the format's own limit a library bug,
+ * and it does it on a real input rather than a rare one. tools/check-lists.py
+ * holds this function to the set of index-carrying types in obj.h, because
+ * nothing else could: the omission looks exactly like a passing harness
+ * until the fuzzer reaches the shape.
  */
 bool indices_are_representable(const GMDL_Obj * obj) {
   for (size_t i = 0; i < obj->face_count; i++) {
@@ -91,6 +98,21 @@ bool indices_are_representable(const GMDL_Obj * obj) {
   }
   for (size_t i = 0; i < obj->point_count; i++) {
     if (obj->points[i].vertex < -1) {
+      return false;
+    }
+  }
+  // Free-form elements resolve their control points exactly as faces do, so
+  // the same exemption reaches them. This clause was missing when `curv`,
+  // `curv2` and `surf` were added, and the fuzzer found it in 150 seconds:
+  // `v` three times and then `curv 0 1 -10` gives a reference of -7, which
+  // the dump writes as -6 and the reload reads as -3. That is the documented
+  // behaviour of an index below -1 (section 9), not a defect - but the
+  // harness has to know it, and adding a fourth element kind without
+  // touching this list makes the harness report the format's own limit as a
+  // library bug.
+  for (size_t i = 0; i < obj->freeform_vertex_count; i++) {
+    const GMDL_Obj_Freeform_Vertex * ref = &obj->freeform_vertices[i];
+    if (ref->vertex < -1 || ref->texcoord < -1 || ref->normal < -1) {
       return false;
     }
   }
@@ -239,6 +261,45 @@ bool same_render(const GMDL_Obj_Render_State & a,
 }
 
 /**
+ * Whether two free-form states hold the same thing, values and all.
+ *
+ * The basis matrices are compared by **value**, not by span. The dump writes
+ * a `bmat` line per distinct span and the reparse numbers its spans from
+ * scratch, so two models describing the same matrix hold it at different
+ * offsets - comparing starts would fail on every document that carries one,
+ * and comparing counts alone would pass for two different matrices of the
+ * same length.
+ */
+bool same_freeform_state(const GMDL_Obj * a_obj,
+    const GMDL_Obj_Freeform_State & a, const GMDL_Obj * b_obj,
+    const GMDL_Obj_Freeform_State & b) {
+  if (a.type != b.type || a.rational != b.rational || a.degree_u != b.degree_u
+      || a.degree_v != b.degree_v || a.degree_count != b.degree_count
+      || a.step_u != b.step_u || a.step_v != b.step_v
+      || a.step_count != b.step_count || a.basis_u_count != b.basis_u_count
+      || a.basis_v_count != b.basis_v_count) {
+    return false;
+  }
+  for (size_t i = 0; i < a.basis_u_count; i++) {
+    if (a.basis_u_start + i >= a_obj->basis_value_count
+        || b.basis_u_start + i >= b_obj->basis_value_count
+        || !same_float(a_obj->basis_values[a.basis_u_start + i],
+            b_obj->basis_values[b.basis_u_start + i])) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < a.basis_v_count; i++) {
+    if (a.basis_v_start + i >= a_obj->basis_value_count
+        || b.basis_v_start + i >= b_obj->basis_value_count
+        || !same_float(a_obj->basis_values[a.basis_v_start + i],
+            b_obj->basis_values[b.basis_v_start + i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Dump the model, parse the dump, and check the two agree.
  *
  * Section 9 promises a structural round-trip and section 10 says this is the
@@ -285,6 +346,11 @@ void check_round_trip(const GMDL_Obj * obj) {
   REQUIRE(obj->color_count == again->color_count, "color_count");
   REQUIRE(obj->texcoord_count == again->texcoord_count, "texcoord_count");
   REQUIRE(obj->normal_count == again->normal_count, "normal_count");
+  REQUIRE(obj->param_vertex_count == again->param_vertex_count,
+      "param_vertex_count");
+  REQUIRE(obj->freeform_count == again->freeform_count, "freeform_count");
+  REQUIRE(obj->freeform_vertex_count == again->freeform_vertex_count,
+      "freeform_vertex_count");
   REQUIRE(obj->face_count == again->face_count, "face_count");
   REQUIRE(obj->group_count == again->group_count, "group_count");
   REQUIRE(obj->line_count == again->line_count, "line_count");
@@ -345,6 +411,44 @@ void check_round_trip(const GMDL_Obj * obj) {
             && same_float(obj->normals[i].y, again->normals[i].y)
             && same_float(obj->normals[i].z, again->normals[i].z),
         "normal value");
+  }
+  // The arity as well as the coordinates: a dump that padded every `vp` to
+  // three numbers would round-trip its own output perfectly and still change
+  // a curve's control point into a surface's (3.19).
+  for (size_t i = 0; i < obj->param_vertex_count; i++) {
+    REQUIRE(obj->param_vertices[i].count == again->param_vertices[i].count
+            && same_float(obj->param_vertices[i].u, again->param_vertices[i].u)
+            && same_float(obj->param_vertices[i].v, again->param_vertices[i].v)
+            && same_float(obj->param_vertices[i].w, again->param_vertices[i].w),
+        "param vertex");
+  }
+  // The free-form elements: the kind, the parameter range, the state and
+  // every control-point reference. The kind is named explicitly rather than
+  // left to agree with itself - a dumper writing every element as `curv` and
+  // a loader reading it back as `curv` agree perfectly, and the surface is
+  // gone.
+  for (size_t i = 0; i < obj->freeform_count; i++) {
+    const GMDL_Obj_Freeform & a = obj->freeforms[i];
+    const GMDL_Obj_Freeform & b = again->freeforms[i];
+    REQUIRE(a.kind == b.kind, "freeform kind");
+    REQUIRE(same_float(a.range[0], b.range[0])
+            && same_float(a.range[1], b.range[1])
+            && same_float(a.range[2], b.range[2])
+            && same_float(a.range[3], b.range[3]),
+        "freeform range");
+    REQUIRE(same_freeform_state(obj, a.state, again, b.state),
+        "freeform state");
+    REQUIRE(a.count == b.count, "freeform reference count");
+    REQUIRE(strcmp(material_name(obj, a.material_index),
+                material_name(again, b.material_index))
+            == 0,
+        "freeform material");
+    REQUIRE(strcmp(map_name(obj, a.map_index), map_name(again, b.map_index))
+            == 0,
+        "freeform map");
+    REQUIRE(same_render(render_state_of(obj, a.render_index),
+                render_state_of(again, b.render_index)),
+        "freeform render state");
   }
   for (size_t g = 0; g < obj->group_count; g++) {
     REQUIRE(strcmp(obj->groups[g].name, again->groups[g].name) == 0,
@@ -420,6 +524,27 @@ void check_round_trip(const GMDL_Obj * obj) {
   }
 
   if (indices_are_representable(obj)) {
+    // Free-form control points are indices like any other, so they belong
+    // under this guard and not up with the element's kind and range. They
+    // were outside it at first, which made a document with no `v` lines and
+    // a `curv 0 1 -1 -2` report a library defect: -2 resolves to -2, the
+    // dump writes it as -1, and the reload reads -1 against zero vertices as
+    // -1 again. That is the below--1 case this guard exists for, reached
+    // from a direction the guard could not see because the comparison was
+    // not inside it.
+    for (size_t i = 0; i < obj->freeform_count; i++) {
+      const GMDL_Obj_Freeform & a = obj->freeforms[i];
+      const GMDL_Obj_Freeform & b = again->freeforms[i];
+      for (size_t k = 0; k < a.count && k < b.count; k++) {
+        const GMDL_Obj_Freeform_Vertex & x =
+            obj->freeform_vertices[a.start + k];
+        const GMDL_Obj_Freeform_Vertex & y =
+            again->freeform_vertices[b.start + k];
+        REQUIRE(x.vertex == y.vertex && x.texcoord == y.texcoord
+                && x.normal == y.normal,
+            "freeform reference");
+      }
+    }
     for (size_t i = 0; i < obj->line_vertex_count; i++) {
       REQUIRE(obj->line_vertices[i].vertex == again->line_vertices[i].vertex,
           "line vertex index");

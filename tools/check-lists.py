@@ -439,6 +439,66 @@ if invented:
          "does not have: %s." % ("caps" if len(invented) > 1 else "a cap",
                                  ", ".join(invented)))
 
+#
+# The fuzzer's index exemption against the types that carry an index
+#
+# indices_are_representable() lists the element kinds whose indices the dump
+# can spell.  An index below -1 has no OBJ spelling - a relative index
+# reaching past the start of the file produces one - so a model holding one
+# is outside the round trip, and the harness has to say so per element kind.
+#
+# A kind missing from that list does not make the harness quiet: it makes it
+# report the format's own limit as a library defect, on a real input, and
+# only once the fuzzer reaches that shape.  That happened when `curv`,
+# `curv2` and `surf` arrived: faces, polylines and points were listed and the
+# new one was not, and 150 seconds of fuzzing found `curv 0 1 -10`.
+#
+# An index-carrying type is recognised by an `int32_t vertex` field, which is
+# the convention every one of them keeps.
+carrying = set()
+for match in re.finditer(r"typedef struct \{(.*?)\n\}\s*(GMDL_Obj_\w+)\s*;",
+                         obj_header, re.S):
+    body, name = match.group(1), match.group(2)
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    body = re.sub(r"///.*", "", body)
+    if re.search(r"\bint32_t\s+vertex\s*(\[\s*\d+\s*\])?\s*;", body):
+        carrying.add(name)
+if not carrying:
+    fail("found no index-carrying types in obj.h; the pattern must have rotted")
+
+fuzz = read("tests/fuzz/fuzz_obj.cpp")
+exemption = re.search(
+    r"bool indices_are_representable\(const GMDL_Obj \* obj\) \{(.*?)\n\}",
+    fuzz, re.S)
+if not exemption:
+    fail("could not find indices_are_representable() in the OBJ fuzzer; "
+         "this gate is measuring nothing")
+# Comments are stripped before the search, for the reason the GMDL_Obj gate
+# strips them: this function's prose names the element kinds it walks, so a
+# plain substring search is satisfied by the sentence that explains the
+# clause rather than by the clause. Measured: with comments left in, deleting
+# the points loop outright kept this gate green, because the comment above it
+# says the word "points".
+body = re.sub(r"/\*.*?\*/", "", exemption.group(1), flags=re.S)
+body = re.sub(r"//.*", "", body)
+# A type is covered when the function walks the array whose elements are of
+# that type, which it does by naming either the type or that array's count.
+covered = set()
+for name in carrying:
+    field = re.search(r"\b%s\s*\*\s*(\w+)\s*;" % re.escape(name), obj_header)
+    names = [name]
+    if field:
+        names.append(field.group(1))
+    if any(n in body for n in names):
+        covered.add(name)
+missing = sorted(carrying - covered)
+if missing:
+    problems.append(
+        "the OBJ fuzzer's indices_are_representable() does not mention %s, "
+        "so a model holding an index below -1 in one is compared anyway and "
+        "the harness reports the format's own limit as a library defect"
+        % ", ".join(missing))
+
 if problems:
     for problem in problems:
         print("check-lists: %s" % problem, file=sys.stderr)
@@ -455,3 +515,5 @@ print("check-lists: %d builder capacities, largest %d, all under the sweep's "
       % (len(capacities), max(c for _, _, c in capacities), grow, len(empty)))
 print("check-lists: %d GMDL_Limits fields, each with a row in section 5"
       % len(limit_fields))
+print("check-lists: %d index-carrying types, each named in the fuzzer's "
+      "index exemption" % len(carrying))

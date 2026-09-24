@@ -219,3 +219,34 @@ bool gmdl_line_is(
 bool gmdl_limit_reached(size_t count, size_t limit) {
   return limit != 0 && count >= limit;
 }
+
+/** The five bases `cstype` names, read and written from one list. */
+static const struct {
+  const char * name;
+  GMDL_Obj_Cstype type;
+} gmdl_cstypes[] = {
+    {"bmatrix", GMDL_OBJ_CSTYPE_BMATRIX},
+    {"bezier", GMDL_OBJ_CSTYPE_BEZIER},
+    {"bspline", GMDL_OBJ_CSTYPE_BSPLINE},
+    {"cardinal", GMDL_OBJ_CSTYPE_CARDINAL},
+    {"taylor", GMDL_OBJ_CSTYPE_TAYLOR},
+};
+
+bool gmdl_cstype_from_name(const char * word, GMDL_Obj_Cstype * out) {
+  for (size_t i = 0; i < sizeof(gmdl_cstypes) / sizeof(gmdl_cstypes[0]); i++) {
+    if (gmdl_line_is(word, gmdl_cstypes[i].name, NULL)) {
+      *out = gmdl_cstypes[i].type;
+      return true;
+    }
+  }
+  return false;
+}
+
+const char * gmdl_cstype_name(GMDL_Obj_Cstype type) {
+  for (size_t i = 0; i < sizeof(gmdl_cstypes) / sizeof(gmdl_cstypes[0]); i++) {
+    if (gmdl_cstypes[i].type == type) {
+      return gmdl_cstypes[i].name;
+    }
+  }
+  return NULL; // GMDL_OBJ_CSTYPE_NONE, which the format cannot spell.
+}

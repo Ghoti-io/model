@@ -1,0 +1,10 @@
+# the parameter-space control points, in all three arities
+vp 0.5
+vp 0.5 0.25
+vp 0.5 0.25 2
+vp 0
+vp
+v 0 0 0
+v 1 0 0
+v 0 1 0
+f 1 2 3

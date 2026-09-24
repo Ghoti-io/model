@@ -1,0 +1,30 @@
+# curves and surfaces, recorded and not evaluated
+v 0 0 0
+v 1 0 0
+v 2 0 0
+vt 0 0
+vn 0 0 1
+vp 0
+vp 0.5
+cstype rat bspline
+deg 2 1
+step 4 5
+bmat u 1 0 -1 1
+bmat v 2 3
+curv 0 1 1 2 3
+end
+cstype bezier
+curv2 1 2
+end
+cstype bmatrix
+surf 0 1 0.25 0.75 1/1/1 2 3//1
+end
+curv 0 1 -1 -2
+cstype bspline
+step -1 1
+deg -1 2
+curv 0 1 1 2
+end
+deg 3
+curv 0 1 1 2
+end

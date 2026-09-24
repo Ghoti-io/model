@@ -51,6 +51,17 @@ GMDL_Result load_text_expecting_failure(
   return r;
 }
 
+/** Dump a model and hand back the text it wrote, or fail the test. */
+std::string dump_text(const GMDL_Obj * obj) {
+  gmdltest::CapturedOutput sink;
+  EXPECT_NE(sink.get(), nullptr);
+  if (!sink.get()) {
+    return std::string();
+  }
+  EXPECT_EQ(gmdl_obj_dump(obj, sink.get()), GMDL_OK);
+  return sink.finish();
+}
+
 } // namespace
 
 //
@@ -210,6 +221,667 @@ TEST(ObjParse, ATextureCoordinateNeedsOnlyItsFirstNumber) {
 // The three extra numbers used to be discarded without a word, which is the
 // same shape of defect as dropping a texture map option: the file said
 // something and the model did not carry it.
+//
+// `vp` - parameter-space control points (3.19)
+//
+
+// The point of the directive is that it is NOT `v`. Both numberings start at
+// 1, so a reader that merged the two arrays would resolve every free-form
+// reference to a real point of the wrong kind and never notice.
+TEST(ObjParamVertex, ParameterPointsDoNotJoinTheVertices) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nvp 0.25\nv 1 0 0\nvp 0.75\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->vertex_count, 2u);
+  ASSERT_EQ(obj->param_vertex_count, 2u);
+  EXPECT_FLOAT_EQ(obj->param_vertices[0].u, 0.25f);
+  EXPECT_FLOAT_EQ(obj->param_vertices[1].u, 0.75f);
+  gmdl_obj_free(obj);
+}
+
+// One number is a curve's control point, two a surface's, three a weighted
+// one. The count is recorded because it is the only thing that tells them
+// apart, and the coordinates a line did not carry take the format's own
+// defaults rather than being left unset.
+TEST(ObjParamVertex, TheNumbersTheLineCarriedAreCounted) {
+  GMDL_Obj * obj = load_text("vp 0.5\nvp 0.5 0.25\nvp 0.5 0.25 2\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->param_vertex_count, 3u);
+
+  EXPECT_EQ(obj->param_vertices[0].count, 1);
+  EXPECT_FLOAT_EQ(obj->param_vertices[0].u, 0.5f);
+  EXPECT_FLOAT_EQ(obj->param_vertices[0].v, 0.0f);
+  EXPECT_FLOAT_EQ(obj->param_vertices[0].w, 1.0f);
+
+  EXPECT_EQ(obj->param_vertices[1].count, 2);
+  EXPECT_FLOAT_EQ(obj->param_vertices[1].v, 0.25f);
+  EXPECT_FLOAT_EQ(obj->param_vertices[1].w, 1.0f);
+
+  EXPECT_EQ(obj->param_vertices[2].count, 3);
+  EXPECT_FLOAT_EQ(obj->param_vertices[2].w, 2.0f);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjParamVertex, ABareVpIsAFormatError) {
+  EXPECT_EQ(load_text_expecting_failure("vp\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("vp junk\n"), GMDL_ERR_FORMAT);
+}
+
+TEST(ObjParamVertex, AFileWithNoneAllocatesNone) {
+  GMDL_Obj * obj = load_text("v 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->param_vertex_count, 0u);
+  EXPECT_EQ(obj->param_vertices, nullptr);
+  gmdl_obj_free(obj);
+}
+
+// The arity has to survive the dump, and the text is asserted rather than
+// only the reparse: a dumper that padded every point to three numbers and a
+// loader that counted them would still agree with each other, and the model
+// a consumer got would say "surface point" for what the file called a curve
+// point. Comparing this library against itself cannot see that.
+TEST(ObjDump, AParameterPointKeepsTheNumbersItHad) {
+  GMDL_Obj * obj = load_text("vp 0.5\nvp 0.5 0.25\nvp 0.5 0.25 2\n");
+  ASSERT_NE(obj, nullptr);
+
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("vp 0.5\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("vp 0.5 0.25\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("vp 0.5 0.25 2\n"), std::string::npos) << text;
+
+  MemStream stream(text);
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->param_vertex_count, 3u);
+  for (size_t i = 0; i < 3; i++) {
+    EXPECT_EQ(again->param_vertices[i].count, obj->param_vertices[i].count);
+    EXPECT_FLOAT_EQ(again->param_vertices[i].u, obj->param_vertices[i].u);
+    EXPECT_FLOAT_EQ(again->param_vertices[i].v, obj->param_vertices[i].v);
+    EXPECT_FLOAT_EQ(again->param_vertices[i].w, obj->param_vertices[i].w);
+  }
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// A count outside 1 to 3 cannot come from a parse, and a model assembled
+// through the struct can hold one. The dump writes the `u` it is sure of
+// rather than reading fields the record may never have been given.
+TEST(ObjDump, AParameterPointWithNoCountWritesItsFirstNumber) {
+  GMDL_Obj * obj = load_text("vp 0.5 0.25 2\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->param_vertex_count, 1u);
+  obj->param_vertices[0].count = 0;
+
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("vp 0.5\n"), std::string::npos) << text;
+  gmdl_obj_free(obj);
+}
+
+//
+// The free-form state and elements (3.19)
+//
+
+TEST(ObjFreeform, ACurveKeepsItsRangeAndControlPoints) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 2 0 0\nv 3 0 0\n"
+      "cstype bezier\ndeg 3\n"
+      "curv 0 1 1 2 3 4\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  const GMDL_Obj_Freeform & c = obj->freeforms[0];
+  EXPECT_EQ(c.kind, GMDL_OBJ_CURVE);
+  EXPECT_FLOAT_EQ(c.range[0], 0.0f);
+  EXPECT_FLOAT_EQ(c.range[1], 1.0f);
+  EXPECT_EQ(c.state.type, GMDL_OBJ_CSTYPE_BEZIER);
+  EXPECT_FALSE(c.state.rational);
+  EXPECT_EQ(c.state.degree_u, 3);
+  EXPECT_EQ(c.state.degree_count, 1);
+  ASSERT_EQ(c.count, 4u);
+  for (size_t i = 0; i < 4; i++) {
+    EXPECT_EQ(obj->freeform_vertices[c.start + i].vertex, (int32_t)i);
+    EXPECT_EQ(obj->freeform_vertices[c.start + i].texcoord, -1);
+    EXPECT_EQ(obj->freeform_vertices[c.start + i].normal, -1);
+  }
+  gmdl_obj_free(obj);
+}
+
+// The point of `vp` having an index space of its own. Both numberings start
+// at 1, so a `curv2` resolved against the vertices would name a real point
+// every time - a wrong one, silently.
+TEST(ObjFreeform, ACurve2IndexesTheParameterPointsNotTheVertices) {
+  GMDL_Obj * obj = load_text(
+      "v 9 9 9\nv 8 8 8\nv 7 7 7\n" // Three vertices the curve must ignore.
+      "vp 0\nvp 0.5\n"
+      "cstype bspline\ndeg 1\n"
+      "curv2 1 2\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  const GMDL_Obj_Freeform & c = obj->freeforms[0];
+  EXPECT_EQ(c.kind, GMDL_OBJ_CURVE2);
+  ASSERT_EQ(c.count, 2u);
+  EXPECT_EQ(obj->freeform_vertices[c.start].vertex, 0);
+  EXPECT_EQ(obj->freeform_vertices[c.start + 1].vertex, 1);
+  gmdl_obj_free(obj);
+}
+
+// And the same question asked where an answer resolved against the wrong
+// array would still be in range: a relative index counts back through the
+// array its own kind names.
+TEST(ObjFreeform, ARelativeCurve2IndexCountsBackThroughTheParameterPoints) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 2 0 0\nv 3 0 0\nv 4 0 0\n"
+      "vp 0\nvp 0.5\nvp 1\n"
+      "curv2 -1 -3\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  const GMDL_Obj_Freeform & c = obj->freeforms[0];
+  ASSERT_EQ(c.count, 2u);
+  EXPECT_EQ(obj->freeform_vertices[c.start].vertex, 2);     // The third vp.
+  EXPECT_EQ(obj->freeform_vertices[c.start + 1].vertex, 0); // The first.
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeform, ASurfaceKeepsFourRangeNumbersAndFullReferences) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
+      "vt 0 0\nvt 1 1\n"
+      "vn 0 0 1\n"
+      "cstype rat bspline\ndeg 1 1\nstep 2 2\n"
+      "surf 0 1 0 1 1/1/1 2/2/1 3 4//1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  const GMDL_Obj_Freeform & f = obj->freeforms[0];
+  EXPECT_EQ(f.kind, GMDL_OBJ_SURFACE);
+  EXPECT_FLOAT_EQ(f.range[2], 0.0f);
+  EXPECT_FLOAT_EQ(f.range[3], 1.0f);
+  EXPECT_EQ(f.state.type, GMDL_OBJ_CSTYPE_BSPLINE);
+  EXPECT_TRUE(f.state.rational);
+  EXPECT_EQ(f.state.degree_u, 1);
+  EXPECT_EQ(f.state.degree_v, 1);
+  EXPECT_EQ(f.state.step_u, 2);
+  EXPECT_EQ(f.state.step_v, 2);
+  ASSERT_EQ(f.count, 4u);
+  EXPECT_EQ(obj->freeform_vertices[f.start].texcoord, 0);
+  EXPECT_EQ(obj->freeform_vertices[f.start].normal, 0);
+  EXPECT_EQ(obj->freeform_vertices[f.start + 2].texcoord, -1);
+  EXPECT_EQ(obj->freeform_vertices[f.start + 2].normal, -1);
+  EXPECT_EQ(obj->freeform_vertices[f.start + 3].texcoord, -1);
+  EXPECT_EQ(obj->freeform_vertices[f.start + 3].normal, 0);
+  gmdl_obj_free(obj);
+}
+
+// Only `surf` has the `v/vt/vn` form. Accepting one on a curve and dropping
+// the fields it cannot hold would lose what the file said while reporting
+// success.
+TEST(ObjFreeform, ACurveReferenceMayNotCarryATexcoordOrNormal) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncurv 0 1 1/1\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("vp 0\ncurv2 1//1\n"),
+      GMDL_ERR_FORMAT);
+  // And a token that is no reference at all, which is the other way out of
+  // the same check.
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncurv 0 1 1/x\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nsurf 0 1 0 1 1/2/x\n"),
+      GMDL_ERR_FORMAT);
+  // Not `surf 0 1 0 1 1/2/3/x`: a fourth '/'-separated field is ignored
+  // (3.5), and a `surf` reference is read by exactly the function an `f`
+  // reference is, so it is ignored here too.
+}
+
+TEST(ObjFreeform, AnElementNeedsItsRangeAndAtLeastOneControlPoint) {
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncurv 0 1\n"),
+      GMDL_ERR_FORMAT); // A range and nothing else.
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncurv 0\n"),
+      GMDL_ERR_FORMAT); // Half a range.
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\ncurv\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("vp 0\ncurv2\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nsurf 0 1 0 1\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("v 0 0 0\nsurf 0 1 0\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(ObjFreeform, AnUnrecognisedBasisIsAFormatError) {
+  EXPECT_EQ(load_text_expecting_failure("cstype nurbs\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("cstype\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("cstype rat\n"), GMDL_ERR_FORMAT);
+}
+
+TEST(ObjFreeform, EveryBasisIsRecognised) {
+  const struct {
+    const char * line;
+    GMDL_Obj_Cstype type;
+  } kCases[] = {
+      {"cstype bmatrix\n", GMDL_OBJ_CSTYPE_BMATRIX},
+      {"cstype bezier\n", GMDL_OBJ_CSTYPE_BEZIER},
+      {"cstype bspline\n", GMDL_OBJ_CSTYPE_BSPLINE},
+      {"cstype cardinal\n", GMDL_OBJ_CSTYPE_CARDINAL},
+      {"cstype taylor\n", GMDL_OBJ_CSTYPE_TAYLOR},
+  };
+  for (const auto & c : kCases) {
+    GMDL_Obj * obj =
+        load_text(std::string("v 0 0 0\n") + c.line + "curv 0 1 1 1\nend\n");
+    ASSERT_NE(obj, nullptr) << c.line;
+    ASSERT_EQ(obj->freeform_count, 1u);
+    EXPECT_EQ(obj->freeforms[0].state.type, c.type) << c.line;
+    gmdl_obj_free(obj);
+  }
+}
+
+// -1 was the "the file set none" sentinel for `deg` and `step` until the
+// fuzzer wrote `step -1 1`, which is a line a file may legitimately carry.
+// The dump read that real state as "none in force", wrote nothing, and the
+// reload came back with the second number gone. Every int32_t is a value
+// some file can write, so absence is recorded as a count instead - the shape
+// `vp` already used for exactly this reason (3.19).
+TEST(ObjFreeform, ANegativeDegreeOrStepIsAValueAndNotAnAbsence) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\ncstype bspline\nstep -1 1\ndeg -1 2\n"
+      "curv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  const GMDL_Obj_Freeform_State & st = obj->freeforms[0].state;
+  EXPECT_EQ(st.step_u, -1);
+  EXPECT_EQ(st.step_v, 1);
+  EXPECT_EQ(st.step_count, 2);
+  EXPECT_EQ(st.degree_u, -1);
+  EXPECT_EQ(st.degree_v, 2);
+  EXPECT_EQ(st.degree_count, 2);
+
+  MemStream stream(dump_text(obj));
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->freeform_count, 1u);
+  const GMDL_Obj_Freeform_State & back = again->freeforms[0].state;
+  EXPECT_EQ(back.step_u, -1);
+  EXPECT_EQ(back.step_v, 1);
+  EXPECT_EQ(back.step_count, 2);
+  EXPECT_EQ(back.degree_u, -1);
+  EXPECT_EQ(back.degree_v, 2);
+  EXPECT_EQ(back.degree_count, 2);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// A one-number `deg` is a different statement from a two-number one, and the
+// count is what keeps them apart on the way out.
+TEST(ObjDump, ADegreeKeepsHowManyNumbersItHad) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\ndeg 3\ncurv 0 1 1 1\nend\n"
+      "deg 3 0\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 2u);
+
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("deg 3\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("deg 3 0\n"), std::string::npos) << text;
+
+  MemStream stream(text);
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->freeform_count, 2u);
+  EXPECT_EQ(again->freeforms[0].state.degree_count, 1);
+  EXPECT_EQ(again->freeforms[1].state.degree_count, 2);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeform, ADegreeOrStepWithNoNumberIsAFormatError) {
+  EXPECT_EQ(load_text_expecting_failure("deg\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("deg x\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("step\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("step x\n"), GMDL_ERR_FORMAT);
+}
+
+// The answer `s`, `lod` and `illum` already give: a value the model cannot
+// hold is a limit, and storing something else instead makes the file
+// unrecoverable.
+TEST(ObjFreeform, ADegreeTooWideForTheFieldIsALimit) {
+  EXPECT_EQ(load_text_expecting_failure("deg 2147483648\n"), GMDL_ERR_LIMIT);
+  EXPECT_EQ(load_text_expecting_failure("deg 1 99999999999999999999\n"),
+      GMDL_ERR_LIMIT);
+  EXPECT_EQ(load_text_expecting_failure("step -2147483649\n"),
+      GMDL_ERR_LIMIT);
+}
+
+// The state is state: it applies to every element after it until something
+// changes it, and each element carries what was in force where it began.
+TEST(ObjFreeform, EachElementCarriesTheStateInForceWhereItBegan) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\n"
+      "cstype bezier\ndeg 2\n"
+      "curv 0 1 1 2\nend\n"
+      "deg 5\n"
+      "curv 0 1 1 2\nend\n"
+      "curv 0 1 1 2\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 3u);
+  EXPECT_EQ(obj->freeforms[0].state.degree_u, 2);
+  EXPECT_EQ(obj->freeforms[1].state.degree_u, 5);
+  // The third states nothing of its own, so it keeps what was in force.
+  EXPECT_EQ(obj->freeforms[2].state.degree_u, 5);
+  EXPECT_EQ(obj->freeforms[2].state.type, GMDL_OBJ_CSTYPE_BEZIER);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeform, ABasisMatrixIsKeptAsASpan) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\n"
+      "cstype bmatrix\ndeg 1\n"
+      "bmat u 1 0 -1 1\n"
+      "bmat v 2 0 -2 2\n"
+      "curv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  const GMDL_Obj_Freeform_State & st = obj->freeforms[0].state;
+  ASSERT_EQ(st.basis_u_count, 4u);
+  ASSERT_EQ(st.basis_v_count, 4u);
+  ASSERT_EQ(obj->basis_value_count, 8u);
+  EXPECT_FLOAT_EQ(obj->basis_values[st.basis_u_start], 1.0f);
+  EXPECT_FLOAT_EQ(obj->basis_values[st.basis_u_start + 2], -1.0f);
+  EXPECT_FLOAT_EQ(obj->basis_values[st.basis_v_start], 2.0f);
+  EXPECT_FLOAT_EQ(obj->basis_values[st.basis_v_start + 2], -2.0f);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeform, ABmatNeedsAnAxisAndAtLeastOneValue) {
+  EXPECT_EQ(load_text_expecting_failure("bmat\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("bmat u\n"), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("bmat w 1 2\n"), GMDL_ERR_FORMAT);
+}
+
+// A file may state the degree after the matrix, so the length cannot be
+// checked here without rejecting a document whose directives are merely in
+// an order this parser did not expect.
+TEST(ObjFreeform, ABmatIsNotCheckedAgainstTheDegree) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\ncstype bmatrix\nbmat u 1 2 3\ndeg 3\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  EXPECT_EQ(obj->freeforms[0].state.basis_u_count, 3u);
+  EXPECT_EQ(obj->freeforms[0].state.degree_u, 3);
+  gmdl_obj_free(obj);
+}
+
+// `end` carries no data, and a file that omits it is not refused.
+// Tabs between the tokens and blanks after the last one, which is where the
+// reference reader's own exports put them. The token loop ends on the blanks
+// rather than reading an empty token.
+TEST(ObjFreeform, TabsSeparateReferencesAndTrailingBlanksEndTheLine) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 2 0 0\n"
+      "deg\t2\t1\n"
+      "curv\t0\t1\t1\t2\t3  \t \nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  ASSERT_EQ(obj->freeforms[0].count, 3u);
+  EXPECT_EQ(obj->freeforms[0].state.degree_u, 2);
+  EXPECT_EQ(obj->freeforms[0].state.degree_v, 1);
+  EXPECT_EQ(obj->freeform_vertices[2].vertex, 2);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeform, AnUnclosedElementIsStillRecorded) {
+  GMDL_Obj * obj = load_text("v 0 0 0\ncurv 0 1 1 1\nv 1 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->freeform_count, 1u);
+  EXPECT_EQ(obj->vertex_count, 2u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeform, AnEndWithNoElementIsIgnored) {
+  GMDL_Obj * obj = load_text("end\nv 0 0 0\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->freeform_count, 0u);
+  EXPECT_EQ(obj->vertex_count, 1u);
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjFreeform, AFileWithNoFreeformGeometryAllocatesNone) {
+  GMDL_Obj * obj = load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->freeform_count, 0u);
+  EXPECT_EQ(obj->freeforms, nullptr);
+  EXPECT_EQ(obj->freeform_vertex_count, 0u);
+  EXPECT_EQ(obj->basis_value_count, 0u);
+  gmdl_obj_free(obj);
+}
+
+// The state directives apply to free-form elements the way they do to faces.
+TEST(ObjFreeform, AnElementCarriesTheMaterialMapAndRenderStateInForce) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nusemtl red\nusemap chrome\nlod 7\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  EXPECT_EQ(obj->freeforms[0].material_index, 0);
+  EXPECT_EQ(obj->freeforms[0].map_index, 0);
+  ASSERT_EQ(obj->freeforms[0].render_index, 0);
+  EXPECT_EQ(obj->render_states[0].lod, 7);
+  gmdl_obj_free(obj);
+}
+
+//
+// Dumping free-form geometry
+//
+
+// The text is asserted as well as the reparse. A dumper that wrote every
+// element as `curv` and a loader that read it back as `curv` would agree
+// with each other perfectly, and the surface would be gone.
+TEST(ObjDump, EachFreeformKindIsWrittenWithItsOwnDirective) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nvt 0 0\nvn 0 0 1\nvp 0\nvp 1\n"
+      "cstype bezier\ndeg 3\n"
+      "curv 0 1 1 2\nend\n"
+      "curv2 1 2\nend\n"
+      "surf 0 1 0 1 1/1/1 2\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 3u);
+
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("cstype bezier\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("deg 3\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("curv 0 1 1 2\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("curv2 1 2\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("surf 0 1 0 1 1/1/1 2\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("end\n"), std::string::npos) << text;
+  gmdl_obj_free(obj);
+}
+
+TEST(ObjDump, FreeformGeometrySurvivesARoundTrip) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\nv 2 0 0\nvt 0 0\nvn 0 0 1\nvp 0\nvp 0.5\n"
+      "cstype rat bspline\ndeg 2 1\nstep 4 5\n"
+      "bmat u 1 0 -1 1\nbmat v 2 3\n"
+      "curv 0 1 1 2 3\nend\n"
+      "cstype bezier\n"
+      "curv2 1 2\nend\n"
+      "surf 0 1 0.25 0.75 1/1/1 2 3//1\nend\n");
+  ASSERT_NE(obj, nullptr);
+
+  MemStream stream(dump_text(obj));
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->freeform_count, obj->freeform_count);
+  ASSERT_EQ(again->basis_value_count, obj->basis_value_count);
+
+  for (size_t i = 0; i < obj->freeform_count; i++) {
+    const GMDL_Obj_Freeform & a = obj->freeforms[i];
+    const GMDL_Obj_Freeform & b = again->freeforms[i];
+    EXPECT_EQ(a.kind, b.kind) << i;
+    for (size_t r = 0; r < 4; r++) {
+      EXPECT_FLOAT_EQ(a.range[r], b.range[r]) << i << " range " << r;
+    }
+    EXPECT_EQ(a.state.type, b.state.type) << i;
+    EXPECT_EQ(a.state.rational, b.state.rational) << i;
+    EXPECT_EQ(a.state.degree_u, b.state.degree_u) << i;
+    EXPECT_EQ(a.state.degree_v, b.state.degree_v) << i;
+    EXPECT_EQ(a.state.step_u, b.state.step_u) << i;
+    EXPECT_EQ(a.state.step_v, b.state.step_v) << i;
+    ASSERT_EQ(a.state.basis_u_count, b.state.basis_u_count) << i;
+    ASSERT_EQ(a.state.basis_v_count, b.state.basis_v_count) << i;
+    for (size_t k = 0; k < a.state.basis_u_count; k++) {
+      EXPECT_FLOAT_EQ(obj->basis_values[a.state.basis_u_start + k],
+          again->basis_values[b.state.basis_u_start + k]);
+    }
+    ASSERT_EQ(a.count, b.count) << i;
+    for (size_t k = 0; k < a.count; k++) {
+      const GMDL_Obj_Freeform_Vertex & x = obj->freeform_vertices[a.start + k];
+      const GMDL_Obj_Freeform_Vertex & y =
+          again->freeform_vertices[b.start + k];
+      EXPECT_EQ(x.vertex, y.vertex) << i << " ref " << k;
+      EXPECT_EQ(x.texcoord, y.texcoord) << i << " ref " << k;
+      EXPECT_EQ(x.normal, y.normal) << i << " ref " << k;
+    }
+  }
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// Two states differing in one half of a two-part comparison each: the first
+// pair in `rat` alone with the same basis, the second in `deg`'s second
+// number alone with the same first. A document whose states differ in both
+// halves at once never evaluates either half, so a dumper comparing `cstype`
+// without `rat` - or `deg` on its first number - round-trips it perfectly.
+// Both mutations survived the suite until this test existed.
+TEST(ObjDump, StatesDifferingInOneHalfOfAComparisonStillChange) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\n"
+      "cstype rat bspline\ndeg 2 1\n"
+      "curv 0 1 1 2\nend\n"
+      "cstype bspline\n" // Same basis, no longer rational.
+      "curv 0 1 1 2\nend\n"
+      "deg 2 3\n" // Same first number, different second.
+      "curv 0 1 1 2\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 3u);
+  ASSERT_TRUE(obj->freeforms[0].state.rational);
+  ASSERT_FALSE(obj->freeforms[1].state.rational);
+
+  MemStream stream(dump_text(obj));
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->freeform_count, 3u);
+  EXPECT_TRUE(again->freeforms[0].state.rational);
+  EXPECT_FALSE(again->freeforms[1].state.rational);
+  EXPECT_EQ(again->freeforms[1].state.type, GMDL_OBJ_CSTYPE_BSPLINE);
+  EXPECT_EQ(again->freeforms[1].state.degree_v, 1);
+  EXPECT_EQ(again->freeforms[1].state.degree_count, 2);
+  EXPECT_EQ(again->freeforms[2].state.degree_u, 2);
+  EXPECT_EQ(again->freeforms[2].state.degree_v, 3);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// Only the directives that differ, which is what makes the output readable
+// rather than a full state block before every patch.
+TEST(ObjDump, UnchangedFreeformStateIsNotRewritten) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\nv 1 0 0\n"
+      "cstype bezier\ndeg 3\n"
+      "curv 0 1 1 2\nend\n"
+      "curv 0 1 1 2\nend\n"
+      "curv 0 1 1 2\nend\n");
+  ASSERT_NE(obj, nullptr);
+
+  std::string text = dump_text(obj);
+  size_t cstypes = 0;
+  for (size_t at = text.find("cstype "); at != std::string::npos;
+      at = text.find("cstype ", at + 1)) {
+    cstypes++;
+  }
+  EXPECT_EQ(cstypes, 1u) << text;
+  gmdl_obj_free(obj);
+}
+
+// Two matrices of the same length and different values. The dumper compares
+// spans rather than values, and a comparison that looked at the count alone
+// would suppress the second `bmat` here - leaving both elements sharing the
+// first matrix, which is the shape of a state machine that writes too little
+// rather than too much.
+TEST(ObjDump, TwoBasisMatricesOfEqualLengthAreBothWritten) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\ncstype bmatrix\ndeg 1\n"
+      "bmat u 1 0 -1 1\ncurv 0 1 1 1\nend\n"
+      "bmat u 2 0 -2 2\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 2u);
+
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("bmat u 1 0 -1 1\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("bmat u 2 0 -2 2\n"), std::string::npos) << text;
+
+  MemStream stream(text);
+  GMDL_Obj * again = nullptr;
+  ASSERT_EQ(gmdl_obj_load(stream.get(), nullptr, nullptr, &again), GMDL_OK);
+  ASSERT_NE(again, nullptr);
+  ASSERT_EQ(again->freeform_count, 2u);
+  const GMDL_Obj_Freeform_State & first = again->freeforms[0].state;
+  const GMDL_Obj_Freeform_State & second = again->freeforms[1].state;
+  ASSERT_EQ(first.basis_u_count, 4u);
+  ASSERT_EQ(second.basis_u_count, 4u);
+  EXPECT_FLOAT_EQ(again->basis_values[first.basis_u_start], 1.0f);
+  EXPECT_FLOAT_EQ(again->basis_values[second.basis_u_start], 2.0f);
+  gmdl_obj_free(again);
+  gmdl_obj_free(obj);
+}
+
+// A `bmat` span of nothing is "no basis in force", which the format cannot
+// spell. A parse never produces it; a model built through the struct can,
+// and the dump then writes no `bmat` rather than an empty one.
+TEST(ObjDump, AnEmptyBasisSpanWritesNoBmat) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\ncstype bmatrix\nbmat u 1 2\ncurv 0 1 1 1\nend\n"
+      "bmat u 3 4\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 2u);
+  obj->freeforms[1].state.basis_u_count = 0;
+
+  std::string text = dump_text(obj);
+  EXPECT_NE(text.find("bmat u 1 2\n"), std::string::npos) << text;
+  EXPECT_EQ(text.find("bmat u 3 4\n"), std::string::npos) << text;
+  gmdl_obj_free(obj);
+}
+
+// A span reaching past the values is not a state a parse can produce either,
+// and reading it would run off the end of the array.
+TEST(ObjDump, ABasisSpanPastTheValuesWritesNoBmat) {
+  GMDL_Obj * obj =
+      load_text("v 0 0 0\ncstype bmatrix\nbmat u 1 2\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 1u);
+  obj->freeforms[0].state.basis_u_count = 99;
+
+  std::string text = dump_text(obj);
+  EXPECT_EQ(text.find("bmat u"), std::string::npos) << text;
+  gmdl_obj_free(obj);
+}
+
+// The other three states with no spelling, for the same reason.
+TEST(ObjDump, AFreeformStateReturningToNoneWritesNothing) {
+  GMDL_Obj * obj = load_text(
+      "v 0 0 0\ncstype bezier\ndeg 3\nstep 2\n"
+      "curv 0 1 1 1\nend\ncurv 0 1 1 1\nend\n");
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->freeform_count, 2u);
+  obj->freeforms[1].state.type = GMDL_OBJ_CSTYPE_NONE;
+  obj->freeforms[1].state.degree_count = 0;
+  obj->freeforms[1].state.step_count = 0;
+
+  std::string text = dump_text(obj);
+  // One of each, from the first element; nothing for the second's retreat.
+  EXPECT_EQ(text.find("cstype", text.find("cstype") + 1), std::string::npos)
+      << text;
+  EXPECT_EQ(text.find("deg", text.find("deg") + 1), std::string::npos) << text;
+  EXPECT_EQ(text.find("step", text.find("step") + 1), std::string::npos)
+      << text;
+  gmdl_obj_free(obj);
+}
+
 TEST(ObjParse, AVertexCarriesItsColour) {
   GMDL_Obj * obj = load_text(
       "v 0 0 0 1 0 0\n"
@@ -1540,8 +2212,35 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "v 3 0 0 0.5 0.25 0.125\n"
                           "vt 0 0\nvt 1 0\n"
                           "vn 0 0 1\n"
+                          // All three arities of `vp`, because the dump
+                          // writes each with a printf of its own and a
+                          // document with one arity leaves the other two
+                          // write-failure arms unreached (3.19).
+                          "vp 0.5\n"
+                          "vp 0.5 0.25\n"
+                          "vp 0.5 0.25 2\n"
                           "l 1 2\n"
                           "p 3\n"
+                          // Free-form geometry naming no material, so the
+                          // pass that writes the unmaterialed elements
+                          // reaches it; the three kinds and both `bmat`
+                          // axes, because each is a write arm of its own.
+                          "cstype bmatrix\n"
+                          "deg 1\n"
+                          "step 2\n"
+                          "bmat u 1 0 -1 1\n"
+                          "bmat v 1 0 -1 1\n"
+                          "curv 0 1 1 2\n"
+                          "end\n"
+                          "curv2 1 2\n"
+                          "end\n"
+                          // A second state, so every "only what differs"
+                          // arm is taken in the changed direction too.
+                          "cstype rat bspline\n"
+                          "deg 2 1\n"
+                          "step 3 4\n"
+                          "surf 0 1 0 1 1/1/1 2\n"
+                          "end\n"
                           "usemtl red\n"
                           "usemap chrome\n"
                           "bevel on\n"
@@ -1576,7 +2275,29 @@ const char * kRichModel = "mtllib m.mtl\n"
                           "usemtl red\n"
                           "usemap brushed\n"
                           "lod 9\n"
-                          "p 1 2\n";
+                          "p 1 2\n"
+                          // A material, map and render change at a free-form
+                          // element. The free-form pass calls all three
+                          // writers, and a document whose free-form elements
+                          // never change any of them leaves three write
+                          // failure arms unreached - measured: adding the
+                          // elements above without these left obj_dump.c at
+                          // 98.9%, down from 100%.
+                          "usemtl blue\n"
+                          "usemap etched\n"
+                          "lod 11\n"
+                          "curv 0 1 1 2\n"
+                          "end\n"
+                          // A state differing from the one above in `rat`
+                          // alone, and one differing in the second `deg`
+                          // number alone. Each is the second half of a
+                          // two-part comparison in the dumper, and a
+                          // document whose states differ in both halves at
+                          // once never evaluates either.
+                          "cstype bspline\n"
+                          "deg 2 3\n"
+                          "curv 0 1 1 2\n"
+                          "end\n";
 
 /** The same lines with no group, so the dumper writes every face in one
  *  range rather than walking groups. */
@@ -2819,14 +3540,21 @@ const LimitCase kLimitCases[] = {
         {"vt 0 0\nvt 1 0\nvt 2 0\n"}},
     {offsetof(GMDL_Limits, max_normals), "max_normals",
         {"vn 0 0 1\nvn 0 1 0\nvn 1 0 0\n"}},
+    {offsetof(GMDL_Limits, max_param_vertices), "max_param_vertices",
+        {"vp 0\nvp 0.5\nvp 1\n"}},
     // Three element kinds, and the one written last is the one that decides.
     {offsetof(GMDL_Limits, max_faces), "max_faces",
         {"v 0 0 0\nf 1 1 1\nf 1 1 1\nf 1 1 1\n",
             "v 0 0 0\nv 1 0 0\nl 1 2\nl 1 2\nl 1 2\n",
             "v 0 0 0\np 1\np 1\np 1\n"}},
-    // Read once for a face and once for a polyline; only the face was driven.
+    // One site per element kind that counts references. It was read once for
+    // a face and once for a polyline and only the face was driven, which is
+    // what this table's per-site rule came from; the three free-form kinds
+    // are three more sites and each is its own branch.
     {offsetof(GMDL_Limits, max_face_indices), "max_face_indices",
-        {"v 0 0 0\nf 1 1 1\n", "v 0 0 0\nv 1 0 0\nl 1 2 1 2\n"}},
+        {"v 0 0 0\nf 1 1 1\n", "v 0 0 0\nv 1 0 0\nl 1 2 1 2\n",
+            "v 0 0 0\ncurv 0 1 1 1 1\n", "vp 0\ncurv2 1 1 1\n",
+            "v 0 0 0\nsurf 0 1 0 1 1 1 1\n"}},
     {offsetof(GMDL_Limits, max_groups), "max_groups", {"g a\ng b\ng c\n"}},
     {offsetof(GMDL_Limits, max_materials), "max_materials",
         {"usemtl a\nusemtl b\nusemtl c\n"}},
@@ -2851,6 +3579,17 @@ const LimitCase kLimitCases[] = {
     {offsetof(GMDL_Limits, max_freeform_attrs), "max_freeform_attrs",
         {"ctech a\nctech b\nctech c\n", "stech a\nstech b\nstech c\n",
             "mg 1 1\nmg 2 1\nmg off\n"}},
+    // Read once for each of the three element directives; only `curv` was
+    // driven when this row was written.
+    {offsetof(GMDL_Limits, max_freeforms), "max_freeforms",
+        {"v 0 0 0\ncurv 0 1 1 1\ncurv 0 1 1 1\ncurv 0 1 1 1\n",
+            "vp 0\ncurv2 1 1\ncurv2 1 1\ncurv2 1 1\n",
+            "v 0 0 0\nsurf 0 1 0 1 1 1\nsurf 0 1 0 1 1 1\n"
+            "surf 0 1 0 1 1 1\n"}},
+    // One budget across every `bmat` line, not one per line: a file of many
+    // short matrices is the same unbounded quantity as one long one.
+    {offsetof(GMDL_Limits, max_basis_values), "max_basis_values",
+        {"bmat u 1 2 3\n", "bmat u 1\nbmat u 1\nbmat v 1\n"}},
 };
 
 } // namespace

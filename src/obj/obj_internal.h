@@ -30,6 +30,7 @@
 #include <ghoti.io/model/macros.h>
 
 #include <ghoti.io/model/core.h>
+#include <ghoti.io/model/obj.h>
 #include <ghoti.io/model/stream.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -173,6 +174,30 @@ bool gmdl_line_is(
  * @return true when appending would exceed the cap.
  */
 bool gmdl_limit_reached(size_t count, size_t limit);
+
+/**
+ * The `cstype` basis a word spells (3.19).
+ *
+ * The reader and the writer share one table on purpose. Two copies of five
+ * spellings is the shape that drifts silently: a basis added to the parser
+ * and not to the dumper is recorded and then written back as something else,
+ * and a round trip that compares this library against its own output agrees
+ * with itself the whole way.
+ *
+ * @param word The text after `cstype` and any `rat`, not NUL-delimited at
+ *   the word - the directive matcher's own whitespace rule ends it.
+ * @param out Receives the basis.
+ * @return true when the word names one.
+ */
+bool gmdl_cstype_from_name(const char * word, GMDL_Obj_Cstype * out);
+
+/**
+ * The word a basis is spelled with, for the dump.
+ *
+ * @param type The basis.
+ * @return Its spelling, or NULL for ::GMDL_OBJ_CSTYPE_NONE, which has none.
+ */
+const char * gmdl_cstype_name(GMDL_Obj_Cstype type);
 
 #ifdef __cplusplus
 }

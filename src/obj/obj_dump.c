@@ -29,6 +29,7 @@
 
 #include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/obj.h>
+#include "obj_internal.h"
 #include "../core/number_internal.h"
 
 /**
@@ -120,7 +121,18 @@ typedef struct {
    * lines that differ, and an index cannot say which those are.
    */
   GMDL_Obj_Render_State render;
+  /**
+   * The free-form state currently in force, as values for the same reason
+   * the render attributes are: `cstype`, `deg`, `bmat` and `step` each set
+   * one part of it, so moving between two states writes only the directives
+   * that differ and an index cannot say which those are.
+   */
+  GMDL_Obj_Freeform_State freeform;
 } obj_dump_state_t;
+
+/** The free-form state a file starts in: nothing set (3.19). */
+static const GMDL_Obj_Freeform_State obj_dump_freeform_none = {
+    GMDL_OBJ_CSTYPE_NONE, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 /**
  * Print a "usemtl" line naming a material.
@@ -298,6 +310,157 @@ static int obj_dump_face_range(FILE * fd, const GMDL_Obj * obj, size_t start,
 }
 
 /**
+ * Write one `bmat` line, if the span in force has changed.
+ *
+ * Spans are compared rather than values. Within one parse that is exact: a
+ * `bmat` line appends once and every element declared while it is in force
+ * copies the same start and count, so two elements share a span exactly when
+ * they share a matrix. For a model assembled through the struct it is
+ * conservative in the harmless direction - two equal matrices at different
+ * spans write the line twice, which the reload reads back the same.
+ */
+static int obj_dump_basis(FILE * fd, const GMDL_Obj * obj, const char * axis,
+    size_t start, size_t count, size_t * carried_start,
+    size_t * carried_count) {
+  if (start == *carried_start && count == *carried_count) {
+    return 0;
+  }
+  *carried_start = start;
+  *carried_count = count;
+  // A span of nothing is "no basis in force", which the format has no
+  // spelling for - the same shape as an element naming no material while one
+  // is in force (section 9). Nothing is written and the reload keeps what it
+  // had; a parse cannot produce it, since `bmat` only ever sets a basis.
+  if (count == 0 || start + count > obj->basis_value_count) {
+    return 0;
+  }
+  if (fprintf(fd, "bmat %s", axis) < 0) {
+    return -1;
+  }
+  for (size_t i = 0; i < count; i++) {
+    if (fprintf(fd, " %.9g", obj->basis_values[start + i]) < 0) {
+      return -1;
+    }
+  }
+  return fprintf(fd, "\n") < 0 ? -1 : 0;
+}
+
+/**
+ * Write a `deg` or `step` line, if that pair has changed.
+ *
+ * How many numbers to write comes from the state's own count, not from
+ * testing a number against a sentinel. Every `int32_t` is a value some file
+ * can write - `step -1 1` among them - so a sentinel here made a real state
+ * indistinguishable from "none in force", and the dump wrote nothing for it
+ * (3.19).
+ */
+static int obj_dump_int_pair(FILE * fd, const char * directive, int32_t u,
+    int32_t v, int32_t count, int32_t * carried_u, int32_t * carried_v,
+    int32_t * carried_count) {
+  if (u == *carried_u && v == *carried_v && count == *carried_count) {
+    return 0;
+  }
+  *carried_u = u;
+  *carried_v = v;
+  *carried_count = count;
+  if (count <= 0) {
+    return 0; // "The file set none", which has no spelling.
+  }
+  int written = count == 1 ? fprintf(fd, "%s %d\n", directive, u)
+                           : fprintf(fd, "%s %d %d\n", directive, u, v);
+  return written < 0 ? -1 : 0;
+}
+
+/**
+ * Move the file's free-form state to @p wanted, writing only the directives
+ * that differ.
+ *
+ * Each of the four sets one part of the state and the parts are independent,
+ * so this is the render-attribute writer's shape rather than the material
+ * one's: there is no single line that says "all of it".
+ *
+ * A state this cannot reach writes nothing for that part, and the reload
+ * keeps what it had. None of those is a state a parse produces - `cstype`,
+ * `deg`, `step` and `bmat` each only ever set a value, and the format gives
+ * none of them an "off" - so this is the same class as an element naming no
+ * material while one is in force (section 9).
+ *
+ * @param fd Destination.
+ * @param obj The model, for the basis values.
+ * @param wanted The state the element was declared in.
+ * @param state Carried state, updated.
+ * @return 0, or -1 on a write failure.
+ */
+static int obj_dump_freeform_change(FILE * fd, const GMDL_Obj * obj,
+    const GMDL_Obj_Freeform_State * wanted, obj_dump_state_t * state) {
+  if (wanted->type != state->freeform.type
+      || wanted->rational != state->freeform.rational) {
+    state->freeform.type = wanted->type;
+    state->freeform.rational = wanted->rational;
+    const char * name = gmdl_cstype_name(wanted->type);
+    if (name
+        && fprintf(fd, "cstype %s%s\n", wanted->rational ? "rat " : "", name)
+            < 0) {
+      return -1;
+    }
+  }
+  if (obj_dump_int_pair(fd, "deg", wanted->degree_u, wanted->degree_v,
+          wanted->degree_count, &state->freeform.degree_u,
+          &state->freeform.degree_v, &state->freeform.degree_count)
+      < 0) {
+    return -1;
+  }
+  if (obj_dump_int_pair(fd, "step", wanted->step_u, wanted->step_v,
+          wanted->step_count, &state->freeform.step_u,
+          &state->freeform.step_v, &state->freeform.step_count)
+      < 0) {
+    return -1;
+  }
+  if (obj_dump_basis(fd, obj, "u", wanted->basis_u_start,
+          wanted->basis_u_count, &state->freeform.basis_u_start,
+          &state->freeform.basis_u_count)
+      < 0) {
+    return -1;
+  }
+  return obj_dump_basis(fd, obj, "v", wanted->basis_v_start,
+      wanted->basis_v_count, &state->freeform.basis_v_start,
+      &state->freeform.basis_v_count);
+}
+
+/**
+ * Write one free-form element, and the `end` that closes it.
+ *
+ * `end` is written although nothing records it: the specification requires
+ * it, and a reader that needs it to know where an element stops would
+ * otherwise read the next directive as part of this one.
+ */
+static int obj_dump_freeform(
+    FILE * fd, const GMDL_Obj * obj, const GMDL_Obj_Freeform * element) {
+  const char * directive = element->kind == GMDL_OBJ_CURVE2 ? "curv2"
+      : (element->kind == GMDL_OBJ_SURFACE                  ? "surf"
+                                                            : "curv");
+  if (fprintf(fd, "%s", directive) < 0) {
+    return -1;
+  }
+  size_t ranges = element->kind == GMDL_OBJ_SURFACE ? 4u
+      : (element->kind == GMDL_OBJ_CURVE            ? 2u
+                                                    : 0u);
+  for (size_t i = 0; i < ranges; i++) {
+    if (fprintf(fd, " %.9g", element->range[i]) < 0) {
+      return -1;
+    }
+  }
+  for (size_t j = 0; j < element->count; j++) {
+    const GMDL_Obj_Freeform_Vertex * ref =
+        &obj->freeform_vertices[element->start + j];
+    if (obj_dump_reference(fd, ref->vertex, ref->texcoord, ref->normal) < 0) {
+      return -1;
+    }
+  }
+  return fprintf(fd, "\nend\n") < 0 ? -1 : 0;
+}
+
+/**
  * Print the polylines and the points, which no group covers.
  *
  * Called twice, because OBJ cannot turn a material off. An element declared
@@ -322,7 +485,7 @@ static int obj_dump_face_range(FILE * fd, const GMDL_Obj * obj, size_t start,
  *   the rest.
  * @return 0, or -1 on a write failure.
  */
-static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
+static int obj_dump_nonface_elements(FILE * fd, const GMDL_Obj * obj,
     obj_dump_state_t * state, bool unmaterialed) {
   for (size_t i = 0; i < obj->line_count; i++) {
     if ((obj->lines[i].material_index == -1) != unmaterialed) {
@@ -375,6 +538,34 @@ static int obj_dump_lines_and_points(FILE * fd, const GMDL_Obj * obj,
       return -1;
     }
     if (fprintf(fd, "p %lld\n", (long long)obj->points[i].vertex + 1) < 0) {
+      return -1;
+    }
+  }
+
+  // The free-form curves and surfaces, written here rather than among the
+  // faces for the reason the polylines are: they take a material, and an
+  // element naming none has to be written while none is in force.
+  for (size_t i = 0; i < obj->freeform_count; i++) {
+    if ((obj->freeforms[i].material_index == -1) != unmaterialed) {
+      continue;
+    }
+    if (obj_dump_material_change(
+            fd, obj, obj->freeforms[i].material_index, state)
+        < 0) {
+      return -1;
+    }
+    if (obj_dump_map_change(fd, obj, obj->freeforms[i].map_index, state) < 0) {
+      return -1;
+    }
+    if (obj_dump_render_change(fd, obj, obj->freeforms[i].render_index, state)
+        < 0) {
+      return -1;
+    }
+    if (obj_dump_freeform_change(fd, obj, &obj->freeforms[i].state, state)
+        < 0) {
+      return -1;
+    }
+    if (obj_dump_freeform(fd, obj, &obj->freeforms[i]) < 0) {
       return -1;
     }
   }
@@ -454,11 +645,31 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     }
   }
 
+  // The parameter-space control points (3.19). Written with exactly as many
+  // numbers as the line that made them carried: a `vp` with one number is a
+  // point on a curve and one with two is a point on a surface, so padding
+  // out to three would change what the statement says - and a reader that
+  // then counted them, as this one does, would come back with a different
+  // model. A count outside 1 to 3 cannot come from a parse; a model built by
+  // hand through the struct can hold one, and it writes the `u` it is sure
+  // of rather than reading past the record.
+  for (size_t i = 0; i < obj->param_vertex_count; i++) {
+    const GMDL_Obj_Param_Vertex * vp = &obj->param_vertices[i];
+    int written = vp->count >= 3
+        ? fprintf(fd, "vp %.9g %.9g %.9g\n", vp->u, vp->v, vp->w)
+        : (vp->count == 2 ? fprintf(fd, "vp %.9g %.9g\n", vp->u, vp->v)
+                          : fprintf(fd, "vp %.9g\n", vp->u));
+    if (written < 0) {
+      return GMDL_ERR_IO;
+    }
+  }
+
   // The parser starts with no material, no texture map, no smoothing group
   // and every render attribute at its default, so the dump does too; a model
   // whose faces all say zero writes no "s" at all, and one that never
   // mentions the render attributes writes none of them.
-  obj_dump_state_t state = {-1, -1, 0, {false, false, false, 0}};
+  obj_dump_state_t state = {
+      -1, -1, 0, {false, false, false, 0}, obj_dump_freeform_none};
 
   // The general statements lead, in file order. Their position relative to
   // the geometry is not recorded - nothing else in this model is ordered
@@ -489,8 +700,8 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
   }
 
   // Everything naming no material first, while none is in force. See
-  // obj_dump_lines_and_points().
-  if (obj_dump_lines_and_points(fd, obj, &state, true) < 0) {
+  // obj_dump_nonface_elements().
+  if (obj_dump_nonface_elements(fd, obj, &state, true) < 0) {
     return GMDL_ERR_IO;
   }
 
@@ -524,7 +735,7 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     return GMDL_ERR_IO;
   }
 
-  if (obj_dump_lines_and_points(fd, obj, &state, false) < 0) {
+  if (obj_dump_nonface_elements(fd, obj, &state, false) < 0) {
     return GMDL_ERR_IO;
   }
 

@@ -31,6 +31,8 @@
 
 #include <ghoti.io/cutil/allocator.h>
 #include <ghoti.io/cutil/array.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +63,10 @@ typedef struct {
   GCU_Array colors;
   GCU_Array texcoords;
   GCU_Array normals;
+  GCU_Array param_vertices;
+  GCU_Array freeforms;
+  GCU_Array freeform_vertices;
+  GCU_Array basis_values;
   GCU_Array faces;
   GCU_Array lines;
   GCU_Array line_vertices;
@@ -90,6 +96,14 @@ static bool obj_builder_init(
           &b->texcoords, sizeof(GMDL_Obj_TexCoord), 128, allocator)
       && gcu_array_create_in_place(
           &b->normals, sizeof(GMDL_Obj_Normal), 128, allocator)
+      && gcu_array_create_in_place(
+          &b->param_vertices, sizeof(GMDL_Obj_Param_Vertex), 16, allocator)
+      && gcu_array_create_in_place(
+          &b->freeforms, sizeof(GMDL_Obj_Freeform), 4, allocator)
+      && gcu_array_create_in_place(&b->freeform_vertices,
+          sizeof(GMDL_Obj_Freeform_Vertex), 16, allocator)
+      && gcu_array_create_in_place(
+          &b->basis_values, sizeof(float), 16, allocator)
       && gcu_array_create_in_place(
           &b->faces, sizeof(GMDL_Obj_Face), 128, allocator)
       && gcu_array_create_in_place(
@@ -149,6 +163,10 @@ static void obj_builder_destroy(obj_builder_t * b) {
   gcu_array_destroy_in_place(&b->colors);
   gcu_array_destroy_in_place(&b->texcoords);
   gcu_array_destroy_in_place(&b->normals);
+  gcu_array_destroy_in_place(&b->param_vertices);
+  gcu_array_destroy_in_place(&b->freeforms);
+  gcu_array_destroy_in_place(&b->freeform_vertices);
+  gcu_array_destroy_in_place(&b->basis_values);
   gcu_array_destroy_in_place(&b->faces);
   gcu_array_destroy_in_place(&b->lines);
   gcu_array_destroy_in_place(&b->line_vertices);
@@ -620,6 +638,221 @@ static GMDL_Result obj_render_use(GCU_Array * states,
   return GMDL_OK;
 }
 
+/**
+ * Read up to @p max integers from @p rest, the way obj_take_floats() reads
+ * numbers.
+ *
+ * Separate from gmdl_parse_int32(), which reads one and cannot say where it
+ * stopped - `deg 3 2` and `step 5 5` each carry two, and a second call would
+ * read the first number again.
+ *
+ * A number outside `int32_t` is ::GMDL_ERR_LIMIT rather than a saturated
+ * value, which is the answer `s`, `lod` and `illum` already give: a value
+ * the model cannot hold is a limit, and storing something else instead makes
+ * the file unrecoverable.
+ *
+ * @param rest The text after the directive.
+ * @param out Receives the numbers. At least @p max entries.
+ * @param max How many to read before stopping.
+ * @param out_count Receives how many were there, 0 to @p max.
+ * @return ::GMDL_OK or ::GMDL_ERR_LIMIT.
+ */
+static GMDL_Result obj_take_int32s(
+    const char * rest, int32_t * out, size_t max, size_t * out_count) {
+  size_t taken = 0;
+  while (taken < max) {
+    while (*rest == ' ' || *rest == '\t') {
+      rest++;
+    }
+    errno = 0;
+    char * end = NULL;
+    long value = strtol(rest, &end, 10);
+    if (end == rest) {
+      break;
+    }
+    if (errno == ERANGE || value > INT32_MAX || value < INT32_MIN) {
+      return GMDL_ERR_LIMIT;
+    }
+    out[taken++] = (int32_t)value;
+    rest = end;
+  }
+  *out_count = taken;
+  return GMDL_OK;
+}
+
+/** The free-form state a file starts in: nothing set (3.19). */
+static const GMDL_Obj_Freeform_State obj_freeform_state_none = {
+    GMDL_OBJ_CSTYPE_NONE, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+/**
+ * Read the basis a `cstype` line names, and whether it said `rat`.
+ *
+ * The format defines five bases and `rat` is a prefix on any of them, not a
+ * sixth. An unrecognised word is ::GMDL_ERR_FORMAT for the reason
+ * obj_parse_on_off() gives: the format defines the spellings, and there is
+ * no other reading to guess at.
+ */
+static GMDL_Result obj_parse_cstype(
+    const char * rest, GMDL_Obj_Cstype * out_type, bool * out_rational) {
+  bool rational = false;
+  const char * after = NULL;
+  if (gmdl_line_is(rest, "rat", &after)) {
+    rational = true;
+    rest = after;
+  }
+  GMDL_Obj_Cstype type = GMDL_OBJ_CSTYPE_NONE;
+  if (!gmdl_cstype_from_name(rest, &type)) {
+    return GMDL_ERR_FORMAT; // Including a bare `cstype` and `cstype rat`.
+  }
+  *out_type = type;
+  *out_rational = rational;
+  return GMDL_OK;
+}
+
+/**
+ * Append one free-form control-point reference.
+ *
+ * @param builder The builder.
+ * @param max The per-element cap from GMDL_Limits, or 0.
+ * @param count How many this element already has.
+ * @return ::GMDL_OK, ::GMDL_ERR_LIMIT or ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_freeform_vertex(obj_builder_t * b, size_t max,
+    size_t count, int32_t vertex, int32_t texcoord, int32_t normal) {
+  if (gmdl_limit_reached(count, max)) {
+    return GMDL_ERR_LIMIT;
+  }
+  GMDL_Obj_Freeform_Vertex entry = {vertex, texcoord, normal};
+  if (!gcu_array_append(&b->freeform_vertices, &entry)) {
+    return GMDL_ERR_OOM;
+  }
+  return GMDL_OK;
+}
+
+/**
+ * Read a `curv`, `curv2` or `surf` line and append the element it declares.
+ *
+ * The three differ in three ways and share everything else, which is why
+ * they are one function: how many numbers of parameter range they carry (two,
+ * none and four), which array their control points index, and whether a
+ * reference may carry a texture coordinate and a normal.
+ *
+ * **The state is copied onto the element**, not referred to. See
+ * ::GMDL_Obj_Freeform_State for why the free-form directives are held that
+ * way where the render attributes are indexed.
+ *
+ * An element naming no control points at all is ::GMDL_ERR_FORMAT. So is one
+ * whose parameter range is short: unlike a `vt`'s optional second number,
+ * the specification gives `curv` and `surf` no shorter form, and a missing
+ * `u1` would have to be invented.
+ *
+ * @param b The builder.
+ * @param rest The text after the directive.
+ * @param kind Which of the three it was.
+ * @param state The free-form state in force.
+ * @param limits The caps.
+ * @param material The material index in force, or -1.
+ * @param map The texture map index in force, or -1.
+ * @param render The render state index in force, or -1.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT, ::GMDL_ERR_LIMIT or ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_record_freeform_element(obj_builder_t * b,
+    const char * rest, GMDL_Obj_Freeform_Kind kind,
+    const GMDL_Obj_Freeform_State * state, const GMDL_Limits * limits,
+    int32_t material, int32_t map, int32_t render) {
+  if (gmdl_limit_reached(
+          gcu_array_count(&b->freeforms), limits->max_freeforms)) {
+    return GMDL_ERR_LIMIT;
+  }
+
+  GMDL_Obj_Freeform element;
+  memset(&element, 0, sizeof(element));
+  element.kind = kind;
+  element.state = *state;
+  element.material_index = material;
+  element.map_index = map;
+  element.render_index = render;
+  element.start = gcu_array_count(&b->freeform_vertices);
+
+  const char * cursor = rest;
+  size_t wanted = kind == GMDL_OBJ_SURFACE ? 4u
+      : (kind == GMDL_OBJ_CURVE            ? 2u
+                                           : 0u);
+  // This refusal cannot currently be told apart from the one at the end of
+  // the function, and that is a property of the format rather than a
+  // redundancy to tidy away. For the range to be short, strtof() has to stop
+  // at text that is not a number - and the token loop below then reads that
+  // same text as a control point, where obj_parse_face_token() needs it to
+  // begin with an integer, which it cannot. So a short range always reaches
+  // `count == 0` as well, and both answer GMDL_ERR_FORMAT. Measured: a
+  // mutation replacing this `return` with a `break` survives the whole
+  // suite. It is kept because it refuses the line for the reason the line is
+  // wrong, and because the two guards stop shadowing each other the moment
+  // either rule changes.
+  for (size_t i = 0; i < wanted; i++) {
+    char * end = NULL;
+    float value = strtof(cursor, &end);
+    if (end == cursor) {
+      return GMDL_ERR_FORMAT;
+    }
+    element.range[i] = value;
+    cursor = end;
+  }
+
+  // Counts at this point in the file, which is what a relative index is
+  // measured against - and `curv2` measures its against a different array
+  // from the other two, which is the whole reason `vp` exists.
+  size_t declared = kind == GMDL_OBJ_CURVE2
+      ? gcu_array_count(&b->param_vertices)
+      : gcu_array_count(&b->vertices);
+  size_t texcoords = gcu_array_count(&b->texcoords);
+  size_t normals = gcu_array_count(&b->normals);
+
+  while (*cursor) {
+    while (*cursor == ' ' || *cursor == '\t') {
+      cursor++;
+    }
+    if (!*cursor) {
+      break;
+    }
+    const char * token = cursor;
+    while (*cursor && *cursor != ' ' && *cursor != '\t') {
+      cursor++;
+    }
+
+    long long v = 0;
+    long long vt = 0;
+    long long vn = 0;
+    if (!obj_parse_face_token(token, cursor, &v, &vt, &vn)) {
+      return GMDL_ERR_FORMAT;
+    }
+    // Only a `surf` reference has a `v/vt/vn` form. Accepting one on a
+    // `curv` and dropping the extra fields would lose what the file said
+    // while reporting success, which is the thing this library refuses to
+    // do anywhere else.
+    if (kind != GMDL_OBJ_SURFACE && (vt != 0 || vn != 0)) {
+      return GMDL_ERR_FORMAT;
+    }
+    bool is_surface = kind == GMDL_OBJ_SURFACE;
+    GMDL_Result added = obj_freeform_vertex(b, limits->max_face_indices,
+        element.count, obj_index(v, declared),
+        is_surface ? obj_index(vt, texcoords) : -1,
+        is_surface ? obj_index(vn, normals) : -1);
+    if (added != GMDL_OK) {
+      return added;
+    }
+    element.count++;
+  }
+
+  if (element.count == 0) {
+    return GMDL_ERR_FORMAT; // An element naming no control points.
+  }
+  if (!gcu_array_append(&b->freeforms, &element)) {
+    return GMDL_ERR_OOM;
+  }
+  return GMDL_OK;
+}
+
 static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     const GMDL_Limits * limits, const GMDL_Allocator * allocator,
     GMDL_Obj ** out_obj) {
@@ -663,6 +896,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
   // index is what an element records. -1 is the all-defaults state.
   GMDL_Obj_Render_State current_render = {false, false, false, 0};
   int32_t current_render_index = -1;
+  // The free-form state in force, copied onto each element as it is
+  // declared (3.19). Nothing indexes it, so there is no second variable here
+  // the way there is for the render attributes.
+  GMDL_Obj_Freeform_State current_freeform = obj_freeform_state_none;
   // Smoothing group set by the last "s"; 0 is the format's own default, so a
   // file with no "s" line leaves every face at 0 and writes none back.
   int32_t current_smoothing = 0;
@@ -751,6 +988,167 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       }
       if (!gcu_array_append(&builder.normals, &vn)) {
         result = GMDL_ERR_OOM;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "vp", &rest)) {
+      // `vp u [v] [w]`: a control point in the parameter space of a curve or
+      // a surface (3.19), not a point in the model's space, and indexed
+      // separately from `v`. Only `u` is required - a `curv2` control point
+      // is one-dimensional - and the two that may be absent take the
+      // format's own defaults rather than being left unset, so a consumer
+      // that ignores `count` still reads something.
+      //
+      // How many the line carried is recorded, because it is the only thing
+      // that distinguishes a curve's control point from a surface's, and the
+      // dump cannot write the statement back without it.
+      float number[3];
+      size_t count = obj_take_floats(rest, number, 3);
+      if (count < 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      GMDL_Obj_Param_Vertex vp = {number[0], count >= 2 ? number[1] : 0.0f,
+          count >= 3 ? number[2] : 1.0f, (int32_t)count};
+      if (gmdl_limit_reached(gcu_array_count(&builder.param_vertices),
+              limits->max_param_vertices)) {
+        result = GMDL_ERR_LIMIT;
+        goto cleanup;
+      }
+      if (!gcu_array_append(&builder.param_vertices, &vp)) {
+        result = GMDL_ERR_OOM;
+        goto cleanup;
+      }
+    }
+    // The free-form state directives (3.19). Each is state exactly as
+    // `usemtl` is, and together they say how the control points a `curv`,
+    // `curv2` or `surf` names are to be read.
+    else if (gmdl_line_is(line_text, "cstype", &rest)) {
+      GMDL_Result parsed = obj_parse_cstype(
+          rest, &current_freeform.type, &current_freeform.rational);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "deg", &rest)) {
+      // `deg degu [degv]`: the second is a surface's, and a curve states
+      // one. How many the line carried is recorded rather than marked with
+      // a sentinel value, because every int32_t is a number some file can
+      // write: -1 was the sentinel at first and `step -1 1` broke the round
+      // trip (3.19).
+      int32_t number[2];
+      size_t count = 0;
+      GMDL_Result parsed = obj_take_int32s(rest, number, 2, &count);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      if (count < 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      current_freeform.degree_u = number[0];
+      current_freeform.degree_v = count >= 2 ? number[1] : 0;
+      current_freeform.degree_count = (int32_t)count;
+    }
+    else if (gmdl_line_is(line_text, "step", &rest)) {
+      int32_t number[2];
+      size_t count = 0;
+      GMDL_Result parsed = obj_take_int32s(rest, number, 2, &count);
+      if (parsed != GMDL_OK) {
+        result = parsed;
+        goto cleanup;
+      }
+      if (count < 1) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      current_freeform.step_u = number[0];
+      current_freeform.step_v = count >= 2 ? number[1] : 0;
+      current_freeform.step_count = (int32_t)count;
+    }
+    else if (gmdl_line_is(line_text, "bmat", &rest)) {
+      // `bmat u|v <values>`. How many values there are is `(deg + 1)`
+      // squared, which this does not check: the degree is set by a separate
+      // directive that a file may state after this one, and refusing the
+      // line here would reject a document whose directives are merely in an
+      // order this parser did not expect.
+      bool is_v = false;
+      const char * after = NULL;
+      if (gmdl_line_is(rest, "u", &after)) {
+        is_v = false;
+      }
+      else if (gmdl_line_is(rest, "v", &after)) {
+        is_v = true;
+      }
+      else {
+        result = GMDL_ERR_FORMAT; // Including a bare `bmat`.
+        goto cleanup;
+      }
+
+      size_t start = gcu_array_count(&builder.basis_values);
+      size_t count = 0;
+      const char * cursor = after;
+      for (;;) {
+        char * end = NULL;
+        float value = strtof(cursor, &end);
+        if (end == cursor) {
+          break;
+        }
+        cursor = end;
+        if (gmdl_limit_reached(gcu_array_count(&builder.basis_values),
+                limits->max_basis_values)) {
+          result = GMDL_ERR_LIMIT;
+          goto cleanup;
+        }
+        if (!gcu_array_append(&builder.basis_values, &value)) {
+          result = GMDL_ERR_OOM;
+          goto cleanup;
+        }
+        count++;
+      }
+      if (count == 0) {
+        result = GMDL_ERR_FORMAT;
+        goto cleanup;
+      }
+      if (is_v) {
+        current_freeform.basis_v_start = start;
+        current_freeform.basis_v_count = count;
+      }
+      else {
+        current_freeform.basis_u_start = start;
+        current_freeform.basis_u_count = count;
+      }
+    }
+    // The free-form elements themselves. `curv2` is tested first only so the
+    // pair reads in the order the specification lists them; gmdl_line_is()
+    // ends a directive at whitespace, so `curv` does not match `curv2 1 2`
+    // either way.
+    else if (gmdl_line_is(line_text, "curv2", &rest)) {
+      GMDL_Result recorded = obj_record_freeform_element(&builder, rest,
+          GMDL_OBJ_CURVE2, &current_freeform, limits, current_material,
+          current_map, current_render_index);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "curv", &rest)) {
+      GMDL_Result recorded = obj_record_freeform_element(&builder, rest,
+          GMDL_OBJ_CURVE, &current_freeform, limits, current_material,
+          current_map, current_render_index);
+      if (recorded != GMDL_OK) {
+        result = recorded;
+        goto cleanup;
+      }
+    }
+    else if (gmdl_line_is(line_text, "surf", &rest)) {
+      GMDL_Result recorded = obj_record_freeform_element(&builder, rest,
+          GMDL_OBJ_SURFACE, &current_freeform, limits, current_material,
+          current_map, current_render_index);
+      if (recorded != GMDL_OK) {
+        result = recorded;
         goto cleanup;
       }
     }
@@ -1315,6 +1713,13 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     obj->colors = obj_steal_into(&builder.colors, &obj->color_count);
     obj->texcoords = obj_steal_into(&builder.texcoords, &obj->texcoord_count);
     obj->normals = obj_steal_into(&builder.normals, &obj->normal_count);
+    obj->param_vertices =
+        obj_steal_into(&builder.param_vertices, &obj->param_vertex_count);
+    obj->freeforms = obj_steal_into(&builder.freeforms, &obj->freeform_count);
+    obj->freeform_vertices = obj_steal_into(
+        &builder.freeform_vertices, &obj->freeform_vertex_count);
+    obj->basis_values =
+        obj_steal_into(&builder.basis_values, &obj->basis_value_count);
     obj->faces = obj_steal_into(&builder.faces, &obj->face_count);
     obj->lines = obj_steal_into(&builder.lines, &obj->line_count);
     obj->line_vertices = obj_steal_into(
@@ -1411,6 +1816,10 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   gcu_allocator_free(allocator, obj->colors);
   gcu_allocator_free(allocator, obj->texcoords);
   gcu_allocator_free(allocator, obj->normals);
+  gcu_allocator_free(allocator, obj->param_vertices);
+  gcu_allocator_free(allocator, obj->freeforms);
+  gcu_allocator_free(allocator, obj->freeform_vertices);
+  gcu_allocator_free(allocator, obj->basis_values);
   if (obj->faces) {
     for (size_t i = 0; i < obj->face_count; i++) {
       gcu_allocator_free(allocator, obj->faces[i].overflow);

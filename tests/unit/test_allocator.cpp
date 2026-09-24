@@ -252,6 +252,41 @@ std::string rich_obj() {
   for (size_t i = 0; i < kGrow; i++) {
     t += "vn 0 1 0\n";
   }
+  // All three arities of `vp`, so the parameter points grow and the dump's
+  // three write arms - one per arity - are all in the sweep (3.19).
+  for (size_t i = 0; i < kGrow; i++) {
+    t += "vp 0." + std::to_string(i);
+    if (i % 3 == 1) {
+      t += " 0.25";
+    }
+    else if (i % 3 == 2) {
+      t += " 0.25 2";
+    }
+    t += "\n";
+  }
+  // Free-form geometry, enough of it that the elements, the references and
+  // the basis values each grow past their initial capacity. A distinct
+  // state every few elements, because the dump writes only what differs and
+  // a state that never changes leaves those arms unreached.
+  for (size_t i = 0; i < kGrow; i++) {
+    if (i % 10 == 0) {
+      t += (i % 20 ? "cstype bmatrix\n" : "cstype rat bezier\n");
+      t += "deg " + std::to_string(i + 1) + " 2\n";
+      t += "step " + std::to_string(i + 1) + "\n";
+      t += "bmat u 1 0 -1 " + std::to_string(i) + "\n";
+      t += "bmat v 1 0 -1 " + std::to_string(i) + "\n";
+    }
+    if (i % 3 == 0) {
+      t += "curv 0 1 1 2 3\n";
+    }
+    else if (i % 3 == 1) {
+      t += "curv2 1 2 3\n";
+    }
+    else {
+      t += "surf 0 1 0 1 1/1/1 2/2/1 3\n";
+    }
+    t += "end\n";
+  }
   t += "s 3\n";
   for (size_t i = 0; i < kGrow; i++) {
     if (i % 5 == 0) {
@@ -320,9 +355,12 @@ std::string rich_obj() {
  *
  * This document is the same shape at `kRegrow` entries, past three doublings
  * of the largest capacity, so every array here regrows and a refusal lands
- * on second and third growths as well as first ones. Measured: 1286
- * allocation sites against `rich_obj()`'s 542, so 744 (site, context) pairs
- * that were previously not in the sweep at all.
+ * on second and third growths as well as first ones. Measured 2026-09-23,
+ * after free-form geometry joined both documents: 1362 allocation sites
+ * against `rich_obj()`'s 935, so 427 (site, context) pairs that are not in
+ * the smaller sweep at all. The figures were 1286 and 542 when this document
+ * was added and both have grown since; what has to stay true is that this
+ * one is the larger, not either number.
  *
  * What has NOT been shown is a defect this catches and `rich_obj()` misses.
  * The argument for it is the larger population, not a demonstrated find, and
@@ -355,6 +393,16 @@ std::string regrow_obj() {
   }
   for (size_t i = 0; i < kRegrow; i++) {
     t += "vn 0 1 0\n";
+  }
+  for (size_t i = 0; i < kRegrow; i++) {
+    t += "vp 0." + std::to_string(i) + "\n";
+  }
+  for (size_t i = 0; i < kRegrow; i++) {
+    if (i % 10 == 0) {
+      t += "cstype bmatrix\ndeg " + std::to_string(i + 1) + "\n";
+      t += "bmat u 1 0 -1 " + std::to_string(i) + "\n";
+    }
+    t += "curv 0 1 1 2 3\nend\n";
   }
   t += "s 3\n";
   for (size_t i = 0; i < kRegrow; i++) {

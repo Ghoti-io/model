@@ -168,8 +168,10 @@ including the last, where `x y z w r g b` would be the other reasonable
 reading and neither importer takes it. The boundary between five and six is
 the whole rule, so it is what the tests pin.
 
-`w` is a rational weight for free-form geometry, which section 3.14 does not
-support, so nothing here could consume it and it is dropped.
+`w` is a rational weight, and a `v` carries it only for the free-form
+sub-language of 3.19 - which reads its control points from `v` but takes
+their weights from `vp` (3.19), so nothing here could consume a `w` on a `v`
+and it is dropped.
 
 Colours are recorded exactly as written: not clamped, not converted out of
 whatever colour space the writer had in mind. Blender treats file values as
@@ -481,12 +483,16 @@ where they sit is not something a consumer of it can observe.
 
 ### 3.14 Not read
 
-**The free-form geometry sub-language**: `vp`, `cstype`, `deg`, `bmat`,
-`step`, `curv`, `curv2`, `surf`, `parm`, `trim`, `hole`, `scrv`, `sp`, `end`
-and `con`. These describe curves and surfaces - NURBS and their trimming -
-which is a different kind of geometry from the polygon mesh this library
-holds, not another record to append to it. Supporting them means a second
-data model, not a field.
+**The free-form geometry sub-language**: `parm`, `trim`, `hole`, `scrv`,
+`sp` and `con`, which are what is left of it. These describe curves and surfaces - NURBS and their trimming - which
+is a different kind of geometry from the polygon mesh this library holds,
+not another record to append to it. Supporting them means a second data
+model, not a field.
+
+That reading was right, and it is being built rather than declined: 3.19 is
+the second data model, recorded and not evaluated. `vp`, `cstype`, `deg`,
+`bmat`, `step`, `curv`, `curv2`, `surf` and `end` are read as of 2026-09-23;
+the six above move into 3.19 as they land.
 
 All nine of what this section used to call the render attributes are read as
 of 2026-09-23: the four switches in 3.16, the two object references in 3.17,
@@ -673,6 +679,126 @@ this model is ordered against the geometry.
 
 `GMDL_Limits.max_freeform_attrs` caps the three together, one budget across
 one array.
+
+### 3.19 The free-form sub-language
+
+Fifteen directives describing NURBS curves and surfaces: `vp`, `cstype`,
+`deg`, `bmat`, `step`, `curv`, `curv2`, `surf`, `parm`, `trim`, `hole`,
+`scrv`, `sp`, `end` and `con`. 3.14 declined all of them together, and the
+reason it gave was right: this is a second data model, not another field on
+the polygon mesh.
+
+**What follows from that is where to stop, not whether to start.** This
+library *records* free-form geometry and does not *evaluate* it. Nothing
+here tessellates a surface, walks a trimming loop or resolves a basis
+matrix; a consumer that wants a mesh out of a NURBS patch has to do that
+itself, with what this parser hands it. The split is deliberate, and it is
+the whole of why the work is tractable: evaluating a surface is a different
+project from not discarding one, and a file that carries a `curv` currently
+loses it in silence.
+
+#### `vp u [v] [w]` - parameter-space control points
+
+The control points the free-form elements are built from. These are **not**
+`v` records and are **not** numbered with them: `vp` has its own index
+space, which `curv2` and `sp` count into while `curv` and `surf` count into
+`v`. A reader that merged the two arrays would resolve every free-form
+reference to the wrong point, and would do it silently, because both
+numberings start at 1.
+
+Only `u` is required. A `curv2` control point is one-dimensional, a
+surface's is two, and a rational one carries a weight as the third - so the
+line's *arity* is part of what it says, and this library records it in
+`GMDL_Obj_Param_Vertex.count` rather than normalising every point to three
+numbers. `vp 0.5` and `vp 0.5 0` are different statements; without the
+count they become the same record and the dump has to guess which to write.
+
+The coordinates a line did not carry hold the format's own defaults, 0 for
+`v` and 1 for `w`, so a consumer that ignores the count still reads
+something rather than whatever the allocation held. A line with no numbers
+at all is `GMDL_ERR_FORMAT`, as `vt` with none is.
+
+`GMDL_Limits.max_param_vertices` caps the count.
+
+#### `cstype`, `deg`, `bmat` and `step` - the free-form state
+
+Four directives saying how the control points of the elements that follow
+are to be read. Each is state in the file exactly as `usemtl` is, and
+together they are what makes a `curv` more than a list of indices.
+
+- **`cstype [rat] type`** names one of five bases: `bmatrix`, `bezier`,
+  `bspline`, `cardinal` or `taylor`. `rat` is a *prefix* making the curve or
+  surface rational, not a sixth basis, and it is kept as its own field for
+  that reason - folding the two into one enumeration would leave "rational"
+  unspellable for a basis nobody has written a rational example of. A word
+  that is none of the five is `GMDL_ERR_FORMAT`, for the reason 3.16 gives
+  for `bevel junk`.
+- **`deg degu [degv]`** and **`step stepu [stepv]`** each carry one number
+  for a curve and two for a surface. **How many the line carried is
+  recorded**, in `degree_count` and `step_count`, rather than marking an
+  absent number with a sentinel value - the shape `vp` uses above, and for a
+  sharper version of the same reason. -1 was the sentinel at first, and
+  `step -1 1` is a line a file may write: the dump read that real state as
+  "none in force", wrote nothing, and the reload lost the second number. The
+  fuzzer found it in ten minutes. Every `int32_t` is a value some file can
+  write, so no value can stand for absence; a count can. A number outside
+  `int32_t` is `GMDL_ERR_LIMIT`, the answer `s` and `lod` already give.
+- **`bmat u|v values...`** supplies the basis matrix `cstype bmatrix` needs.
+  Its length is `(deg + 1)` squared and **this is not checked**: the degree
+  comes from a separate directive that a file may state afterwards, so
+  refusing the line here would reject a document whose directives are merely
+  in an order this parser did not expect. The values live in
+  `GMDL_Obj.basis_values`, a flat array each state names a span of, because
+  the length is not knowable from the directive alone.
+
+**The state is held on each element, not indexed.** This is the opposite of
+what 3.16 does with the render attributes, and the reason is counts rather
+than taste: there is one face per `f` and a document has millions, so a
+field on a face is a field a document pays for everywhere; there is one
+`surf` per patch and a document has dozens. `GMDL_Obj_Freeform.state` is a
+copy of what was in force where the element began.
+
+#### `curv`, `curv2`, `surf` and `end` - the elements
+
+- **`curv u0 u1 v1 v2 ...`** is a curve in model space: two numbers of
+  parameter range, then control points indexing `GMDL_Obj.vertices`.
+- **`curv2 vp1 vp2 ...`** is a curve in parameter space: no range, and
+  control points indexing `GMDL_Obj.param_vertices` instead. **The two index
+  different arrays**, both numbered from 1 in the file, so a reader that got
+  this wrong would resolve every reference to a real point of the wrong kind
+  and never be told.
+- **`surf s0 s1 t0 t1 v1/vt1/vn1 ...`** is a surface: four numbers of range,
+  then references in the `v/vt/vn` form `f` uses (3.5), resolved the same
+  way. Only `surf` has that form; a `v/vt` token on a `curv` is
+  `GMDL_ERR_FORMAT` rather than a reference with the extra fields dropped,
+  because dropping them would lose what the file said while reporting
+  success.
+
+All three take relative (negative) indices, measured against the counts at
+that point in the file, exactly as `f` does - and `curv2` measures its
+against the `vp` count, which is the whole reason `vp` has an index space of
+its own.
+
+An element naming **no** control points is `GMDL_ERR_FORMAT`, and so is one
+whose parameter range is short: unlike `vt`'s optional second number, the
+specification gives `curv` and `surf` no shorter form and a missing `u1`
+would have to be invented.
+
+**`end` is read and not recorded.** It closes an element, and a closed
+element and an unclosed one hold the same data - the only thing `end`
+decides is which element a body statement belongs to, and that is answered
+by the time parsing finishes. A file that omits it is not refused. The dump
+writes one after every element, because the specification asks for it and a
+reader that needs it to know where an element stops would otherwise read the
+next directive as part of this one.
+
+`GMDL_Limits.max_freeforms` caps the elements, `max_basis_values` the `bmat`
+values across every line, and `max_face_indices` the references in one
+element - the same budget it already applies to one `f` and one `l`, because
+it is the same quantity.
+
+**What is not read yet**: the body statements `parm`, `trim`, `hole`, `scrv`
+and `sp`, and `con`. Those are 3.14's remaining list.
 
 ---
 
@@ -946,8 +1072,9 @@ assuming a surface would record something the file never said.
 | `max_vertices` | 0 (unlimited) | `v` records |
 | `max_texcoords` | 0 | `vt` |
 | `max_normals` | 0 | `vn` |
+| `max_param_vertices` | 0 | `vp` |
 | `max_faces` | 0 | `f`, `l` and `p` elements **together**, one budget |
-| `max_face_indices` | 0 | vertices in one face, or in one `l` |
+| `max_face_indices` | 0 | references in one `f`, `l`, `curv`, `curv2` or `surf` |
 | `max_groups` | 0 | `g` and `o` together |
 | `max_materials` | 0 | distinct `usemtl` names in OBJ; `newmtl` in MTL |
 | `max_statements` | 0 | `call` and `csh` records |
@@ -958,6 +1085,8 @@ assuming a surface would record something the file never said.
 | `max_shadow_objs` | 0 | `shadow_obj` records |
 | `max_trace_objs` | 0 | `trace_obj` records |
 | `max_freeform_attrs` | 0 | `ctech`, `stech` and `mg` records together |
+| `max_freeforms` | 0 | `curv`, `curv2` and `surf` elements together |
+| `max_basis_values` | 0 | `bmat` values, across every line |
 
 `0` means no limit. When a record would take a count from `limit` to
 `limit + 1`, the result is `GMDL_ERR_LIMIT` and parsing stops.
@@ -1172,6 +1301,20 @@ wrong; it cannot preserve an order it does not keep, and of the two answers
 it lands on the one a single-texture renderer wants. A test pins the order
 so it stays deliberate.
 
+`vp` is written with exactly as many numbers as the line that made it
+carried, because the count is what separates a curve's control point from a
+surface's (3.19). Writing all three back would change what the statement
+says, and this library's own reload would then come back with a different
+model.
+
+Free-form elements are written with the polylines and the points, in the
+same two passes and for the same reason - they take a material too. Their
+state directives are written the way the render attributes are, only where
+one of the four differs, and the basis spans are compared rather than the
+values: within one parse two elements share a span exactly when they share a
+matrix, and for a hand-built model the comparison errs towards writing a
+`bmat` twice, which reloads the same.
+
 The dump writes `usemtl` when the material changes, `usemap` when the
 texture map does, `s` when the smoothing group does, a render attribute when
 that one attribute changes, `g` for each group before its faces, and
@@ -1199,7 +1342,10 @@ Four things a `GMDL_OK` model may hold cannot be written back, because the
 format has no spelling for them rather than because the dumper is wrong: a
 material no element uses, an index below -1, a name - or a texture map path -
 ending in a backslash, and an element that names **no** material while one is
-in force. Section 10 says what each one is and how the fuzzers account for
+in force. The free-form state adds four more of that last shape - a
+`cstype`, `deg`, `step` or `bmat` returning to "none in force" - and none of
+them is reachable from a parse either, for the same reason: each directive
+only ever sets a value and the format gives none of them an "off". Section 10 says what each one is and how the fuzzers account for
 it.
 
 That last one is not a state a parse can reach: `material_index` moves from
@@ -1497,11 +1643,16 @@ section 12 is where they are written down.
   not one anybody is having in practice. 3.6 now keeps the whole line, which
   loses nothing either way and leaves this decidable later; what remains is
   whether to act on it.
-- **Free-form geometry.** `curv`, `surf` and the rest of the sub-language in
-  3.14. A second data model rather than more fields, so it is a decision
-  about what this library is for. Deciding it also settles 3.18, whose three
-  directives are recorded as text only because the geometry they describe is
-  not read.
+- **Free-form geometry: evaluating it.** Decided in part and open in part.
+  *Recording* it is settled and built - 3.19 holds `vp`, the state and the
+  elements, and the body statements follow. *Evaluating* it is not, and is
+  the question that was actually behind 3.14: nothing here tessellates a
+  surface or walks a trimming loop, and a polygon-mesh consumer like
+  `libs/cjelly` wants neither. Recording it costs a consumer nothing and
+  loses nothing; evaluating it is a different library. Once the body
+  statements land, 3.18's three directives get a typed home beside the model
+  they describe, which is the breaking change that section documents as
+  coming.
 - **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
   references. Strictness is defensible and this is now the only place 4.5
   takes it further than either: `-type` on a colour map was the other, and it

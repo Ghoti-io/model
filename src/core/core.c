@@ -68,6 +68,7 @@ void gmdl_limits_default(GMDL_Limits * limits) {
     .max_vertices = 0,
     .max_texcoords = 0,
     .max_normals = 0,
+    .max_param_vertices = 0,
     .max_faces = 0,
     .max_face_indices = 0,
     .max_groups = 0,
@@ -80,5 +81,7 @@ void gmdl_limits_default(GMDL_Limits * limits) {
     .max_shadow_objs = 0,
     .max_trace_objs = 0,
     .max_freeform_attrs = 0,
+    .max_freeforms = 0,
+    .max_basis_values = 0,
   };
 }

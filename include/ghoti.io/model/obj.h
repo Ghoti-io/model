@@ -162,6 +162,33 @@ typedef struct {
 } GMDL_Obj_Normal;
 
 /**
+ * @brief A point in parameter space, from `vp u [v] [w]` (3.19).
+ *
+ * The control points of the free-form sub-language, and a different kind of
+ * thing from ::GMDL_Obj_Vertex: these live in the parameter space of a curve
+ * or a surface rather than in the model's own space, which is why the format
+ * gives them their own directive and their own index space. `curv2` indexes
+ * this array; `curv` and `surf` index ::GMDL_Obj.vertices.
+ *
+ * **`count` is part of the record, not a parsing detail.** A `vp` naming one
+ * number is a point on a curve and one naming two is a point on a surface,
+ * and the file says which by how many it wrote. Without the count, `vp 0.5`
+ * and `vp 0.5 0` are the same record and the dump has to guess which
+ * statement to write back.
+ *
+ * The coordinates a line did not carry hold the format's own defaults - 0
+ * for `v` and 1 for `w`, the weight that leaves a rational point unweighted
+ * - so a consumer that ignores `count` still reads something meaningful
+ * rather than whatever was in the allocation.
+ */
+typedef struct {
+  float u;       ///< First coordinate; every `vp` line carries one.
+  float v;       ///< Second, or 0 when the line carried only `u`.
+  float w;       ///< Weight, or 1 when the line did not carry one.
+  int32_t count; ///< How many numbers the line carried: 1, 2 or 3.
+} GMDL_Obj_Param_Vertex;
+
+/**
  * @brief One vertex of a face beyond the fourth.
  *
  * Nearly every face in an OBJ file is a triangle or a quad, so the first four
@@ -375,6 +402,136 @@ typedef struct {
 } GMDL_Obj_Freeform_Attr;
 
 /**
+ * @brief Which basis a `cstype` line named (3.19).
+ */
+typedef enum GMDL_Obj_Cstype {
+  GMDL_OBJ_CSTYPE_NONE = 0, ///< No `cstype` was in force.
+  GMDL_OBJ_CSTYPE_BMATRIX,  ///< `cstype bmatrix`; `bmat` supplies the basis.
+  GMDL_OBJ_CSTYPE_BEZIER,   ///< `cstype bezier`.
+  GMDL_OBJ_CSTYPE_BSPLINE,  ///< `cstype bspline`.
+  GMDL_OBJ_CSTYPE_CARDINAL, ///< `cstype cardinal`.
+  GMDL_OBJ_CSTYPE_TAYLOR,   ///< `cstype taylor`.
+} GMDL_Obj_Cstype;
+
+/**
+ * @brief The free-form state in force where a curve or a surface began.
+ *
+ * `cstype`, `deg`, `bmat` and `step` are state in the file the way `usemtl`
+ * is: each applies to every free-form element after it until the next one
+ * changes it. Together they say how the control points a `curv`, `curv2` or
+ * `surf` names are to be interpreted, and without them the element is a list
+ * of indices that means nothing.
+ *
+ * **Held on the element rather than indexed**, which is the opposite of what
+ * ::GMDL_Obj_Render_State does, for a reason that is about counts and not
+ * about taste: there is one face per `f` and a document has millions of
+ * them, so four fields on a face would be four fields a document pays for
+ * everywhere. There is one ::GMDL_Obj_Freeform per patch and a document has
+ * dozens. An index here would buy a few bytes and cost a cap, a linear
+ * search and an indirection every consumer would have to follow.
+ *
+ * **`deg` and `step` record how many numbers their line carried**, in
+ * ::degree_count and ::step_count, rather than marking an absent one with a
+ * sentinel value. This is the shape ::GMDL_Obj_Param_Vertex uses and for a
+ * sharper version of the same reason: -1 was the sentinel here at first, and
+ * `step -1 1` is a line a file can write, so the dump read a real step as
+ * "none in force", wrote nothing, and the reload lost the second number. The
+ * fuzzer found it in ten minutes. A count cannot collide with a value.
+ *
+ * A count of 0 is "the file set none". A conforming document states `cstype`
+ * and `deg` before any element, so an element carrying ::GMDL_OBJ_CSTYPE_NONE
+ * or a degree count of 0 came from a file that did not - recorded rather than
+ * refused, because the specification's reading and what exporters emit have
+ * not been measured against each other here.
+ */
+typedef struct {
+  GMDL_Obj_Cstype type; ///< From `cstype`, or ::GMDL_OBJ_CSTYPE_NONE.
+  /**
+   * The `rat` prefix on `cstype`, making the curve or surface rational.
+   *
+   * Kept separately from ::type because it is orthogonal to the basis: the
+   * format writes `cstype rat bspline`, not a sixth basis name, and folding
+   * the two into one enumeration would make "rational" unspellable for a
+   * basis nobody has written a rational example of.
+   */
+  bool rational;
+  int32_t degree_u; ///< `deg`'s first number, as written.
+  int32_t degree_v; ///< `deg`'s second, as written; 0 when it carried one.
+  int32_t degree_count; ///< Numbers on the `deg` line: 0 (none), 1 or 2.
+  int32_t step_u;   ///< `step`'s first number, as written.
+  int32_t step_v;   ///< `step`'s second, as written; 0 when it carried one.
+  int32_t step_count; ///< Numbers on the `step` line: 0 (none), 1 or 2.
+  size_t basis_u_start; ///< First `bmat u` value in ::GMDL_Obj.basis_values.
+  size_t basis_u_count; ///< How many, or 0 when no `bmat u` was in force.
+  size_t basis_v_start; ///< First `bmat v` value in ::GMDL_Obj.basis_values.
+  size_t basis_v_count; ///< How many, or 0 when no `bmat v` was in force.
+} GMDL_Obj_Freeform_State;
+
+/**
+ * @brief Which free-form element a ::GMDL_Obj_Freeform holds.
+ */
+typedef enum GMDL_Obj_Freeform_Kind {
+  GMDL_OBJ_CURVE = 0, ///< `curv u0 u1 v1 v2 ...`, a curve in model space.
+  GMDL_OBJ_CURVE2,    ///< `curv2 vp1 vp2 ...`, a curve in parameter space.
+  GMDL_OBJ_SURFACE,   ///< `surf s0 s1 t0 t1 v1/vt1/vn1 ...`.
+} GMDL_Obj_Freeform_Kind;
+
+/**
+ * @brief One control-point reference of a free-form element.
+ *
+ * **Which array `vertex` indexes depends on the element's kind**, and that is
+ * the format's doing rather than this library's: ::GMDL_OBJ_CURVE and
+ * ::GMDL_OBJ_SURFACE name ::GMDL_Obj.vertices, while ::GMDL_OBJ_CURVE2 names
+ * ::GMDL_Obj.param_vertices. Both numberings start at 1 in the file, so a
+ * consumer that read the wrong array would get a real point every time and
+ * never be told.
+ *
+ * Only `surf` writes `texcoord` and `normal`; the other two kinds leave both
+ * at -1, because the format gives their references no such syntax.
+ */
+typedef struct {
+  int32_t vertex;   ///< Control point index (0-based), in the kind's array.
+  int32_t texcoord; ///< Texture coordinate index, or -1.
+  int32_t normal;   ///< Normal index, or -1.
+} GMDL_Obj_Freeform_Vertex;
+
+/**
+ * @brief A free-form curve or surface (`curv`, `curv2` or `surf`), recorded
+ * and not evaluated.
+ *
+ * **Nothing in this library tessellates one.** The control points, the
+ * parameter range and the state that says how to read them are all kept;
+ * turning that into triangles is the consumer's, and it is a different
+ * project from not discarding the patch. Section 3.19 says why the line is
+ * drawn there.
+ *
+ * `end` closes an element in the file. It is not recorded, because a closed
+ * element and an unclosed one hold the same data - the only thing `end`
+ * decides is which element a body statement belongs to, and that question is
+ * answered by the time parsing finishes.
+ */
+typedef struct {
+  GMDL_Obj_Freeform_Kind kind; ///< Which directive declared it.
+  GMDL_Obj_Freeform_State state; ///< The state in force where it began.
+  /**
+   * The parameter range, whose meaning follows ::kind.
+   *
+   * ::GMDL_OBJ_CURVE writes `u0` and `u1` into the first two and leaves the
+   * rest at zero; ::GMDL_OBJ_SURFACE writes `s0`, `s1`, `t0` and `t1` into
+   * all four; ::GMDL_OBJ_CURVE2 has no range and leaves all four at zero.
+   * One array rather than six named fields, because two of any naming would
+   * always be meaningless and a reader would have to know the kind either
+   * way.
+   */
+  float range[4];
+  size_t start; ///< Index of its first entry in ::GMDL_Obj.freeform_vertices.
+  size_t count; ///< Number of entries.
+  int32_t material_index; ///< Index into the material mappings, or -1.
+  int32_t map_index;      ///< Index into the map mappings, or -1.
+  int32_t render_index;   ///< Index into the render states, or -1.
+} GMDL_Obj_Freeform;
+
+/**
  * @brief A parsed OBJ file.
  */
 typedef struct {
@@ -400,6 +557,18 @@ typedef struct {
 
   GMDL_Obj_Normal * normals; ///< Normals, or NULL.
   size_t normal_count;       ///< Number of normals.
+
+  /**
+   * Parameter-space control points (`vp`), or NULL when the file named none.
+   *
+   * Their own index space, separate from ::vertices: `curv2` counts into
+   * this array and `curv` and `surf` count into that one, so a file carrying
+   * both has two independent numberings and a reader that merged them would
+   * resolve every free-form reference to the wrong point. `sp` counts into
+   * this array too, in the format; this library does not read it yet (3.19).
+   */
+  GMDL_Obj_Param_Vertex * param_vertices;
+  size_t param_vertex_count; ///< Number of parameter-space points.
 
   GMDL_Obj_Face * faces; ///< Faces, or NULL.
   size_t face_count;     ///< Number of faces.
@@ -446,6 +615,35 @@ typedef struct {
    */
   GMDL_Obj_Render_State * render_states;
   size_t render_state_count; ///< Number of render states.
+
+  /**
+   * Free-form curves and surfaces (`curv`, `curv2`, `surf`), or NULL.
+   *
+   * Recorded and not evaluated - see ::GMDL_Obj_Freeform.
+   */
+  GMDL_Obj_Freeform * freeforms;
+  size_t freeform_count; ///< Number of free-form elements.
+
+  /**
+   * Every free-form element's control-point references, in one flat array.
+   *
+   * Each element names its own span, the shape ::line_vertices already uses.
+   * Which array an entry's `vertex` indexes depends on the element's kind:
+   * see ::GMDL_Obj_Freeform_Vertex.
+   */
+  GMDL_Obj_Freeform_Vertex * freeform_vertices;
+  size_t freeform_vertex_count; ///< Number of those references.
+
+  /**
+   * Every `bmat` line's values, in one flat array, or NULL.
+   *
+   * A basis matrix is `(deg + 1)` squared numbers and the degree is set by a
+   * separate directive, so its length is not known from the directive alone
+   * - which is why these live in a flat array with spans rather than in a
+   * fixed field. ::GMDL_Obj_Freeform_State names the span in force.
+   */
+  float * basis_values;
+  size_t basis_value_count; ///< Number of `bmat` values.
 
   /**
    * `call` and `csh` statements, in file order, or NULL.

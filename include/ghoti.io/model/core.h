@@ -74,6 +74,7 @@ typedef struct GMDL_Limits {
   size_t max_vertices;    ///< Cap on `v` records.
   size_t max_texcoords;   ///< Cap on `vt` records.
   size_t max_normals;     ///< Cap on `vn` records.
+  size_t max_param_vertices; ///< Cap on `vp` records.
   size_t max_faces;       ///< Cap on `f` records.
   size_t max_face_indices; ///< Cap on vertices in a single face.
   size_t max_groups;      ///< Cap on `g`/`o` records.
@@ -87,6 +88,8 @@ typedef struct GMDL_Limits {
   size_t max_shadow_objs; ///< Cap on `shadow_obj` records.
   size_t max_trace_objs;  ///< Cap on `trace_obj` records.
   size_t max_freeform_attrs; ///< Cap on `ctech`, `stech` and `mg` records.
+  size_t max_freeforms;   ///< Cap on `curv`, `curv2` and `surf` elements.
+  size_t max_basis_values; ///< Cap on `bmat` values, across every line.
 } GMDL_Limits;
 
 /**
