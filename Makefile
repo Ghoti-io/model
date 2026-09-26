@@ -142,7 +142,6 @@ else ifeq ($(findstring MINGW32_NT,$(UNAME_S)),MINGW32_NT)  # 32-bit Windows
 
 # TODO(windows): the Windows branches in this file were adapted from image's
 # and have never been run, nor has GMDL_API's dllexport/dllimport switching.
-# See WINDOWS-TODO.md item 6.
 else ifeq ($(findstring MINGW64_NT,$(UNAME_S)),MINGW64_NT)  # 64-bit Windows
 	OS_NAME := Windows
 	LIB_EXTENSION := dll

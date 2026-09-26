@@ -102,8 +102,7 @@ because the alternative loses data over a backslash someone typed in prose,
 and because a comment is by definition not processed.
 
 The same split decides what happens after a name, where the two oracles
-swap sides; `notes/model/obj-differential.md` in the workspace has the
-measurements.
+swap sides.
 
 ### 2.7 Directives
 
@@ -340,8 +339,8 @@ so a document naming two libraries lost one silently.
 equivalent to `mtllibs[0].path`, and now derived from the list rather than
 maintained beside it. It held the last path before the list existed, which
 differs only for documents that were losing libraries anyway. Keeping it is
-what made this a non-breaking change: the one consumer in the workspace
-reads that field, names one library, and did not have to move.
+what made this a non-breaking change: the one consumer reads that field,
+names one library, and did not have to move.
 
 It was maintained beside the list for one commit, and the two disagreed
 straight away: a bare `mtllib` after a real one cleared the field and left
@@ -1443,7 +1442,7 @@ were both given this library's dumps of the checked-in models and of
 synthetic cases, and both produced geometry identical to what they read from
 the sources - the `%.9g` exponent forms, `1.00000001e-07` and
 `-3.40282347e+38` among them. That is a measured result rather than an
-intention; `notes/model/obj-differential.md` in the workspace has the method.
+intention.
 
 **Vertex colours survive both directions**, measured as a loop rather than
 as two half-checks: Blender was made to export a coloured mesh, this library
