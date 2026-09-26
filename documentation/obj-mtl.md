@@ -1,4 +1,4 @@
-# The OBJ and MTL dialect
+# OBJ and MTL
 
 **Status:** Specification of what this library accepts and produces, with
 the intended behaviour stated where the implementation departs from it.
