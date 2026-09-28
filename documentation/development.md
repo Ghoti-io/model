@@ -59,8 +59,9 @@ corpus is the ordinary spelling, and a flag that changes it belongs in a
 unit test.
 
 ```bash
-make fuzz FUZZ_TIME=3600     # both harnesses
+make fuzz FUZZ_TIME=3600     # OBJ, MTL and STL
 make fuzz-run-obj FUZZ_TIME=600
+make fuzz-run-stl FUZZ_TIME=600
 ```
 
 ## Memory
@@ -69,19 +70,22 @@ Every allocation goes through the `GMDL_Allocator` the caller supplied.
 `tests/unit/test_allocator.cpp` proves it with a counting allocator, including
 on the error paths, which is where a parser that unwinds by hand usually leaks.
 
-The OBJ parser builds into `GCU_Array`s and hands the finished contents to the
-model with `gcu_array_steal()`, so the public struct still exposes plain
-pointers and counts. The model is built last, after parsing has succeeded,
-which means there is no half-built model to unwind on an error path.
+The OBJ, MTL and STL parsers build into `GCU_Array`s and hand the finished
+contents to the model with `gcu_array_steal()`, so the public struct still
+exposes plain pointers and counts. The model is built last, after parsing has
+succeeded, which means there is no half-built model to unwind on an error path.
 
 ## Oracles
 
 Four references are pinned in `tools/oracle/containers/IMAGES`, in one image,
 because a disagreement has to be a fact about the programs and two images
 would make that fact ambiguous. Blender's importer and VTK's `vtkOBJReader`,
-reached through f3d, read OBJ. FreeCAD reads it with its own `ReaderOBJ`, not
-with the VTK it also links. OpenSCAD 2021.01 does not read or write OBJ; it is
-pinned so a later format asks this release.
+reached through f3d, read OBJ. FreeCAD reads OBJ with its own `ReaderOBJ`, not
+with the VTK it also links. OpenSCAD 2021.01 does not read OBJ; it answers
+STL, which is why it shares the pin. Blender, FreeCAD and OpenSCAD also read
+STL; the measured disagreements are the options behind
+`gmdl_stl_options_blender()`, `gmdl_stl_options_freecad()` and
+`gmdl_stl_options_openscad()`.
 
 ```bash
 make oracle-build      # once

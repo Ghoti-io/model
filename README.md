@@ -1,7 +1,8 @@
 # Ghoti.io Model
 
-Wavefront geometry and materials, read through a byte stream. The same call
-serves a file, a buffer already in memory, and a fuzzer's input.
+3D model formats over a byte stream: Wavefront OBJ and MTL, and STL in both
+spellings. The same call serves a file, a buffer already in memory, and a
+fuzzer's input.
 
 ## Formats
 
@@ -101,7 +102,7 @@ make -C libs/model test PREFIX="$PWD/.local"
 | --- | --- |
 | `make examples` | `examples/obj_info.c` |
 | `make coverage` | Line coverage, per file |
-| `make fuzz` | Build and run the OBJ and MTL fuzzers |
+| `make fuzz` | Build and run the OBJ, MTL and STL fuzzers |
 | `make docs` | The Doxygen manual, into `./docs` |
 
 ## The API
@@ -112,6 +113,7 @@ Everything is prefixed `gmdl_` / `GMDL_`, under `<ghoti.io/model/...>`.
 - **`stream.h`** — a byte stream over memory or a file, with a line reader.
 - **`obj.h`** — `GMDL_Obj_Options`, `gmdl_obj_load()`, `gmdl_obj_load_file()`, `gmdl_obj_free()`, `gmdl_obj_dump()`.
 - **`mtl.h`** — `GMDL_Mtl_Options`, `gmdl_mtl_load()`, `gmdl_mtl_load_file()`, `gmdl_mtl_free()`, `gmdl_mtl_find()`, `gmdl_mtl_dump()`.
+- **`stl.h`** — `GMDL_Stl_Options`, `gmdl_stl_load()`, `gmdl_stl_load_file()`, `gmdl_stl_free()`, `gmdl_stl_dump()`, and the Blender / FreeCAD / OpenSCAD presets.
 - **`allocator.h`** — `GMDL_Allocator`, which is cutil's `GCU_Allocator`.
 
 [Formats](#formats) is what is implemented.
@@ -126,13 +128,15 @@ program that links `ghoti.io-model-0` links this too.
 
 ## Documentation
 
-[documentation/obj-mtl.md](documentation/obj-mtl.md) is what the parsers
-accept, what they record, and what a caller still has to check. `make docs`
+[documentation/obj-mtl.md](documentation/obj-mtl.md) is what the OBJ and MTL
+parsers accept, what they record, and what a caller still has to check.
+[documentation/stl.md](documentation/stl.md) is the same for STL. `make docs`
 builds the manual.
 
 ## Status
 
-OBJ and MTL load, and both can be written back out.
+OBJ, MTL and STL load, and each can be written back out. STL dumps binary by
+default; ASCII is opt-in.
 
 ## License
 
