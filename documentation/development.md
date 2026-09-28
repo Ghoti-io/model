@@ -8,6 +8,7 @@ src/core/                 Result strings and the allocator
 src/stream/               GMDL_Stream
 src/obj/                  OBJ parsing and dumping
 src/mtl/                  MTL parsing and dumping
+src/stl/                  STL parsing and dumping
 tests/unit/               Unit tests (gtest)
 tests/data/models/        Checked-in fixtures
 tests/fuzz/               libFuzzer harnesses and seed corpus

@@ -1223,9 +1223,10 @@ endef
 
 $(eval $(call fuzz-rule,fuzz_obj,obj))
 $(eval $(call fuzz-rule,fuzz_mtl,mtl))
+$(eval $(call fuzz-rule,fuzz_stl,stl))
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
-fuzz: fuzz-run-obj fuzz-run-mtl
+fuzz: fuzz-run-obj fuzz-run-mtl fuzz-run-stl
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 	-@rm -rf $(FUZZ_DIR)

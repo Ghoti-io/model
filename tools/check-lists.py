@@ -154,7 +154,7 @@ grow = int(grow.group(1))
 
 capacities = []
 empty = []
-for source in ("src/obj/obj_load.c", "src/mtl/mtl_load.c"):
+for source in ("src/obj/obj_load.c", "src/mtl/mtl_load.c", "src/stl/stl_load.c"):
     text = read(source)
     for name, count in re.findall(
             r"gcu_array_create_in_place\(\s*&(?:\w+->)?(\w+)[^;]*?,"
@@ -432,6 +432,7 @@ def option_fields(header_path, struct):
 
 obj_fields = option_fields("include/ghoti.io/model/obj.h", "GMDL_Obj_Options")
 mtl_fields = option_fields("include/ghoti.io/model/mtl.h", "GMDL_Mtl_Options")
+stl_fields = option_fields("include/ghoti.io/model/stl.h", "GMDL_Stl_Options")
 option_fields_all = obj_fields + mtl_fields
 
 doc = read("documentation/obj-mtl.md")
@@ -457,6 +458,27 @@ if invented:
     fail("section 5 of documentation/obj-mtl.md lists %s that neither "
          "options struct has: %s."
          % ("fields" if len(invented) > 1 else "a field", ", ".join(invented)))
+
+stl_doc = read("documentation/stl.md")
+stl_section = re.search(r"^## 5\. Options$(.*?)^## 6\.", stl_doc, re.S | re.M)
+if not stl_section:
+    fail("could not find section 5 of documentation/stl.md")
+    stl_section_text = ""
+else:
+    stl_section_text = stl_section.group(1)
+stl_documented = set(re.findall(r"^\| `(\w+)` \|", stl_section_text, re.M))
+stl_undocumented = sorted(set(stl_fields) - stl_documented)
+if stl_undocumented:
+    fail("GMDL_Stl_Options has %s that section 5 of documentation/stl.md "
+         "does not list: %s."
+         % ("fields" if len(stl_undocumented) > 1 else "a field",
+            ", ".join(stl_undocumented)))
+stl_invented = sorted(stl_documented - set(stl_fields))
+if stl_invented:
+    fail("section 5 of documentation/stl.md lists %s that GMDL_Stl_Options "
+         "does not have: %s."
+         % ("fields" if len(stl_invented) > 1 else "a field",
+            ", ".join(stl_invented)))
 
 #
 # The fuzzer's index exemption against the types that carry an index
@@ -570,6 +592,8 @@ print("check-lists: %d builder capacities, largest %d, all under the sweep's "
       "kGrow of %d; %d deliberately empty"
       % (len(capacities), max(c for _, _, c in capacities), grow, len(empty)))
 print("check-lists: %d OBJ options fields and %d MTL options fields, each "
-      "with a row in section 5" % (len(obj_fields), len(mtl_fields)))
+      "with a row in section 5; %d STL options fields with a row in "
+      "documentation/stl.md section 5"
+      % (len(obj_fields), len(mtl_fields), len(stl_fields)))
 print("check-lists: %d index-carrying types, each named in the fuzzer's "
       "index exemption" % len(carrying))

@@ -698,6 +698,28 @@ const size_t kRegrowObjFloors[3] = {10, 600, 1200};
 // Measured; the file path is short, so these are small numbers.
 const size_t kObjFileFloors[3] = {14, 14, 14};
 const size_t kMtlFileFloors[3] = {5, 5, 5};
+const size_t kStlFloors[3] = {2, 2, 2};
+
+std::string rich_stl() {
+  std::string t = "solid sweep\n";
+  for (size_t i = 0; i < kGrow; i++) {
+    t += "  facet normal 0 0 1\n    outer loop\n";
+    t += "      vertex 0 0 0\n      vertex 1 0 0\n      vertex 0 1 0\n";
+    t += "    endloop\n  endfacet\n";
+  }
+  t += "endsolid sweep\n";
+  return t;
+}
+
+std::string dump_stl_to_string(GMDL_Stl * stl) {
+  gmdltest::CapturedOutput sink;
+  if (!sink.get()) {
+    return std::string();
+  }
+  GMDL_Result result = gmdl_stl_dump(stl, nullptr, sink.get());
+  std::string text = sink.finish();
+  return result == GMDL_OK ? text : std::string("<dump failed>");
+}
 
 // Every allocation the OBJ loader makes can fail, and before this sweep
 // existed not one of those arms had ever run - the same gap FailingSink
@@ -744,6 +766,19 @@ TEST(Allocator, EveryMtlAllocationFailureIsReported) {
         a.stop_failing();
         *out = mtl ? dump_to_string(mtl, gmdl_mtl_dump) : std::string();
         gmdl_mtl_free(mtl);
+        return result;
+      });
+}
+
+TEST(Allocator, EveryStlAllocationFailureIsReported) {
+  sweep_allocation_failures(
+      "stl", kStlFloors, [](gmdltest::FailingAllocator & a, std::string * out) {
+        MemStream stream(rich_stl());
+        GMDL_Stl * stl = nullptr;
+        GMDL_Result result = gmdl_stl_load(stream.get(), nullptr, a.get(), &stl);
+        a.stop_failing();
+        *out = stl ? dump_stl_to_string(stl) : std::string();
+        gmdl_stl_free(stl);
         return result;
       });
 }
