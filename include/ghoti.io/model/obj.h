@@ -145,6 +145,26 @@ typedef struct {
 } GMDL_Obj_Color;
 
 /**
+ * @brief The homogeneous weight on a `v` line (3.1).
+ *
+ * The specification's fourth number, which a rational curve multiplies its
+ * control point by. Kept beside the vertex rather than in it, for the reason
+ * ::GMDL_Obj_Color is: a polygon file never writes one, and widening every
+ * vertex to hold it would make that file pay for a curve it does not have.
+ *
+ * `w` is 1 when the line carried no weight, which is the value that leaves a
+ * point unweighted. ::present says which, because a file may write `w` as 1
+ * and an absent weight is also 1 - the same collision a colour has with
+ * white. Four or five numbers on the line are a weight (3.1). Six or more
+ * are the colour extension, which occupies those fields instead, so a vertex
+ * from a parse carries one or the other and not both.
+ */
+typedef struct {
+  float w;      ///< The weight, or 1 when the line carried none.
+  bool present; ///< True when the line carried a fourth number as a weight.
+} GMDL_Obj_Weight;
+
+/**
  * @brief A 2D texture coordinate.
  */
 typedef struct {
@@ -314,6 +334,15 @@ typedef struct {
    * write back the spelling the file used.
    */
   bool is_object;
+  /**
+   * True when this name was not the first on its `g` line.
+   *
+   * `g a b` is two groups that share one face range (3.6). The dump writes
+   * them as one line; two `g` lines would hand the faces to only the second
+   * group on the way back in. An `o` is never joined: the specification
+   * gives an object one name, and that name may contain spaces.
+   */
+  bool joined;
 } GMDL_Obj_Group;
 
 /**
@@ -745,6 +774,16 @@ typedef struct {
    */
   GMDL_Obj_Color * colors;
   size_t color_count; ///< Number of colours: 0, or ::vertex_count.
+
+  /**
+   * Homogeneous weights, or NULL when no `v` line carried one.
+   *
+   * The same shape as ::colors: when it is not NULL it has exactly
+   * ::vertex_count entries, indexed by vertex number, and an entry whose
+   * `present` is false holds 1. See ::GMDL_Obj_Weight.
+   */
+  GMDL_Obj_Weight * weights;
+  size_t weight_count; ///< Number of weights: 0, or ::vertex_count.
 
   GMDL_Obj_TexCoord * texcoords; ///< Texture coordinates, or NULL.
   size_t texcoord_count;         ///< Number of texture coordinates.

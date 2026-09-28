@@ -825,11 +825,22 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
     // A vertex whose colour is absent is written without one even in a file
     // that has colours, because that is what the file said and writing white
     // instead would turn "no colour here" into a colour on the way out.
+    // A weight and a colour occupy the same fields of a `v` line, so a parse
+    // produces one or the other (3.1). A model built by hand can set both;
+    // the weight is what gets written, because the four-number form is the
+    // specification's and there is no spelling that reloads as both.
+    const GMDL_Obj_Weight * weight
+        = (obj->weights && i < obj->weight_count && obj->weights[i].present)
+        ? &obj->weights[i]
+        : NULL;
     const GMDL_Obj_Color * color
         = (obj->colors && i < obj->color_count && obj->colors[i].present)
         ? &obj->colors[i]
         : NULL;
-    int written = color
+    int written = weight
+        ? fprintf(fd, "v %.9g %.9g %.9g %.9g\n", obj->vertices[i].x,
+            obj->vertices[i].y, obj->vertices[i].z, weight->w)
+        : color
         ? fprintf(fd, "v %.9g %.9g %.9g %.9g %.9g %.9g\n", obj->vertices[i].x,
             obj->vertices[i].y, obj->vertices[i].z, color->r, color->g,
             color->b)
@@ -907,12 +918,25 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
             < 0) {
       return GMDL_ERR_IO;
     }
-    for (size_t g = 0; g < obj->group_count; g++) {
-      // The spelling the file used, so `o` does not become `g` on the way
-      // out: Blender makes an object of one and a vertex group of the other.
-      if (fprintf(fd, "%s %s\n", obj->groups[g].is_object ? "o" : "g",
-              obj->groups[g].name)
-          < 0) {
+    for (size_t g = 0; g < obj->group_count;) {
+      // Names with `joined` set were one `g` line. Writing each as its own
+      // directive would put the faces on only the last of them, because a
+      // new `g` closes the previous group. The faces are written once, from
+      // the first name's range, which the parser keeps identical across the
+      // run.
+      size_t end = g + 1;
+      while (end < obj->group_count && obj->groups[end].joined) {
+        end++;
+      }
+      if (fprintf(fd, "%s", obj->groups[g].is_object ? "o" : "g") < 0) {
+        return GMDL_ERR_IO;
+      }
+      for (size_t n = g; n < end; n++) {
+        if (fprintf(fd, " %s", obj->groups[n].name) < 0) {
+          return GMDL_ERR_IO;
+        }
+      }
+      if (fprintf(fd, "\n") < 0) {
         return GMDL_ERR_IO;
       }
       if (obj_dump_face_range(fd, obj, obj->groups[g].start_face,
@@ -920,6 +944,7 @@ static GMDL_Result obj_dump_pinned(const GMDL_Obj * obj, FILE * fd) {
           < 0) {
         return GMDL_ERR_IO;
       }
+      g = end;
     }
   }
   else if (obj_dump_face_range(fd, obj, 0, obj->face_count, &state) < 0) {

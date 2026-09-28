@@ -123,6 +123,19 @@ TEST(Allocator, ObjParseUsesTheGivenAllocatorAndReturnsEverything) {
   EXPECT_EQ(counting.live, 0u) << "every allocation should have been returned";
 }
 
+TEST(Allocator, AFailedMtlParseFreesASpectralPath) {
+  Counting counting;
+  GMDL_Allocator allocator = make_allocator(&counting);
+
+  MemStream stream("newmtl m\nKd spectral lights.rfl\nKd 0.5 x\n");
+  GMDL_Mtl * mtl = nullptr;
+  EXPECT_EQ(gmdl_mtl_load(stream.get(), nullptr, &allocator, &mtl),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(mtl, nullptr);
+  EXPECT_GT(counting.allocations, 0u);
+  EXPECT_EQ(counting.live, 0u) << "the spectral path leaked with the parse";
+}
+
 TEST(Allocator, MtlParseUsesTheGivenAllocator) {
   Counting counting;
   GMDL_Allocator allocator = make_allocator(&counting);
@@ -245,6 +258,11 @@ std::string rich_obj() {
   }
   for (size_t i = 0; i < 5; i++) {
     t += "v " + std::to_string(i) + " 1 0 0.5 0.25 0.125\n";
+  }
+  // After the unweighted vertices, so the weight array is backfilled across
+  // a growth the way the colour array is. Four numbers is a weight (3.1).
+  for (size_t i = 0; i < 5; i++) {
+    t += "v " + std::to_string(i) + " 2 0 0.5\n";
   }
   for (size_t i = 0; i < kGrow; i++) {
     t += "vt 0.5\n"; // The one-number form, which is legal (3.2).
@@ -409,6 +427,9 @@ std::string regrow_obj() {
   for (size_t i = 0; i < kRegrow; i++) {
     t += "v " + std::to_string(i) + " 1 0 0.5 0.25 0.125\n";
   }
+  for (size_t i = 0; i < 5; i++) {
+    t += "v " + std::to_string(i) + " 2 0 0.5\n";
+  }
   for (size_t i = 0; i < kRegrow; i++) {
     t += "vt 0.5\n";
   }
@@ -491,8 +512,19 @@ std::string rich_mtl() {
   for (size_t i = 0; i < kGrow; i++) {
     std::string n = std::to_string(i);
     t += "newmtl a material " + n + "\n";
-    t += "Ka 0.1 0.2 0.3\nKd 0.4 0.5 0.6\nKs 1 1 1\n";
-    t += "Ns 32\nd 0.5\nillum 2\nKe 1 1 1\nPr 0.25\nmap_aat on\n";
+    // The first material states the forms the others do not, so the dump's
+    // xyz, spectral and -halo arms are in the sweep rather than only the
+    // RGB one. One material is enough: a path is a copy, not an array.
+    if (i == 0) {
+      t += "Ka xyz 0.1 0.2 0.3\nKd spectral lights.rfl 0.5\n";
+      t += "Ks spectral spec.rfl\nd -halo 0.5\nKe xyz 1 0 0\n";
+      t += "Tf spectral filt.rfl\n";
+    }
+    else {
+      t += "Ka 0.1 0.2 0.3\nKd 0.4 0.5 0.6\nKs 1 1 1\n";
+      t += "d 0.5\nKe 1 1 1\n";
+    }
+    t += "Ns 32\nillum 2\nPr 0.25\nmap_aat on\n";
     if (i < 3) {
       // -blendu, -blendv and -clamp are here because the writer gives each
       // its own fprintf and its own failure arm, and a map that states none

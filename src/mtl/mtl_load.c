@@ -40,82 +40,165 @@
 #include "../core/number_internal.h"
 
 /**
- * Read a colour property's value.
+ * Copy a token into a fresh buffer.
  *
- * Section 4.2 documents three forms. `K? r g b` is the ordinary one and
- * `K? r` means grey - the same value in all three channels. `K? xyz ...`
- * (CIE XYZ) and `K? spectral file [factor]` are real forms this library does
- * not implement.
+ * @param token The first byte.
+ * @param length How many bytes, not including a terminator.
+ * @param allocator The allocator for the copy.
+ * @param out Receives the copy. Unchanged on failure.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT when there is nothing to copy, or
+ *   ::GMDL_ERR_OOM.
+ */
+static GMDL_Result mtl_copy_token(const char * token, size_t length,
+    const GMDL_Allocator * allocator, char ** out) {
+  if (length == 0) {
+    return GMDL_ERR_FORMAT;
+  }
+  char * copy = gcu_allocator_malloc(allocator, length + 1);
+  if (!copy) {
+    return GMDL_ERR_OOM;
+  }
+  memcpy(copy, token, length);
+  copy[length] = '\0';
+  *out = copy;
+  return GMDL_OK;
+}
+
+/**
+ * Read a colour property.
  *
- * The unimplemented forms are GMDL_ERR_UNSUPPORTED, not GMDL_ERR_FORMAT.
- * Section 1 draws that line deliberately: the file is well-formed and the
- * reader is the one falling short, and a caller that meets the two wants to
- * do different things. Answering FORMAT to both meant a perfectly good
- * material library was rejected as corrupt.
+ * Three forms, and the statement is part of what is recorded (4.2). `K? r g b`
+ * and `K? r` are RGB, the second expanded to grey. `K? xyz x y z` is CIE XYZ,
+ * kept as XYZ rather than converted, because a conversion is a colour-space
+ * decision and the dump would then be unable to write the line back.
+ * `spectral file [factor]` records the path and does not open it. The three
+ * numbers are left at zero for a spectral statement: they are not a colour
+ * the file stated.
  *
  * @param rest The text after the directive.
- * @param out Receives three channel values.
- * @return ::GMDL_OK, ::GMDL_ERR_FORMAT or ::GMDL_ERR_UNSUPPORTED.
+ * @param allocator Allocator for a spectral path.
+ * @param out Receives three numbers. Zero for a spectral statement.
+ * @param statement Receives how the line was written. Its previous path is
+ *   freed when this replaces it.
+ * @return ::GMDL_OK, ::GMDL_ERR_FORMAT or ::GMDL_ERR_OOM.
  */
-static GMDL_Result mtl_parse_color(const char * rest, float * out) {
-  if (gmdl_line_is(rest, "xyz", NULL) || gmdl_line_is(rest, "spectral", NULL)) {
-    return GMDL_ERR_UNSUPPORTED;
-  }
+static GMDL_Result mtl_parse_color(const char * rest,
+    const GMDL_Allocator * allocator, float * out, GMDL_Mtl_Color * statement) {
+  GMDL_Mtl_Color parsed;
+  memset(&parsed, 0, sizeof(parsed));
+  float values[3] = {0.0f, 0.0f, 0.0f};
 
-  float values[3];
-  size_t count = 0;
-  const char * cursor = rest;
-  while (count < 3) {
-    char * end = NULL;
-    float value = strtof(cursor, &end);
-    if (end == cursor) {
-      break;
+  const char * after = NULL;
+  if (gmdl_line_is(rest, "xyz", &after)) {
+    size_t count = 0;
+    const char * cursor = after;
+    while (count < 3) {
+      char * end = NULL;
+      float value = strtof(cursor, &end);
+      if (end == cursor) {
+        break;
+      }
+      values[count++] = value;
+      cursor = end;
     }
-    values[count++] = value;
-    cursor = end;
-  }
-
-  if (count == 3) {
-    // Trailing text after the expected values is ignored (4.2).
-    out[0] = values[0];
-    out[1] = values[1];
-    out[2] = values[2];
-    return GMDL_OK;
-  }
-  if (count == 1) {
-    // One value is grey - but only when it is the whole of the value.
-    // "Kd 0.5 x" is a malformed three-value form, which 4.2 calls FORMAT.
-    while (*cursor == ' ' || *cursor == '\t') {
-      cursor++;
-    }
-    if (*cursor != '\0') {
+    if (count != 3) {
       return GMDL_ERR_FORMAT;
     }
-    out[0] = values[0];
-    out[1] = values[0];
-    out[2] = values[0];
-    return GMDL_OK;
+    parsed.form = GMDL_MTL_COLOR_XYZ;
   }
-  return GMDL_ERR_FORMAT;
+  else if (gmdl_line_is(rest, "spectral", &after)) {
+    while (*after == ' ' || *after == '\t') {
+      after++;
+    }
+    const char * start = after;
+    while (*after && *after != ' ' && *after != '\t') {
+      after++;
+    }
+    GMDL_Result copied = mtl_copy_token(
+        start, (size_t)(after - start), allocator, &parsed.spectral);
+    if (copied != GMDL_OK) {
+      return copied;
+    }
+    while (*after == ' ' || *after == '\t') {
+      after++;
+    }
+    parsed.factor = 1.0f;
+    if (*after) {
+      char * end = NULL;
+      float factor = strtof(after, &end);
+      if (end == after) {
+        gcu_allocator_free(allocator, parsed.spectral);
+        return GMDL_ERR_FORMAT;
+      }
+      parsed.factor = factor;
+      parsed.factor_stated = true;
+    }
+    parsed.form = GMDL_MTL_COLOR_SPECTRAL;
+  }
+  else {
+    size_t count = 0;
+    const char * cursor = rest;
+    while (count < 3) {
+      char * end = NULL;
+      float value = strtof(cursor, &end);
+      if (end == cursor) {
+        break;
+      }
+      values[count++] = value;
+      cursor = end;
+    }
+
+    if (count == 3) {
+      // Trailing text after the expected values is ignored (4.2).
+    }
+    else if (count == 1) {
+      // One value is grey - but only when it is the whole of the value.
+      // "Kd 0.5 x" is a malformed three-value form, which 4.2 calls FORMAT.
+      while (*cursor == ' ' || *cursor == '\t') {
+        cursor++;
+      }
+      if (*cursor != '\0') {
+        return GMDL_ERR_FORMAT;
+      }
+      values[1] = values[0];
+      values[2] = values[0];
+    }
+    else {
+      return GMDL_ERR_FORMAT;
+    }
+    parsed.form = GMDL_MTL_COLOR_RGB;
+  }
+
+  gcu_allocator_free(allocator, statement->spectral);
+  *statement = parsed;
+  out[0] = values[0];
+  out[1] = values[1];
+  out[2] = values[2];
+  return GMDL_OK;
 }
 
 /**
  * Read a dissolve value.
  *
- * `d -halo n` is a documented form this library does not implement, so it is
- * GMDL_ERR_UNSUPPORTED for the reason given on mtl_parse_color().
+ * `d -halo n` is the format's orientation-dependent dissolve. The factor is
+ * the same field as a plain `d`; `halo` says which spelling the file used,
+ * because the dump has to write that spelling back (4.2).
  *
  * @param rest The text after the directive.
  * @param out Receives the value.
- * @return ::GMDL_OK, ::GMDL_ERR_FORMAT or ::GMDL_ERR_UNSUPPORTED.
+ * @param halo Receives whether the line said `-halo`.
+ * @return ::GMDL_OK or ::GMDL_ERR_FORMAT.
  */
-static GMDL_Result mtl_parse_dissolve(const char * rest, float * out) {
-  if (gmdl_line_is(rest, "-halo", NULL)) {
-    return GMDL_ERR_UNSUPPORTED;
+static GMDL_Result mtl_parse_dissolve(
+    const char * rest, float * out, bool * halo) {
+  const char * cursor = rest;
+  *halo = false;
+  if (gmdl_line_is(rest, "-halo", &cursor)) {
+    *halo = true;
   }
   char * end = NULL;
-  float value = strtof(rest, &end);
-  if (end == rest) {
+  float value = strtof(cursor, &end);
+  if (end == cursor) {
     return GMDL_ERR_FORMAT;
   }
   *out = value;
@@ -143,35 +226,16 @@ static void mtl_material_free_paths(
   gcu_allocator_free(allocator, material->norm.path);
   gcu_allocator_free(allocator, material->disp.path);
   gcu_allocator_free(allocator, material->decal.path);
+  gcu_allocator_free(allocator, material->Ka_color.spectral);
+  gcu_allocator_free(allocator, material->Kd_color.spectral);
+  gcu_allocator_free(allocator, material->Ks_color.spectral);
+  gcu_allocator_free(allocator, material->Ke_color.spectral);
+  gcu_allocator_free(allocator, material->Tf_color.spectral);
   for (size_t i = 0; i < GMDL_MTL_REFL_COUNT; i++) {
     gcu_allocator_free(allocator, material->refl[i].path);
   }
 }
 
-/**
- * Read a texture map directive's filename.
- *
- * The filename is the whole of the rest of the line, trailing blanks
- * removed, so a path containing spaces is one path (4.5). Both Blender 4.3
- * and VTK 9.3 read it that way, which is the only reason to prefer it over
- * the first token - the format's own description says nothing either way.
- *
- * A line whose argument begins with `-` carries texture options, which this
- * library does not implement, and that is ::GMDL_ERR_UNSUPPORTED rather than
- * a silent guess. The two references disagree about what the options even
- * are: Blender knows `-clamp` and consumes it, VTK 9.3 does not and folds it
- * into the filename, so `map_Kd -clamp on t.png` names `t.png` in one and
- * `-clamp on t.png` in the other. Picking either would be picking a side in
- * a disagreement the caller cannot see, and dropping the options silently is
- * worse than refusing: `-s 2 2 2` is a scale a renderer would then not
- * apply, which is a wrong picture rather than a missing one.
- *
- * @param rest The text after the directive, already past leading blanks.
- * @param allocator The allocator for the copy.
- * @param slot The material field to fill in, freed first if already set.
- * @return ::GMDL_OK, ::GMDL_ERR_FORMAT for no filename,
- *   ::GMDL_ERR_UNSUPPORTED for options, or ::GMDL_ERR_OOM.
- */
 /** Fill a map with the defaults the format documents for an unstated option. */
 static void mtl_map_defaults(GMDL_Mtl_Map * map) {
   memset(map, 0, sizeof(*map));
@@ -620,7 +684,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
         (GMDL_Mtl_Material *)gcu_array_at(&materials, current);
 
     if (gmdl_line_is(line_text, "Ka", &rest)) {
-      GMDL_Result parsed = mtl_parse_color(rest, material->Ka);
+      GMDL_Result parsed = mtl_parse_color(
+          rest, allocator, material->Ka, &material->Ka_color);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -628,7 +693,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_KA;
     }
     else if (gmdl_line_is(line_text, "Kd", &rest)) {
-      GMDL_Result parsed = mtl_parse_color(rest, material->Kd);
+      GMDL_Result parsed = mtl_parse_color(
+          rest, allocator, material->Kd, &material->Kd_color);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -636,7 +702,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_KD;
     }
     else if (gmdl_line_is(line_text, "Ks", &rest)) {
-      GMDL_Result parsed = mtl_parse_color(rest, material->Ks);
+      GMDL_Result parsed = mtl_parse_color(
+          rest, allocator, material->Ks, &material->Ks_color);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -651,7 +718,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_NS;
     }
     else if (gmdl_line_is(line_text, "d", &rest)) {
-      GMDL_Result parsed = mtl_parse_dissolve(rest, &material->d);
+      GMDL_Result parsed = mtl_parse_dissolve(
+          rest, &material->d, &material->d_halo);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -669,7 +737,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_ILLUM;
     }
     else if (gmdl_line_is(line_text, "Ke", &rest)) {
-      GMDL_Result parsed = mtl_parse_color(rest, material->Ke);
+      GMDL_Result parsed = mtl_parse_color(
+          rest, allocator, material->Ke, &material->Ke_color);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -677,7 +746,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_KE;
     }
     else if (gmdl_line_is(line_text, "Tf", &rest)) {
-      GMDL_Result parsed = mtl_parse_color(rest, material->Tf);
+      GMDL_Result parsed = mtl_parse_color(
+          rest, allocator, material->Tf, &material->Tf_color);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;

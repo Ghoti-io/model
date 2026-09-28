@@ -29,11 +29,11 @@ and does exactly this, counting what it dropped.
 **Malformed is different from unexpected.** A `v` line with two numbers is
 malformed and is `GMDL_ERR_FORMAT` - which is stricter than either reference,
 both of which pad the missing `z` with zero, and is the specification's
-reading rather than a guess (3.1, 12). A `curv` line is a directive this library
-does not implement and is ignored, as the OBJ documentation asks. A `Kd xyz`
-line is a documented form this library does not implement and is
-`GMDL_ERR_UNSUPPORTED`. The three answers are different because the caller's
-next step is different.
+reading rather than a guess (3.1, 12). A directive this library does not
+know is ignored with its whole line, as the OBJ documentation asks (3.14).
+A map option this library does not know is a form the file stated and this
+library does not implement, and is `GMDL_ERR_UNSUPPORTED` (4.5). The three
+answers are different because the caller's next step is different.
 
 **Nothing is truncated.** A line longer than the cap is `GMDL_ERR_LIMIT`, not
 a prefix. A name longer than its field is `GMDL_ERR_LIMIT`, not the first 127
@@ -159,8 +159,8 @@ fields four to six. The rule is a count of *numbers*, not of tokens, so
 | Numbers | Read as |
 | --- | --- |
 | 3 | `x y z` |
-| 4 | `x y z w`; `w` is discarded (see below) |
-| 5 | `x y z` and two numbers that are not a colour |
+| 4 | `x y z w`; `w` is the homogeneous weight |
+| 5 | `x y z w`, and a fifth number that is neither a weight nor a colour |
 | 6 | `x y z r g b` |
 | 7 or more | `x y z r g b`, the seventh onwards ignored |
 
@@ -169,10 +169,17 @@ including the last, where `x y z w r g b` would be the other reasonable
 reading and neither importer takes it. The boundary between five and six is
 the whole rule, so it is what the tests pin.
 
-`w` is a rational weight, and a `v` carries it only for the free-form
-sub-language of 3.19 - which reads its control points from `v` but takes
-their weights from `vp` (3.19), so nothing here could consume a `w` on a `v`
-and it is dropped.
+`w` is the homogeneous weight a rational curve multiplies its control
+point by. `curv` and `surf` index `v`, and `cstype rat` says the element is
+rational, so the weight belongs with the vertex and not with `vp` - `vp`'s
+own third number is the weight of a parameter-space point (3.19). Four or
+five numbers record it, in `GMDL_Obj_Weight`, parallel to the colours so a
+file that never writes one pays nothing for it. An absent weight holds 1,
+which leaves the point unweighted, and `present` says which: a file may
+write `w` as 1. Six or more numbers are the colour extension instead, which
+is what Blender does with those lines, so a vertex carries a weight or a
+colour and not both. The dump writes four numbers only when `present` is
+set.
 
 Colours are recorded exactly as written: not clamped, not converted out of
 whatever colour space the writer had in mind. Blender treats file values as
@@ -279,14 +286,16 @@ dump writes the spelling back. They are not interchangeable to the tools that
 write them - Blender makes an *object* of an `o` and a *vertex group* of a
 `g` - and a reader that flattened them could not put the distinction back.
 
-**The whole line is the name**, spaces included, as for `mtllib` and `usemtl`
-(3.7, 3.8). The documentation permits `g a b c` to put the following faces in
-three groups at once, and neither reference implements that: Blender reads
-the line as one group called `a b c`. Taking only the first token was wrong
-under both readings - it renames the group under the reference's and discards
-two names under the documentation's - and the whole-line reading is the one
-that keeps every byte, so a model that one day supports several names per
-line can still recover them by splitting (12).
+**Each word of a `g` line is a group.** The documentation permits `g a b c`
+to put the following faces in three groups at once. Blender reads that line
+as one group called `a b c`; this follows the documentation. The groups
+share one face range, and `joined` on every name after the first says they
+were one line, which is what lets the dump write `g a b c` back. Two `g`
+lines would close the first group before the faces and leave it empty.
+
+**An `o` line is one name**, spaces included, as for `mtllib` and `usemtl`
+(3.7, 3.8). The specification gives an object a single name. Splitting
+`o two words` would rename the object.
 
 A bare `g` names the group `default`, as the documentation specifies.
 
@@ -304,8 +313,7 @@ matching. Blender reads `usemtl two words` as one name; it substitutes
 underscores when it writes, so such a file comes from some other exporter.
 
 This is not the reading `g` uses, and the difference is deliberate: `g a b`
-is documented as putting an element in two groups at once, so taking a group
-line whole would settle that open question by accident (3.12, 12).
+is two groups (3.6), and a material name may contain spaces.
 
 Materials are not resolved by the OBJ parser. Each distinct name is assigned
 an index in order of first use, recorded in `material_mappings`, and faces
@@ -767,8 +775,7 @@ here tessellates a surface, walks a trimming loop or resolves a basis
 matrix; a consumer that wants a mesh out of a NURBS patch has to do that
 itself, with what this parser hands it. The split is deliberate, and it is
 the whole of why the work is tractable: evaluating a surface is a different
-project from not discarding one, and a file that carries a `curv` currently
-loses it in silence.
+project from not discarding one. A file that carries a `curv` keeps it.
 
 #### `vp u [v] [w]` - parameter-space control points
 
@@ -1049,10 +1056,23 @@ take `d` whichever order the two appear in. A file stating `d 0.75` and
 is not a parser's place to pick. Both are kept, `present` says which the file
 gave, and a consumer that wants the relationship can apply it knowing that.
 
-The colour properties have three documented forms. `K? r g b` is the
-ordinary one. `K? r` - one value, meaning `r r r` - is accepted and expanded.
-`K? xyz ...` (CIE XYZ) and `K? spectral file [factor]` are
-`GMDL_ERR_UNSUPPORTED`. `d -halo n` is `GMDL_ERR_UNSUPPORTED`.
+The colour properties have three documented forms, and all three are
+recorded. `K? r g b` is the ordinary one. `K? r` - one value, meaning
+`r r r` - is accepted and expanded. `K? xyz x y z` is CIE XYZ: the three
+numbers are stored as stated and not converted to RGB, because that
+conversion is a colour-space decision and the dump would then be unable to
+write `xyz` back. `GMDL_Mtl_Color.form` says which. `K? spectral file
+[factor]` records the path and does not open it, the way an OBJ `mtllib`
+path is not opened; the three numbers are left at zero, because the file
+stated no colour. The factor defaults to 1 when the line omits it, and
+`factor_stated` says which, because a written `1` and an omitted factor are
+different lines. A `xyz` with fewer than three numbers, a `spectral` with
+no file, and a token after the file that is not a factor are
+`GMDL_ERR_FORMAT`.
+
+`d -halo n` is the same dissolve as `d n`, with `d_halo` set. The keyword
+says the dissolve depends on the surface orientation. A later plain `d`
+clears it. `d -halo` with no number is `GMDL_ERR_FORMAT`.
 
 A property whose values do not parse - `Kd 0.5 x`, `illum x` - is
 `GMDL_ERR_FORMAT`.
@@ -1178,17 +1198,6 @@ keeps the last one; the format has no way to say two maps of one kind.
 
 Unlike the names in 3.9 there is no fixed cap: the path is allocated, so
 `max_line_length` is what bounds it. It is freed with the ::GMDL_Mtl.
-
-**A line whose argument begins with `-` carries texture options** -
-`-o`, `-s`, `-clamp`, `-bm` and the rest - and is `GMDL_ERR_UNSUPPORTED`.
-The file is well-formed and this library is the one falling short, which is
-the distinction section 1 draws. Refusing rather than guessing is deliberate,
-and measured: the two references do not agree on what the options are.
-Blender knows `-clamp` and consumes it; VTK 9.3 does not, and folds it into
-the filename, so `map_Kd -clamp on t.png` names `t.png` in one and
-`-clamp on t.png` in the other. Silently dropping the options would be worse
-than either, because `-s 2 2 2` is a scale a renderer would then not apply:
-a wrong picture rather than a missing one.
 
 A directive with no path at all is `GMDL_ERR_FORMAT`, for the same reason
 `Kd 0.5 x` is. Both references instead ignore the line; this is a place where
@@ -1350,7 +1359,7 @@ notice. The table lists one document per site now.
 | `GMDL_ERR_INVALID` | `out` or `stream` is `NULL` (`path` for `_file`) |
 | `GMDL_ERR_IO` | `_file` could not open or read the path, for any reason including a path too long for the filesystem |
 | `GMDL_ERR_FORMAT` | a line was malformed (sections 3 and 4) |
-| `GMDL_ERR_UNSUPPORTED` | a documented form this library does not implement (4.2) |
+| `GMDL_ERR_UNSUPPORTED` | a map option this library does not implement (4.5) |
 | `GMDL_ERR_LIMIT` | a `GMDL_Limits` cap was exceeded, or a name or path was too long |
 | `GMDL_ERR_OOM` | the allocator returned `NULL`, or the system had no memory to open the file |
 
@@ -1848,12 +1857,6 @@ section 12 is where they are written down.
 
 ## 12. Open questions
 
-- **Multiple group names per `g` line.** The documentation allows `g a b`.
-  Measured since: neither reference implements it - Blender reads the line as
-  one group named `a b` - so the conflict with the contiguous range model is
-  not one anybody is having in practice. 3.6 now keeps the whole line, which
-  loses nothing either way and leaves this decidable later; what remains is
-  whether to act on it.
 - **Free-form geometry: evaluating it.** *Recording* it is settled and built
   - 3.19 holds all fifteen directives as of 2026-09-24. *Evaluating* it is
   not, and is the question that was actually behind 3.14: nothing here

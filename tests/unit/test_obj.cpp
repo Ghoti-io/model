@@ -1553,12 +1553,21 @@ TEST(ObjParse, AFileWithNoColoursAllocatesNone) {
 // before. Sampling only three and six would have left the boundary untested,
 // and the boundary is the whole rule.
 TEST(ObjParse, ColourNeedsAllSixNumbers) {
-  for (const char * line : {"v 1 2 3\n", "v 1 2 3 4\n", "v 1 2 3 4 5\n"}) {
+  GMDL_Obj * three = load_text("v 1 2 3\n");
+  ASSERT_NE(three, nullptr);
+  EXPECT_EQ(three->colors, nullptr);
+  EXPECT_EQ(three->weights, nullptr);
+  gmdl_obj_free(three);
+
+  // Four numbers is the specification's weight. Five is that weight with
+  // junk after it, which is not a colour: the colour boundary is six.
+  for (const char * line : {"v 1 2 3 4\n", "v 1 2 3 4 5\n"}) {
     GMDL_Obj * obj = load_text(line);
     ASSERT_NE(obj, nullptr) << line;
     EXPECT_EQ(obj->colors, nullptr) << line;
-    EXPECT_EQ(obj->vertex_count, 1u) << line;
-    EXPECT_FLOAT_EQ(obj->vertices[0].x, 1.0f) << line;
+    ASSERT_NE(obj->weights, nullptr) << line;
+    EXPECT_TRUE(obj->weights[0].present) << line;
+    EXPECT_FLOAT_EQ(obj->weights[0].w, 4.0f) << line;
     gmdl_obj_free(obj);
   }
   GMDL_Obj * six = load_text("v 1 2 3 4 5 6\n");
@@ -1566,6 +1575,7 @@ TEST(ObjParse, ColourNeedsAllSixNumbers) {
   ASSERT_NE(six->colors, nullptr);
   EXPECT_TRUE(six->colors[0].present);
   EXPECT_FLOAT_EQ(six->colors[0].r, 4.0f);
+  EXPECT_EQ(six->weights, nullptr);
   gmdl_obj_free(six);
 }
 
@@ -1580,6 +1590,7 @@ TEST(ObjParse, ASeventhNumberDoesNotMoveTheColour) {
   EXPECT_FLOAT_EQ(obj->colors[0].r, 4.0f);
   EXPECT_FLOAT_EQ(obj->colors[0].g, 5.0f);
   EXPECT_FLOAT_EQ(obj->colors[0].b, 6.0f);
+  EXPECT_EQ(obj->weights, nullptr);
   gmdl_obj_free(obj);
 }
 
@@ -2084,22 +2095,67 @@ TEST(ObjParse, AMaterialNameKeepsItsSpaces) {
   gmdl_obj_free(obj);
 }
 
-// `g` was left stopping at the first blank on the strength of the
-// specification describing `g a b` as two group names. Measured afterwards:
-// neither reference implements that - Blender reads the line as one group
-// called "alpha beta" - and taking the first token is wrong under *both*
-// readings, renaming the group under one and discarding a name under the
-// other. The whole-line reading keeps every byte, so it is the one that does
-// not foreclose the open question.
-TEST(ObjParse, AGroupNameKeepsItsSpaces) {
+// The specification says `g a b` puts the following faces in both groups.
+// Blender reads the line as one group named "alpha beta". This follows the
+// specification: each word is a group, they share the face range, and the
+// dump writes them back as one line. An `o` is not split.
+TEST(ObjParse, AGroupLineNamesEachGroup) {
   GMDL_Obj * obj = load_text(
       "g alpha beta\n"
       "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
       "f 1 2 3\n");
   ASSERT_NE(obj, nullptr);
-  ASSERT_EQ(obj->group_count, 1u);
-  EXPECT_STREQ(obj->groups[0].name, "alpha beta");
+  ASSERT_EQ(obj->group_count, 2u);
+  EXPECT_STREQ(obj->groups[0].name, "alpha");
+  EXPECT_STREQ(obj->groups[1].name, "beta");
+  EXPECT_FALSE(obj->groups[0].joined);
+  EXPECT_TRUE(obj->groups[1].joined);
+  EXPECT_EQ(obj->groups[0].start_face, obj->groups[1].start_face);
+  EXPECT_EQ(obj->groups[0].face_count, 1u);
+  EXPECT_EQ(obj->groups[1].face_count, 1u);
   gmdl_obj_free(obj);
+}
+
+TEST(ObjDump, AGroupLineRoundTripsAsOneLine) {
+  GMDL_Obj * first = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+      "g alpha beta\n"
+      "f 1 2 3\n");
+  ASSERT_NE(first, nullptr);
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(first, sink), GMDL_OK);
+  fclose(sink);
+
+  std::ifstream in(out.path());
+  std::string text((std::istreambuf_iterator<char>(in)),
+      std::istreambuf_iterator<char>());
+  EXPECT_NE(text.find("g alpha beta\n"), std::string::npos) << text;
+  EXPECT_EQ(text.find("g alpha\n"), std::string::npos) << text;
+
+  GMDL_Obj * second = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &second), GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->group_count, 2u);
+  EXPECT_STREQ(second->groups[0].name, "alpha");
+  EXPECT_STREQ(second->groups[1].name, "beta");
+  EXPECT_EQ(second->groups[0].face_count, 1u);
+  EXPECT_EQ(second->groups[1].face_count, 1u);
+  EXPECT_EQ(second->face_count, 1u);
+  gmdl_obj_free(second);
+  gmdl_obj_free(first);
+}
+
+// The second name counts against max_groups. A cap of one used to cover the
+// whole line, because the line was stored as one group.
+TEST(ObjParse, ASecondGroupNameOnTheSameLineCountsAgainstTheCap) {
+  GMDL_Limits limits;
+  gmdl_limits_default(&limits);
+  limits.max_groups = 1;
+  EXPECT_EQ(load_text_expecting_failure("g alpha beta\n", &limits),
+      GMDL_ERR_LIMIT);
 }
 
 // `o` and `g` behave identically here and do not mean the same thing to the
@@ -2724,6 +2780,47 @@ TEST(ObjDump, FloatsSurviveTheRoundTrip) {
   EXPECT_NE(second->vertices[0].x, 0.0f) << "the old %f wrote this as zero";
   gmdl_obj_free(first);
   gmdl_obj_free(second);
+}
+
+// A stated weight of 1 and an absent weight are both the number 1. The dump
+// has to write four numbers only for the stated one, or the reload cannot
+// tell them apart. Asserting the text is what catches a dumper that pads
+// and a loader that then agrees with it.
+TEST(ObjDump, AWeightSurvivesAsFourNumbers) {
+  GMDL_Obj * first = load_text(
+      "v 1 2 3\n"
+      "v 1 2 3 1\n"
+      "v 1 2 3 0.5\n");
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->weight_count, 3u);
+  EXPECT_FALSE(first->weights[0].present);
+  EXPECT_TRUE(first->weights[1].present);
+  EXPECT_FLOAT_EQ(first->weights[1].w, 1.0f);
+  EXPECT_FLOAT_EQ(first->weights[2].w, 0.5f);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_obj_dump(first, sink), GMDL_OK);
+  fclose(sink);
+
+  std::ifstream in(out.path());
+  std::string text((std::istreambuf_iterator<char>(in)),
+      std::istreambuf_iterator<char>());
+  EXPECT_NE(text.find("v 1 2 3\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("v 1 2 3 1\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("v 1 2 3 0.5\n"), std::string::npos) << text;
+
+  GMDL_Obj * second = nullptr;
+  ASSERT_EQ(gmdl_obj_load_file(out.path(), nullptr, nullptr, &second), GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  ASSERT_EQ(second->weight_count, 3u);
+  EXPECT_FALSE(second->weights[0].present);
+  EXPECT_TRUE(second->weights[1].present);
+  EXPECT_FLOAT_EQ(second->weights[2].w, 0.5f);
+  gmdl_obj_free(second);
+  gmdl_obj_free(first);
 }
 
 // A colour that was read has to be written, or the library quietly loses it

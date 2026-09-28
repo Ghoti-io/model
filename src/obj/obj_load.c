@@ -62,6 +62,13 @@ typedef struct {
    * absent entries for whatever came before the first colour.
    */
   GCU_Array colors;
+  /**
+   * Homogeneous weights, empty until the file's first weighted `v` line.
+   *
+   * The same invariant as @c colors: zero entries, or exactly as many as
+   * @c vertices.
+   */
+  GCU_Array weights;
   GCU_Array texcoords;
   GCU_Array normals;
   GCU_Array param_vertices;
@@ -97,6 +104,8 @@ static bool obj_builder_init(
              &b->vertices, sizeof(GMDL_Obj_Vertex), 128, allocator)
       && gcu_array_create_in_place(
           &b->colors, sizeof(GMDL_Obj_Color), 128, allocator)
+      && gcu_array_create_in_place(
+          &b->weights, sizeof(GMDL_Obj_Weight), 128, allocator)
       && gcu_array_create_in_place(
           &b->texcoords, sizeof(GMDL_Obj_TexCoord), 128, allocator)
       && gcu_array_create_in_place(
@@ -168,6 +177,7 @@ static void obj_builder_destroy(obj_builder_t * b) {
   gcu_array_destroy_in_place(&b->trace_objs);
   gcu_array_destroy_in_place(&b->vertices);
   gcu_array_destroy_in_place(&b->colors);
+  gcu_array_destroy_in_place(&b->weights);
   gcu_array_destroy_in_place(&b->texcoords);
   gcu_array_destroy_in_place(&b->normals);
   gcu_array_destroy_in_place(&b->param_vertices);
@@ -284,6 +294,58 @@ static bool obj_color_append(obj_builder_t * b, const GMDL_Obj_Color * color) {
     }
   }
   return gcu_array_append(&b->colors, (void *)color);
+}
+
+/** The weight an unweighted vertex gets: 1, which leaves the point as it is. */
+static const GMDL_Obj_Weight obj_weight_absent = {1.0f, false};
+
+/**
+ * Record @p weight for the vertex that was just appended.
+ *
+ * The same backfill as obj_color_append(): the array is indexed by vertex
+ * number, so the first weighted line has to fill in 1 for everything before
+ * it.
+ *
+ * @param b The builder, whose @c vertices already holds the new vertex.
+ * @param weight The weight, present or absent.
+ * @return false only on allocation failure.
+ */
+static bool obj_weight_append(
+    obj_builder_t * b, const GMDL_Obj_Weight * weight) {
+  size_t wanted = gcu_array_count(&b->vertices);
+  while (gcu_array_count(&b->weights) + 1 < wanted) {
+    if (!gcu_array_append(&b->weights, (void *)&obj_weight_absent)) {
+      return false;
+    }
+  }
+  return gcu_array_append(&b->weights, (void *)weight);
+}
+
+/**
+ * Append one group or object name.
+ *
+ * @param b The builder.
+ * @param name The name, already known to fit the field.
+ * @param is_object True for `o`, false for `g`.
+ * @param joined True when this is not the first name on its line.
+ * @param max_groups The cap, or 0 for none.
+ * @return ::GMDL_OK, ::GMDL_ERR_LIMIT or ::GMDL_ERR_OOM.
+ */
+static GMDL_Result obj_append_group(obj_builder_t * b, const char * name,
+    bool is_object, bool joined, size_t max_groups) {
+  if (gmdl_limit_reached(gcu_array_count(&b->groups), max_groups)) {
+    return GMDL_ERR_LIMIT;
+  }
+  GMDL_Obj_Group * group = (GMDL_Obj_Group *)gcu_array_emplace(&b->groups);
+  if (!group) {
+    return GMDL_ERR_OOM;
+  }
+  memset(group, 0, sizeof(*group));
+  memcpy(group->name, name, strlen(name) + 1);
+  group->start_face = gcu_array_count(&b->faces);
+  group->is_object = is_object;
+  group->joined = joined;
+  return GMDL_OK;
 }
 
 /**
@@ -1256,11 +1318,13 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
 
     const char * rest = NULL;
     if (gmdl_line_is(line_text, "v", &rest)) {
-      // Six or more numbers means the `r g b` extension, and the colour is
-      // fields four to six whether or not a `w` might have been intended to
-      // sit among them - which is what Blender does, measured on four, five,
-      // six and seven numbers. Four or five is a plain vertex with a `w` or
-      // with junk after it, and neither carries a colour.
+      // Four or five numbers is the specification's `w`. Six or more is the
+      // `r g b` extension, and the colour is fields four to six - which is
+      // what Blender does, measured on four, five, six and seven numbers.
+      // The two forms occupy the same fields, so a line carries one of them.
+      // A rational curve's weight used to be read and dropped; `cstype rat`
+      // records that the curve is rational, and without `w` the control
+      // point that makes it so is gone (3.1).
       float number[6];
       size_t count = obj_take_floats(rest, number, 6);
       if (count < 3) {
@@ -1269,8 +1333,13 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       }
       GMDL_Obj_Vertex v = {number[0], number[1], number[2]};
       GMDL_Obj_Color color = obj_color_absent;
+      GMDL_Obj_Weight weight = obj_weight_absent;
       if (count >= 6) {
         color = (GMDL_Obj_Color){number[3], number[4], number[5], true};
+      }
+      else if (count >= 4) {
+        weight.w = number[3];
+        weight.present = true;
       }
       if (gmdl_limit_reached(
               gcu_array_count(&builder.vertices), limits->max_vertices)) {
@@ -1283,6 +1352,11 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       }
       if ((color.present || gcu_array_count(&builder.colors) != 0)
           && !obj_color_append(&builder, &color)) {
+        result = GMDL_ERR_OOM;
+        goto cleanup;
+      }
+      if ((weight.present || gcu_array_count(&builder.weights) != 0)
+          && !obj_weight_append(&builder, &weight)) {
         result = GMDL_ERR_OOM;
         goto cleanup;
       }
@@ -1703,56 +1777,89 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         result = GMDL_ERR_OOM;
         goto cleanup;
       }
+      // Every name on the open statement shares the faces. `g a b` is two
+      // groups, and incrementing only the last would leave `a` empty.
       if (current_group >= 0) {
-        GMDL_Obj_Group * group = (GMDL_Obj_Group *)gcu_array_at(
-            &builder.groups, (size_t)current_group);
-        group->face_count++;
+        for (size_t gi = (size_t)current_group;
+             gi < gcu_array_count(&builder.groups); gi++) {
+          GMDL_Obj_Group * group =
+              (GMDL_Obj_Group *)gcu_array_at(&builder.groups, gi);
+          group->face_count++;
+        }
       }
     }
     else if (gmdl_line_is(line_text, "g", &rest)
         || gmdl_line_is(line_text, "o", &rest)) {
       // Which of the two it was, so the dump can write back the spelling the
-      // file used. They behave identically here and do not mean the same
-      // thing to the tools that write them.
+      // file used. They do not mean the same thing to the tools that write
+      // them, and they do not parse the same way either (3.6).
       bool is_object = line_text[0] == 'o';
-      // "g" with no name means the default group, per the specification; a
-      // name too long for the field is refused rather than cut, because the
-      // first 127 bytes of a name name something else (3.9).
-      //
-      // The whole line is the name, as it is for `mtllib` and `usemtl`
-      // (3.7, 3.8). The specification does describe `g a b` as two group
-      // names, and neither reference implements that: Blender reads the line
-      // as one group called "alpha beta". Taking the first token is wrong
-      // under *both* readings - it renames the group under the reference's
-      // and discards a name under the specification's - while the whole-line
-      // reading keeps every byte the file wrote, so a model that one day
-      // supports several names per line can still split it (12).
-      char name[GMDL_OBJ_MAX_NAME_LENGTH];
-      GMDL_Result named = gmdl_rest_of_line(rest, name, sizeof(name));
-      if (named == GMDL_ERR_FORMAT) {
-        memcpy(name, "default", sizeof("default"));
+      // A bare directive names the default group. A name too long for the
+      // field is refused rather than cut, because the first 127 bytes of a
+      // name name something else (3.9).
+      size_t first = gcu_array_count(&builder.groups);
+      if (is_object) {
+        // `o` takes one name, and the name may contain spaces. Splitting it
+        // would rename the object.
+        char name[GMDL_OBJ_MAX_NAME_LENGTH];
+        GMDL_Result named = gmdl_rest_of_line(rest, name, sizeof(name));
+        if (named == GMDL_ERR_FORMAT) {
+          memcpy(name, "default", sizeof("default"));
+        }
+        else if (named != GMDL_OK) {
+          result = named;
+          goto cleanup;
+        }
+        result = obj_append_group(
+            &builder, name, true, false, limits->max_groups);
+        if (result != GMDL_OK) {
+          goto cleanup;
+        }
       }
-      else if (named != GMDL_OK) {
-        result = named;
-        goto cleanup;
+      else {
+        // `g a b` is two groups (3.6). The specification says so, and
+        // keeping the line whole was the reading that postponed the
+        // decision. Each name shares the face range; `joined` is what lets
+        // the dump write them back as one line.
+        const char * cursor = rest;
+        bool any = false;
+        bool joined = false;
+        while (*cursor) {
+          while (*cursor == ' ' || *cursor == '\t') {
+            cursor++;
+          }
+          if (!*cursor) {
+            break;
+          }
+          const char * start = cursor;
+          while (*cursor && *cursor != ' ' && *cursor != '\t') {
+            cursor++;
+          }
+          size_t length = (size_t)(cursor - start);
+          if (length >= GMDL_OBJ_MAX_NAME_LENGTH) {
+            result = GMDL_ERR_LIMIT;
+            goto cleanup;
+          }
+          char name[GMDL_OBJ_MAX_NAME_LENGTH];
+          memcpy(name, start, length);
+          name[length] = '\0';
+          result = obj_append_group(
+              &builder, name, false, joined, limits->max_groups);
+          if (result != GMDL_OK) {
+            goto cleanup;
+          }
+          joined = true;
+          any = true;
+        }
+        if (!any) {
+          result = obj_append_group(
+              &builder, "default", false, false, limits->max_groups);
+          if (result != GMDL_OK) {
+            goto cleanup;
+          }
+        }
       }
-      if (gmdl_limit_reached(
-              gcu_array_count(&builder.groups), limits->max_groups)) {
-        result = GMDL_ERR_LIMIT;
-        goto cleanup;
-      }
-      GMDL_Obj_Group * group =
-          (GMDL_Obj_Group *)gcu_array_emplace(&builder.groups);
-      if (!group) {
-        result = GMDL_ERR_OOM;
-        goto cleanup;
-      }
-      memset(group, 0, sizeof(*group));
-      memcpy(group->name, name, strlen(name) + 1);
-      group->start_face = gcu_array_count(&builder.faces);
-      group->face_count = 0;
-      group->is_object = is_object;
-      current_group = (long)gcu_array_count(&builder.groups) - 1;
+      current_group = (long)first;
     }
     else if (gmdl_line_is(line_text, "l", &rest)) {
       if (gmdl_limit_reached(
@@ -2159,6 +2266,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
 
     obj->vertices = obj_steal_into(&builder.vertices, &obj->vertex_count);
     obj->colors = obj_steal_into(&builder.colors, &obj->color_count);
+    obj->weights = obj_steal_into(&builder.weights, &obj->weight_count);
     obj->texcoords = obj_steal_into(&builder.texcoords, &obj->texcoord_count);
     obj->normals = obj_steal_into(&builder.normals, &obj->normal_count);
     obj->param_vertices =
@@ -2270,6 +2378,7 @@ void gmdl_obj_free(GMDL_Obj * obj) {
   gcu_allocator_free(allocator, obj->trace_objs);
   gcu_allocator_free(allocator, obj->vertices);
   gcu_allocator_free(allocator, obj->colors);
+  gcu_allocator_free(allocator, obj->weights);
   gcu_allocator_free(allocator, obj->texcoords);
   gcu_allocator_free(allocator, obj->normals);
   gcu_allocator_free(allocator, obj->param_vertices);

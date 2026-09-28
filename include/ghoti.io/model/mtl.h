@@ -137,6 +137,51 @@ typedef enum GMDL_Mtl_Imfchan {
 } GMDL_Mtl_Imfchan;
 
 /**
+ * @brief Which form a colour property was written in (4.2).
+ *
+ * RGB is zero, so a material built by memset states ordinary colours. The
+ * other two are the forms the format documents beside it: CIE XYZ, and a
+ * spectral reflectance file. Neither is converted. A consumer that wants RGB
+ * from them does that itself, and a dump that had done it could not write
+ * the statement the file used.
+ */
+typedef enum GMDL_Mtl_Color_Form {
+  GMDL_MTL_COLOR_RGB = 0,  ///< `K? r g b`, or `K? r` expanded to grey.
+  GMDL_MTL_COLOR_XYZ,      ///< `K? xyz x y z`. The three numbers are CIE XYZ.
+  GMDL_MTL_COLOR_SPECTRAL, ///< `K? spectral file [factor]`.
+} GMDL_Mtl_Color_Form;
+
+/**
+ * @brief How a colour property was stated, beside its three numbers.
+ *
+ * The numbers live in the material's `Ka` (and `Kd`, `Ks`, `Ke`, `Tf`)
+ * array. This says what they are. For ::GMDL_MTL_COLOR_RGB they are channels.
+ * For ::GMDL_MTL_COLOR_XYZ they are CIE XYZ, not a colour to multiply by.
+ * For ::GMDL_MTL_COLOR_SPECTRAL they are unused - left at zero - and
+ * ::spectral names the reflectance file.
+ */
+typedef struct GMDL_Mtl_Color {
+  GMDL_Mtl_Color_Form form; ///< RGB when the file used the ordinary form.
+  /**
+   * The reflectance file a spectral statement names, or NULL.
+   *
+   * Owned by the ::GMDL_Mtl, and freed with it. The path is recorded and
+   * not opened: the file names something only the caller knows how to find,
+   * which is the same reason an OBJ `mtllib` path is not opened.
+   */
+  char * spectral;
+  float factor; ///< The spectral multiplier, or 1 when the file omitted it.
+  /**
+   * True when the file wrote a factor.
+   *
+   * An omitted factor and a written `1` are different lines, and no value
+   * of ::factor can stand for "absent" because the file can write any
+   * float. The dump writes the factor only when this is set.
+   */
+  bool factor_stated;
+} GMDL_Mtl_Color;
+
+/**
  * @brief A texture map: a path, and the options stated before it.
  *
  * `map_Kd -s 2 2 2 brick.png` is one map with a scale. Options precede the
@@ -197,16 +242,29 @@ typedef struct GMDL_Mtl_Map {
  */
 typedef struct {
   char name[GMDL_MTL_MAX_NAME_LENGTH]; ///< Material name.
-  float Ka[3]; ///< Ambient colour (RGB).
-  float Kd[3]; ///< Diffuse colour (RGB).
-  float Ks[3]; ///< Specular colour (RGB).
+  float Ka[3]; ///< Ambient colour. See ::Ka_color for what the numbers are.
+  GMDL_Mtl_Color Ka_color; ///< How `Ka` was stated.
+  float Kd[3]; ///< Diffuse colour. See ::Kd_color.
+  GMDL_Mtl_Color Kd_color; ///< How `Kd` was stated.
+  float Ks[3]; ///< Specular colour. See ::Ks_color.
+  GMDL_Mtl_Color Ks_color; ///< How `Ks` was stated.
   float Ns;    ///< Specular exponent.
   float d;     ///< Dissolve (opacity; 1.0 is opaque, and the default).
+  /**
+   * True when the file wrote `d -halo` rather than `d`.
+   *
+   * The factor is still ::d. `-halo` says the dissolve depends on the
+   * surface orientation, which is a different statement from the same
+   * factor without it, so the dump writes the keyword back (4.2).
+   */
+  bool d_halo;
   int32_t illum; ///< Illumination model.
   uint32_t present; ///< Bitwise OR of ::GMDL_Mtl_Present.
 
-  float Ke[3]; ///< Emissive colour (RGB).
-  float Tf[3]; ///< Transmission filter (RGB).
+  float Ke[3]; ///< Emissive colour. See ::Ke_color.
+  GMDL_Mtl_Color Ke_color; ///< How `Ke` was stated.
+  float Tf[3]; ///< Transmission filter. See ::Tf_color.
+  GMDL_Mtl_Color Tf_color; ///< How `Tf` was stated.
   float Ni;    ///< Optical density, i.e. index of refraction.
   /**
    * Transparency, as the file stated it. **Not** folded into `d`.

@@ -144,6 +144,52 @@ static int mtl_dump_map(
   return fprintf(fd, " %s\n", map->path) < 0 ? -1 : 0;
 }
 
+/**
+ * Write one colour property in the form the file used.
+ *
+ * RGB is three numbers. XYZ keeps the `xyz` keyword, because the three
+ * numbers are not channels. Spectral writes the path and the factor only
+ * when the file stated one: an omitted factor and a written 1 are different
+ * lines (4.2). A spectral statement with no path writes nothing - a parse
+ * cannot produce one, and a bare `Kd spectral` is a line this parser refuses.
+ *
+ * @param fd Destination.
+ * @param name The directive, e.g. "Kd".
+ * @param present The material's present mask.
+ * @param bit The bit for this property.
+ * @param value The three numbers.
+ * @param color How they were stated.
+ * @return 0, or -1 on a write failure.
+ */
+static int mtl_dump_color(FILE * fd, const char * name, uint32_t present,
+    uint32_t bit, const float value[3], const GMDL_Mtl_Color * color) {
+  if (!(present & bit)) {
+    return 0;
+  }
+  int written = 0;
+  switch (color->form) {
+    case GMDL_MTL_COLOR_XYZ:
+      written = fprintf(fd, "%s xyz %.9g %.9g %.9g\n", name, value[0],
+          value[1], value[2]);
+      break;
+    case GMDL_MTL_COLOR_SPECTRAL:
+      if (!color->spectral) {
+        return 0;
+      }
+      written = color->factor_stated
+          ? fprintf(fd, "%s spectral %s %.9g\n", name, color->spectral,
+              color->factor)
+          : fprintf(fd, "%s spectral %s\n", name, color->spectral);
+      break;
+    case GMDL_MTL_COLOR_RGB:
+    default:
+      written = fprintf(fd, "%s %.9g %.9g %.9g\n", name, value[0], value[1],
+          value[2]);
+      break;
+  }
+  return written < 0 ? -1 : 0;
+}
+
 static GMDL_Result mtl_dump_pinned(const GMDL_Mtl * mtl, FILE * fd) {
   if (!mtl || !fd) {
     return GMDL_ERR_INVALID;
@@ -158,40 +204,39 @@ static GMDL_Result mtl_dump_pinned(const GMDL_Mtl * mtl, FILE * fd) {
     if (fprintf(fd, "newmtl %s\n", m->name) < 0) {
       return GMDL_ERR_IO;
     }
-    if ((m->present & GMDL_MTL_HAS_KA)
-        && fprintf(fd, "Ka %.9g %.9g %.9g\n", m->Ka[0], m->Ka[1], m->Ka[2])
-            < 0) {
+    if (mtl_dump_color(fd, "Ka", m->present, GMDL_MTL_HAS_KA, m->Ka, &m->Ka_color)
+        < 0) {
       return GMDL_ERR_IO;
     }
-    if ((m->present & GMDL_MTL_HAS_KD)
-        && fprintf(fd, "Kd %.9g %.9g %.9g\n", m->Kd[0], m->Kd[1], m->Kd[2])
-            < 0) {
+    if (mtl_dump_color(fd, "Kd", m->present, GMDL_MTL_HAS_KD, m->Kd, &m->Kd_color)
+        < 0) {
       return GMDL_ERR_IO;
     }
-    if ((m->present & GMDL_MTL_HAS_KS)
-        && fprintf(fd, "Ks %.9g %.9g %.9g\n", m->Ks[0], m->Ks[1], m->Ks[2])
-            < 0) {
+    if (mtl_dump_color(fd, "Ks", m->present, GMDL_MTL_HAS_KS, m->Ks, &m->Ks_color)
+        < 0) {
       return GMDL_ERR_IO;
     }
     if ((m->present & GMDL_MTL_HAS_NS)
         && fprintf(fd, "Ns %.9g\n", m->Ns) < 0) {
       return GMDL_ERR_IO;
     }
-    if ((m->present & GMDL_MTL_HAS_D) && fprintf(fd, "d %.9g\n", m->d) < 0) {
-      return GMDL_ERR_IO;
+    if (m->present & GMDL_MTL_HAS_D) {
+      int written = m->d_halo ? fprintf(fd, "d -halo %.9g\n", m->d)
+                              : fprintf(fd, "d %.9g\n", m->d);
+      if (written < 0) {
+        return GMDL_ERR_IO;
+      }
     }
     if ((m->present & GMDL_MTL_HAS_ILLUM)
         && fprintf(fd, "illum %d\n", m->illum) < 0) {
       return GMDL_ERR_IO;
     }
-    if ((m->present & GMDL_MTL_HAS_KE)
-        && fprintf(fd, "Ke %.9g %.9g %.9g\n", m->Ke[0], m->Ke[1], m->Ke[2])
-            < 0) {
+    if (mtl_dump_color(fd, "Ke", m->present, GMDL_MTL_HAS_KE, m->Ke, &m->Ke_color)
+        < 0) {
       return GMDL_ERR_IO;
     }
-    if ((m->present & GMDL_MTL_HAS_TF)
-        && fprintf(fd, "Tf %.9g %.9g %.9g\n", m->Tf[0], m->Tf[1], m->Tf[2])
-            < 0) {
+    if (mtl_dump_color(fd, "Tf", m->present, GMDL_MTL_HAS_TF, m->Tf, &m->Tf_color)
+        < 0) {
       return GMDL_ERR_IO;
     }
     if ((m->present & GMDL_MTL_HAS_NI)

@@ -9,6 +9,7 @@
 #include "test_helpers.h"
 
 #include <cstddef>
+#include <fstream>
 #include <functional>
 #include <string>
 #include <utility>
@@ -449,8 +450,8 @@ TEST(MtlNames, ABareNewmtlIsStillAFormatError) {
 }
 
 //
-// Colour forms: three are documented, one is implemented, and the other two
-// are a different answer from "malformed" (4.2).
+// Colour forms: RGB, CIE XYZ and spectral. All three are recorded. XYZ is
+// not converted, and a spectral file is not opened (4.2).
 //
 
 TEST(MtlColor, OneValueMeansGrey) {
@@ -481,15 +482,51 @@ TEST(MtlColor, TrailingTextAfterThreeValuesIsIgnored) {
   gmdl_mtl_free(mtl);
 }
 
-TEST(MtlColor, UnimplementedFormsAreUnsupportedNotMalformed) {
-  // The distinction is the point: the file is fine, the reader is not, and
-  // answering FORMAT rejected a good material library as corrupt.
-  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd xyz 1 1 1\n"),
-      GMDL_ERR_UNSUPPORTED);
-  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd spectral f.rfl\n"),
-      GMDL_ERR_UNSUPPORTED);
-  EXPECT_EQ(load_text_expecting_failure("newmtl a\nd -halo 0.5\n"),
-      GMDL_ERR_UNSUPPORTED);
+TEST(MtlColor, XyzIsRecordedRatherThanConverted) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nKd xyz 0.1 0.2 0.3\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_EQ(mtl->materials[0].Kd_color.form, GMDL_MTL_COLOR_XYZ);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[0], 0.1f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[1], 0.2f);
+  EXPECT_FLOAT_EQ(mtl->materials[0].Kd[2], 0.3f);
+  EXPECT_EQ(mtl->materials[0].Kd_color.spectral, nullptr);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlColor, ASpectralStatementRecordsTheFileAndNotAColour) {
+  GMDL_Mtl * bare = load_text("newmtl a\nKa spectral lights.rfl\n");
+  ASSERT_NE(bare, nullptr);
+  EXPECT_EQ(bare->materials[0].Ka_color.form, GMDL_MTL_COLOR_SPECTRAL);
+  EXPECT_STREQ(bare->materials[0].Ka_color.spectral, "lights.rfl");
+  EXPECT_FALSE(bare->materials[0].Ka_color.factor_stated);
+  EXPECT_FLOAT_EQ(bare->materials[0].Ka_color.factor, 1.0f);
+  EXPECT_FLOAT_EQ(bare->materials[0].Ka[0], 0.0f);
+  gmdl_mtl_free(bare);
+
+  GMDL_Mtl * scaled = load_text("newmtl a\nKd spectral lights.rfl 0.5\n");
+  ASSERT_NE(scaled, nullptr);
+  EXPECT_TRUE(scaled->materials[0].Kd_color.factor_stated);
+  EXPECT_FLOAT_EQ(scaled->materials[0].Kd_color.factor, 0.5f);
+  gmdl_mtl_free(scaled);
+}
+
+TEST(MtlColor, AShortXyzOrASpectralWithoutAFileIsMalformed) {
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd xyz 1 2\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd spectral\n"),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd spectral f.rfl nope\n"),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(MtlDissolve, HaloIsASpellingOfTheSameFactor) {
+  GMDL_Mtl * mtl = load_text("newmtl a\nd -halo 0.5\n");
+  ASSERT_NE(mtl, nullptr);
+  EXPECT_FLOAT_EQ(mtl->materials[0].d, 0.5f);
+  EXPECT_TRUE(mtl->materials[0].d_halo);
+  EXPECT_TRUE(mtl->materials[0].present & GMDL_MTL_HAS_D);
+  gmdl_mtl_free(mtl);
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nd -halo\n"), GMDL_ERR_FORMAT);
 }
 
 TEST(MtlColor, AValueThatDoesNotParseIsStillMalformed) {
@@ -499,6 +536,47 @@ TEST(MtlColor, AValueThatDoesNotParseIsStillMalformed) {
       GMDL_ERR_FORMAT);
   EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd nope\n"),
       GMDL_ERR_FORMAT);
+}
+
+// The text, not only the reparse. A dumper that wrote RGB for an XYZ
+// statement and a loader that read it back would agree with each other and
+// the statement would be gone. An omitted spectral factor and a written 1
+// have to stay different lines for the same reason.
+TEST(MtlDump, AColourFormSurvivesAsTheStatementTheFileUsed) {
+  GMDL_Mtl * first = load_text(
+      "newmtl a\n"
+      "Ka xyz 0.5 0.25 0.125\n"
+      "Kd spectral lights.rfl\n"
+      "Ks spectral spec.rfl 1\n"
+      "d -halo 0.25\n");
+  ASSERT_NE(first, nullptr);
+
+  TempFile out("");
+  ASSERT_TRUE(out.valid());
+  FILE * sink = fopen(out.path(), "wb");
+  ASSERT_NE(sink, nullptr);
+  ASSERT_EQ(gmdl_mtl_dump(first, sink), GMDL_OK);
+  fclose(sink);
+
+  std::ifstream in(out.path());
+  std::string text((std::istreambuf_iterator<char>(in)),
+      std::istreambuf_iterator<char>());
+  EXPECT_NE(text.find("Ka xyz 0.5 0.25 0.125\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("Kd spectral lights.rfl\n"), std::string::npos) << text;
+  EXPECT_EQ(text.find("Kd spectral lights.rfl 1\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("Ks spectral spec.rfl 1\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("d -halo 0.25\n"), std::string::npos) << text;
+
+  GMDL_Mtl * second = nullptr;
+  ASSERT_EQ(gmdl_mtl_load_file(out.path(), nullptr, nullptr, &second), GMDL_OK);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(second->materials[0].Ka_color.form, GMDL_MTL_COLOR_XYZ);
+  EXPECT_EQ(second->materials[0].Kd_color.form, GMDL_MTL_COLOR_SPECTRAL);
+  EXPECT_FALSE(second->materials[0].Kd_color.factor_stated);
+  EXPECT_TRUE(second->materials[0].Ks_color.factor_stated);
+  EXPECT_TRUE(second->materials[0].d_halo);
+  gmdl_mtl_free(second);
+  gmdl_mtl_free(first);
 }
 
 TEST(MtlDissolve, AValueThatDoesNotParseIsMalformed) {
@@ -1563,24 +1641,26 @@ TEST(MtlVocabulary, AToggleThatIsNeitherOnNorOffIsMalformed) {
       load_text_expecting_failure("newmtl m\nmap_aat\n"), GMDL_ERR_FORMAT);
 }
 
-TEST(MtlVocabulary, UnimplementedColourFormsStillApplyToTheNewColours) {
-  EXPECT_EQ(load_text_expecting_failure("newmtl m\nKe spectral f.rfl\n"),
-      GMDL_ERR_UNSUPPORTED);
-  EXPECT_EQ(load_text_expecting_failure("newmtl m\nTf xyz 1 2 3\n"),
-      GMDL_ERR_UNSUPPORTED);
+TEST(MtlVocabulary, TheNewColoursTakeTheSameForms) {
+  GMDL_Mtl * spectral = load_text("newmtl m\nKe spectral f.rfl\n");
+  ASSERT_NE(spectral, nullptr);
+  EXPECT_EQ(spectral->materials[0].Ke_color.form, GMDL_MTL_COLOR_SPECTRAL);
+  EXPECT_STREQ(spectral->materials[0].Ke_color.spectral, "f.rfl");
+  gmdl_mtl_free(spectral);
+
+  GMDL_Mtl * xyz = load_text("newmtl m\nTf xyz 1 2 3\n");
+  ASSERT_NE(xyz, nullptr);
+  EXPECT_EQ(xyz->materials[0].Tf_color.form, GMDL_MTL_COLOR_XYZ);
+  EXPECT_FLOAT_EQ(xyz->materials[0].Tf[2], 3.0f);
+  gmdl_mtl_free(xyz);
 }
 
 TEST(MtlVocabulary, EveryDirectiveRefusesWhatItCannotRead) {
   // The refusal arm of each directive, which is a separate branch per
-  // directive and therefore a separate way to get one wrong. A colour that
-  // names an unimplemented form is UNSUPPORTED; a value that is not a value
-  // at all is FORMAT; a map carrying options is UNSUPPORTED (4.5).
+  // directive and therefore a separate way to get one wrong. A value that
+  // is not a value at all is FORMAT; a map option this library does not
+  // know is UNSUPPORTED (4.5).
   const std::vector<std::pair<const char *, GMDL_Result>> cases = {
-      {"Ka spectral f.rfl", GMDL_ERR_UNSUPPORTED},
-      {"Kd xyz 1 2 3", GMDL_ERR_UNSUPPORTED},
-      {"Ks spectral f.rfl", GMDL_ERR_UNSUPPORTED},
-      {"Ke xyz 1 2 3", GMDL_ERR_UNSUPPORTED},
-      {"Tf spectral f.rfl", GMDL_ERR_UNSUPPORTED},
       {"Ka 0.5 x", GMDL_ERR_FORMAT},
       {"Ke 0.5 x", GMDL_ERR_FORMAT},
       {"Tf 0.5 x", GMDL_ERR_FORMAT},

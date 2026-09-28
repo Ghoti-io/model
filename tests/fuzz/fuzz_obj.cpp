@@ -436,6 +436,15 @@ void check_round_trip(const GMDL_Obj * obj) {
             && same_float(obj->vertices[i].z, again->vertices[i].z),
         "vertex value");
   }
+  REQUIRE(obj->weight_count == again->weight_count, "weight_count");
+  for (size_t i = 0; i < obj->weight_count; i++) {
+    // `present` too: an absent weight holds 1, so a dumper that wrote `w 1`
+    // for it would reload as a weight whose value matched and only this
+    // flag would say otherwise. Same shape as an absent colour holding white.
+    REQUIRE(obj->weights[i].present == again->weights[i].present,
+        "weight presence");
+    REQUIRE(same_float(obj->weights[i].w, again->weights[i].w), "weight value");
+  }
   for (size_t i = 0; i < obj->color_count; i++) {
     // `present` too, not just the three numbers: an absent colour holds
     // white, so a dumper that wrote white for it would reload as a colour
@@ -534,6 +543,9 @@ void check_round_trip(const GMDL_Obj * obj) {
         "group span");
     REQUIRE(obj->groups[g].is_object == again->groups[g].is_object,
         "group spelling");
+    // `g a b` is two groups written as one line. Losing `joined` writes two
+    // `g` lines, and the reload then puts the faces on only the second name.
+    REQUIRE(obj->groups[g].joined == again->groups[g].joined, "group joined");
   }
   for (size_t i = 0; i < obj->face_count; i++) {
     REQUIRE(strcmp(material_name(obj, obj->faces[i].material_index),

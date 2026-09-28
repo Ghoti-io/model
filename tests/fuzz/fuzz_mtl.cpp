@@ -100,6 +100,15 @@ bool is_representable(const GMDL_Mtl * mtl) {
     if (ends_with_backslash(m->name)) {
       return false;
     }
+    // A spectral path is written last on its line when no factor follows, so
+    // a trailing backslash continues the line the way a map path's does.
+    const GMDL_Mtl_Color * colors[] = {&m->Ka_color, &m->Kd_color,
+        &m->Ks_color, &m->Ke_color, &m->Tf_color};
+    for (const GMDL_Mtl_Color * color : colors) {
+      if (ends_with_backslash(color->spectral)) {
+        return false;
+      }
+    }
     std::vector<const GMDL_Mtl_Map *> maps;
     collect_maps(m, maps);
     for (const GMDL_Mtl_Map * map : maps) {
@@ -117,6 +126,24 @@ bool same_path(const char * a, const char * b) {
     return a == b;
   }
   return strcmp(a, b) == 0;
+}
+
+/**
+ * Whether two colour statements say the same thing.
+ *
+ * The form is the part a comparison of the three numbers cannot see: XYZ
+ * and RGB can hold the same floats, and a spectral statement holds zeros.
+ * The factor is compared only when the file stated one, because an omitted
+ * factor and a written 1 are different lines that both store 1.
+ */
+bool same_color(const GMDL_Mtl_Color * a, const GMDL_Mtl_Color * b) {
+  if (a->form != b->form || !same_path(a->spectral, b->spectral)) {
+    return false;
+  }
+  if (a->factor_stated != b->factor_stated) {
+    return false;
+  }
+  return !a->factor_stated || same_float(a->factor, b->factor);
 }
 
 /**
@@ -169,13 +196,19 @@ void check_round_trip(const GMDL_Mtl * mtl) {
       REQUIRE(same_float(a->Kd[c], b->Kd[c]), "Kd");
       REQUIRE(same_float(a->Ks[c], b->Ks[c]), "Ks");
     }
+    REQUIRE(same_color(&a->Ka_color, &b->Ka_color), "Ka form");
+    REQUIRE(same_color(&a->Kd_color, &b->Kd_color), "Kd form");
+    REQUIRE(same_color(&a->Ks_color, &b->Ks_color), "Ks form");
     REQUIRE(same_float(a->Ns, b->Ns), "Ns");
     REQUIRE(same_float(a->d, b->d), "d");
+    REQUIRE(a->d_halo == b->d_halo, "d halo");
     REQUIRE(a->illum == b->illum, "illum");
     for (int c = 0; c < 3; c++) {
       REQUIRE(same_float(a->Ke[c], b->Ke[c]), "Ke");
       REQUIRE(same_float(a->Tf[c], b->Tf[c]), "Tf");
     }
+    REQUIRE(same_color(&a->Ke_color, &b->Ke_color), "Ke form");
+    REQUIRE(same_color(&a->Tf_color, &b->Tf_color), "Tf form");
     REQUIRE(same_float(a->Ni, b->Ni), "Ni");
     REQUIRE(same_float(a->Tr, b->Tr), "Tr");
     REQUIRE(a->sharpness == b->sharpness, "sharpness");
