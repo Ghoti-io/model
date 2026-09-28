@@ -46,8 +46,8 @@
 // undone. GCU_* names are deliberately absent: they are cutil's, and cutil
 // has already renamed them.
 #define GMDL_Allocator GHOTIIO_MODEL(GMDL_Allocator)
-#define GMDL_Limits GHOTIIO_MODEL(GMDL_Limits)
 #define GMDL_Mtl GHOTIIO_MODEL(GMDL_Mtl)
+#define GMDL_Mtl_Options GHOTIIO_MODEL(GMDL_Mtl_Options)
 #define GMDL_Mtl_Material GHOTIIO_MODEL(GMDL_Mtl_Material)
 #define GMDL_Mtl_Imfchan GHOTIIO_MODEL(GMDL_Mtl_Imfchan)
 #define GMDL_Mtl_Map GHOTIIO_MODEL(GMDL_Mtl_Map)
@@ -55,6 +55,7 @@
 #define GMDL_Mtl_Present GHOTIIO_MODEL(GMDL_Mtl_Present)
 #define GMDL_Mtl_Refl_Type GHOTIIO_MODEL(GMDL_Mtl_Refl_Type)
 #define GMDL_Obj GHOTIIO_MODEL(GMDL_Obj)
+#define GMDL_Obj_Options GHOTIIO_MODEL(GMDL_Obj_Options)
 #define GMDL_Obj_Color GHOTIIO_MODEL(GMDL_Obj_Color)
 #define GMDL_Obj_Face GHOTIIO_MODEL(GMDL_Obj_Face)
 #define GMDL_Obj_Face_Overflow GHOTIIO_MODEL(GMDL_Obj_Face_Overflow)
@@ -73,16 +74,17 @@
 
 // Public functions.
 #define gmdl_allocator_default GHOTIIO_MODEL(gmdl_allocator_default)
-#define gmdl_limits_default GHOTIIO_MODEL(gmdl_limits_default)
 #define gmdl_mtl_dump GHOTIIO_MODEL(gmdl_mtl_dump)
 #define gmdl_mtl_find GHOTIIO_MODEL(gmdl_mtl_find)
 #define gmdl_mtl_free GHOTIIO_MODEL(gmdl_mtl_free)
 #define gmdl_mtl_load GHOTIIO_MODEL(gmdl_mtl_load)
 #define gmdl_mtl_load_file GHOTIIO_MODEL(gmdl_mtl_load_file)
+#define gmdl_mtl_options_default GHOTIIO_MODEL(gmdl_mtl_options_default)
 #define gmdl_obj_dump GHOTIIO_MODEL(gmdl_obj_dump)
 #define gmdl_obj_free GHOTIIO_MODEL(gmdl_obj_free)
 #define gmdl_obj_freeform_of_kind GHOTIIO_MODEL(gmdl_obj_freeform_of_kind)
 #define gmdl_obj_load GHOTIIO_MODEL(gmdl_obj_load)
+#define gmdl_obj_options_default GHOTIIO_MODEL(gmdl_obj_options_default)
 #define gmdl_obj_load_file GHOTIIO_MODEL(gmdl_obj_load_file)
 #define gmdl_result_string GHOTIIO_MODEL(gmdl_result_string)
 #define gmdl_stream_create_file GHOTIIO_MODEL(gmdl_stream_create_file)

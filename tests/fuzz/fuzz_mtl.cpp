@@ -173,8 +173,8 @@ void check_round_trip(const GMDL_Mtl * mtl) {
     return;
   }
   // Limits that cannot refuse our own output; see the OBJ harness.
-  GMDL_Limits generous;
-  gmdl_limits_default(&generous);
+  GMDL_Mtl_Options generous;
+  gmdl_mtl_options_default(&generous);
   generous.max_line_length = 1u << 20;
   GMDL_Mtl * again = nullptr;
   GMDL_Result reloaded = gmdl_mtl_load(stream, &generous, nullptr, &again);
@@ -274,7 +274,7 @@ char * dump_to_buffer(const GMDL_Mtl * mtl, size_t * out_length) {
 
 /** Parse the same bytes with one allocation refused, and compare. */
 void check_under_refusal(const uint8_t * data, size_t size,
-    const GMDL_Limits * limits, const Injection & how, GMDL_Result reference,
+    const GMDL_Mtl_Options * limits, const Injection & how, GMDL_Result reference,
     const GMDL_Mtl * reference_mtl) {
   GMDL_Stream * stream = nullptr;
   if (gmdl_stream_create_memory(data, size, &stream) != GMDL_OK) {
@@ -325,8 +325,8 @@ void check_under_refusal(const uint8_t * data, size_t size,
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Mtl_Options limits;
+  gmdl_mtl_options_default(&limits);
   Injection how;
   const uint8_t * body = data;
   size_t body_size = size;

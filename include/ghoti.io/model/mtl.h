@@ -323,31 +323,75 @@ typedef struct {
 } GMDL_Mtl;
 
 /**
+ * @brief Caps and readings for one MTL parse.
+ *
+ * Caps are the size_t fields and come first. Zero for a cap means no cap,
+ * except ::max_line_length, where zero means
+ * ::GMDL_DEFAULT_MAX_LINE_LENGTH, for the same reason as OBJ: the line
+ * buffer is allocated before the first line is read.
+ *
+ * A reading's zero is the behaviour the specification states. Pass NULL to
+ * a load function for gmdl_mtl_options_default().
+ */
+typedef struct GMDL_Mtl_Options {
+  /**
+   * Longest accepted line, in bytes, not counting its ending.
+   *
+   * Zero means ::GMDL_DEFAULT_MAX_LINE_LENGTH, not "unlimited".
+   */
+  size_t max_line_length;
+  size_t max_materials; ///< Cap on `newmtl` records.
+
+  /**
+   * Ignore a map directive that names no file.
+   *
+   * Zero, the default, is ::GMDL_ERR_FORMAT. Set, the line is skipped and
+   * the material is left as it was, which is what the reference readers do.
+   */
+  bool accept_map_without_path;
+  /**
+   * Reject `nan` and `inf` wherever a float is read.
+   *
+   * Zero, the default, records the value. A `-texres` whose number is
+   * outside `int32_t` stays ::GMDL_ERR_LIMIT either way: that is a value
+   * the field cannot hold, not a non-finite one.
+   */
+  bool reject_non_finite;
+} GMDL_Mtl_Options;
+
+/**
+ * @brief Fill in the default MTL options.
+ *
+ * @param options Structure to populate. NULL is ignored.
+ */
+GMDL_API void gmdl_mtl_options_default(GMDL_Mtl_Options * options);
+
+/**
  * @brief Parse an MTL file from a stream.
  *
  * @param stream Stream positioned at the start of the MTL data.
- * @param limits Parsing caps, or NULL for gmdl_limits_default().
+ * @param options Caps and readings, or NULL for gmdl_mtl_options_default().
  * @param allocator Allocator for the result, or NULL for the default.
  * @param out_mtl Receives the parsed material library on success.
  * @return GMDL_OK, or GMDL_ERR_FORMAT, GMDL_ERR_LIMIT, GMDL_ERR_OOM,
  *   GMDL_ERR_UNSUPPORTED, or GMDL_ERR_INVALID.
  */
 GMDL_API GMDL_Result gmdl_mtl_load(GMDL_Stream * stream,
-    const GMDL_Limits * limits, const GMDL_Allocator * allocator,
+    const GMDL_Mtl_Options * options, const GMDL_Allocator * allocator,
     GMDL_Mtl ** out_mtl);
 
 /**
  * @brief Parse an MTL file from a path.
  *
  * @param path Path to the MTL file.
- * @param limits Parsing caps, or NULL for gmdl_limits_default().
+ * @param options Caps and readings, or NULL for gmdl_mtl_options_default().
  * @param allocator Allocator for the result, or NULL for the default.
  * @param out_mtl Receives the parsed material library on success.
  * @return GMDL_OK, GMDL_ERR_IO if the file cannot be read, or any result
  *   gmdl_mtl_load() can return.
  */
 GMDL_API GMDL_Result gmdl_mtl_load_file(const char * path,
-    const GMDL_Limits * limits, const GMDL_Allocator * allocator,
+    const GMDL_Mtl_Options * options, const GMDL_Allocator * allocator,
     GMDL_Mtl ** out_mtl);
 
 /**

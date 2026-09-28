@@ -63,68 +63,13 @@ typedef enum {
 GMDL_API const char * gmdl_result_string(GMDL_Result result);
 
 /**
- * @brief Caps applied while parsing, so that a hostile or corrupt file cannot
- * make the library allocate without bound.
+ * @brief The line length a text parser uses when its max_line_length is zero.
  *
- * Zero means "no limit" for every field. Pass NULL to a load function to use
- * gmdl_limits_default().
- */
-/**
- * @brief The line length both parsers use when ::GMDL_Limits.max_line_length
- *   is zero, and the value ::gmdl_limits_default() puts there.
- *
- * Named rather than repeated because it was written out three times - in the
- * defaults and in each loader - and a caller reading the header had no way to
- * know the three agreed.
+ * Named rather than repeated because each format's options carry their own
+ * field, and a caller reading one header had no way to know the defaults
+ * agreed. A binary format has no line length and does not use this.
  */
 #define GMDL_DEFAULT_MAX_LINE_LENGTH 65536u
-
-typedef struct GMDL_Limits {
-  /**
-   * Longest accepted line, in bytes.
-   *
-   * **Zero does not mean "unlimited" here**, which it does for every other
-   * field of this struct. It means ::GMDL_DEFAULT_MAX_LINE_LENGTH, because
-   * the line buffer is allocated once before the first line is read and a
-   * caller cannot be given an unbounded allocation by leaving a field out.
-   * A caller who zeroes this struct and fills in only the fields it cares
-   * about therefore still gets a bounded line, which is the safe reading of
-   * an omission and the reason the odd one out is this one.
-   */
-  size_t max_line_length;
-  size_t max_vertices;    ///< Cap on `v` records.
-  size_t max_texcoords;   ///< Cap on `vt` records.
-  size_t max_normals;     ///< Cap on `vn` records.
-  size_t max_param_vertices; ///< Cap on `vp` records.
-  size_t max_faces;       ///< Cap on `f` records.
-  size_t max_face_indices; ///< Cap on vertices in a single face.
-  size_t max_groups;      ///< Cap on `g`/`o` records.
-  size_t max_materials;   ///< Cap on `newmtl` records, and on OBJ material
-                          ///< mappings.
-  size_t max_statements;  ///< Cap on `call` and `csh` records.
-  size_t max_mtllibs;     ///< Cap on `mtllib` records.
-  size_t max_maplibs;     ///< Cap on `maplib` records.
-  size_t max_maps;        ///< Cap on `usemap` name-to-index mappings.
-  size_t max_render_states; ///< Cap on distinct render-attribute states.
-  size_t max_shadow_objs; ///< Cap on `shadow_obj` records.
-  size_t max_trace_objs;  ///< Cap on `trace_obj` records.
-  size_t max_freeforms;   ///< Cap on `curv`, `curv2` and `surf` elements.
-  size_t max_basis_values; ///< Cap on `bmat` values, across every line.
-  size_t max_freeform_bodies; ///< Cap on `parm`, `trim`, `hole`, `scrv` and
-                              ///< `sp` lines, across every element.
-  size_t max_parm_values;  ///< Cap on `parm` values, across every line.
-  size_t max_curve_refs;   ///< Cap on the curve references `trim`, `hole`
-                           ///< and `scrv` name, across every line.
-  size_t max_special_points; ///< Cap on `sp` indices, across every line.
-  size_t max_connections;  ///< Cap on `con` records.
-} GMDL_Limits;
-
-/**
- * @brief Fill in the default limits.
- *
- * @param limits Structure to populate. NULL is ignored.
- */
-GMDL_API void gmdl_limits_default(GMDL_Limits * limits);
 
 #ifdef __cplusplus
 }

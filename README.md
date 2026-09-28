@@ -15,16 +15,16 @@ in [documentation/obj-mtl.md](documentation/obj-mtl.md).
 
 ## Before you call it
 
-- Every load takes a `GMDL_Limits *` and a `GMDL_Allocator *`. `NULL` is the defaults.
-- The only limit with a value by default is `max_line_length` (64 KiB). The parser reads a line at a time, so without it one unterminated line would be read in full. The record caps default to no limit, because the size of the input already bounds them.
+- Every load takes that format's options pointer and a `GMDL_Allocator *`. `NULL` is the defaults. OBJ's is `GMDL_Obj_Options`; MTL's is `GMDL_Mtl_Options`. A later format brings its own.
+- The only cap with a value by default is `max_line_length` (64 KiB). The parser reads a line at a time, so without it one unterminated line would be read in full. The record caps default to no limit, because the size of the input already bounds them. A reading's zero is the behaviour the specification states.
 - A line longer than the buffer is `GMDL_ERR_LIMIT`. The reader does not hand back a prefix: the rest of a split line would be parsed as a line of its own, and a face cut in half would become a second face.
 - An index that names a vertex the file does not contain is recorded, not rejected. Readers disagree about that case, and the check belongs with the consumer that is about to use the index.
 
 ```c
-GMDL_Limits limits;
-gmdl_limits_default(&limits);
-limits.max_vertices = 1u << 20;
-limits.max_faces = 1u << 20;
+GMDL_Obj_Options options;
+gmdl_obj_options_default(&options);
+options.max_vertices = 1u << 20;
+options.max_faces = 1u << 20;
 ```
 
 ## Examples
@@ -105,10 +105,10 @@ make -C libs/model test PREFIX="$PWD/.local"
 
 Everything is prefixed `gmdl_` / `GMDL_`, under `<ghoti.io/model/...>`.
 
-- **`core.h`** — `GMDL_Result`, `gmdl_result_string()`, and `GMDL_Limits`.
+- **`core.h`** — `GMDL_Result` and `gmdl_result_string()`.
 - **`stream.h`** — a byte stream over memory or a file, with a line reader.
-- **`obj.h`** — `gmdl_obj_load()`, `gmdl_obj_load_file()`, `gmdl_obj_free()`, `gmdl_obj_dump()`.
-- **`mtl.h`** — `gmdl_mtl_load()`, `gmdl_mtl_load_file()`, `gmdl_mtl_free()`, `gmdl_mtl_find()`, `gmdl_mtl_dump()`.
+- **`obj.h`** — `GMDL_Obj_Options`, `gmdl_obj_load()`, `gmdl_obj_load_file()`, `gmdl_obj_free()`, `gmdl_obj_dump()`.
+- **`mtl.h`** — `GMDL_Mtl_Options`, `gmdl_mtl_load()`, `gmdl_mtl_load_file()`, `gmdl_mtl_free()`, `gmdl_mtl_find()`, `gmdl_mtl_dump()`.
 - **`allocator.h`** — `GMDL_Allocator`, which is cutil's `GCU_Allocator`.
 
 [Formats](#formats) is what is implemented.

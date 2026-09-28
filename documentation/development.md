@@ -4,7 +4,7 @@
 
 ```
 include/ghoti.io/model/   Public headers
-src/core/                 Result strings, limits, the allocator
+src/core/                 Result strings and the allocator
 src/stream/               GMDL_Stream
 src/obj/                  OBJ parsing and dumping
 src/mtl/                  MTL parsing and dumping
@@ -18,16 +18,30 @@ tests/fuzz/               libFuzzer harnesses and seed corpus
 The suite convention, the same one `image` follows for codecs, is that a new
 format arrives with:
 
-1. A load function taking a `GMDL_Stream *`, a `GMDL_Limits *` and a
-   `GMDL_Allocator *`, each of the last two accepting NULL.
-2. A free function that tolerates NULL.
-3. Unit tests covering the happy path, the malformed cases, and the limits.
-4. **A fuzz harness**, registered in the Makefile with
+1. Its own options struct, `GMDL_<Format>_Options`, holding that format's
+   caps and its readings. A cap of zero means no cap, except a line-oriented
+   format's `max_line_length`, where zero means
+   `GMDL_DEFAULT_MAX_LINE_LENGTH`. A reading's zero is the behaviour that
+   format's specification states, so a caller who leaves the field alone
+   does not change it. There is no library-wide limits struct. OBJ and MTL
+   each have their own, and a third format does not take either: a cap on
+   `curv` means nothing to a material file, and a binary format has no line
+   length. The result codes, the allocator and the stream are what a format
+   shares.
+2. A load function taking a `GMDL_Stream *`, that options pointer and a
+   `GMDL_Allocator *`. NULL options are `gmdl_<format>_options_default()`.
+   NULL allocator is the default allocator.
+3. A free function that tolerates NULL.
+4. Unit tests covering the happy path, the malformed cases, and every cap.
+5. **A fuzz harness**, registered in the Makefile with
    `$(eval $(call fuzz-rule,fuzz_<name>,<name>))`, plus a seed in
    `tests/fuzz/corpus/<name>/`.
 
-Point 4 is not optional. A parser over untrusted input without a fuzzer is a
-parser nobody has actually tested.
+Point 5 is not optional. A parser over untrusted input without a fuzzer is a
+parser nobody has actually tested. The first version of this section told
+every loader to take `GMDL_Limits`. That struct had already become the OBJ
+cap list, with two fields MTL also happened to read, and the instruction
+would have handed the next format a `max_freeforms` it could not honour.
 
 ## Fuzzing
 
@@ -36,10 +50,12 @@ ordinary shared library, so libFuzzer sees the parser's branches. A harness
 linked against an uninstrumented library gets no coverage signal and degrades
 to generating random input.
 
-The first byte of each input selects the limits, so the capped paths are
+The first byte of each input selects the caps, so the capped paths are
 reachable rather than only the wide-open defaults. Keep that convention when
-adding a harness - otherwise the limit checks are dead code as far as the
-fuzzer is concerned.
+adding a harness - otherwise the cap checks are dead code as far as the
+fuzzer is concerned. The readings stay at their defaults in that byte: the
+corpus is the ordinary spelling, and a flag that changes it belongs in a
+unit test.
 
 ```bash
 make fuzz FUZZ_TIME=3600     # both harnesses

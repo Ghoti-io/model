@@ -8,6 +8,7 @@
 
 #include "test_helpers.h"
 
+#include <cmath>
 #include <cstddef>
 #include <fstream>
 #include <functional>
@@ -23,17 +24,18 @@ using gmdltest::TempFile;
 namespace {
 
 /** Parse an inline MTL document, or fail the test. */
-GMDL_Mtl * load_text(const std::string & text) {
+GMDL_Mtl * load_text(const std::string & text,
+    const GMDL_Mtl_Options * options = nullptr) {
   MemStream stream(text);
   GMDL_Mtl * mtl = nullptr;
-  GMDL_Result r = gmdl_mtl_load(stream.get(), nullptr, nullptr, &mtl);
+  GMDL_Result r = gmdl_mtl_load(stream.get(), options, nullptr, &mtl);
   EXPECT_EQ(r, GMDL_OK) << gmdl_result_string(r);
   return mtl;
 }
 
 /** Parse an inline MTL document that is expected to fail. */
 GMDL_Result load_text_expecting_failure(
-    const std::string & text, const GMDL_Limits * limits = nullptr) {
+    const std::string & text, const GMDL_Mtl_Options * limits = nullptr) {
   MemStream stream(text);
   GMDL_Mtl * mtl = nullptr;
   GMDL_Result r = gmdl_mtl_load(stream.get(), limits, nullptr, &mtl);
@@ -265,10 +267,10 @@ TEST(MtlParse, AMapOptionWithNoArgumentIsAFormatError) {
 
 // Zero is not "unlimited" for this one field, and nothing pinned that: every
 // test either takes the default or sets a small cap, so the arm that supplies
-// the fallback had never run. See GMDL_Limits.max_line_length.
+// the fallback had never run. See GMDL_Mtl_Options.max_line_length.
 TEST(MtlLimits, AZeroLineLengthIsTheDefaultAndNotUnlimited) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Mtl_Options limits;
+  gmdl_mtl_options_default(&limits);
   limits.max_line_length = 0;
   MemStream stream("newmtl a_name_well_under_the_default\n");
   GMDL_Mtl * mtl = nullptr;
@@ -284,8 +286,8 @@ TEST(MtlLimits, AZeroLineLengthIsTheDefaultAndNotUnlimited) {
 }
 
 TEST(MtlLimits, MaterialCapIsEnforced) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Mtl_Options limits;
+  gmdl_mtl_options_default(&limits);
   limits.max_materials = 2;
   EXPECT_EQ(
       load_text_expecting_failure("newmtl a\nnewmtl b\nnewmtl c\n", &limits),
@@ -293,8 +295,8 @@ TEST(MtlLimits, MaterialCapIsEnforced) {
 }
 
 TEST(MtlLimits, LineLongerThanTheCapIsRejected) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Mtl_Options limits;
+  gmdl_mtl_options_default(&limits);
   limits.max_line_length = 8;
   EXPECT_EQ(load_text_expecting_failure("newmtl a_very_long_name\n", &limits),
       GMDL_ERR_LIMIT);
@@ -1071,10 +1073,43 @@ TEST(MtlMap, AnUnknownOptionIsStillUnsupported) {
 }
 
 TEST(MtlMap, ADirectiveWithNoPathIsMalformed) {
-  // Both references ignore the line instead; 4.5 records that divergence.
+  // Both references ignore the line instead; 4.5 records that divergence,
+  // and accept_map_without_path is that reading.
   EXPECT_EQ(load_text_expecting_failure("newmtl a\nmap_Kd\n"), GMDL_ERR_FORMAT);
   EXPECT_EQ(
       load_text_expecting_failure("newmtl a\nmap_Kd   \n"), GMDL_ERR_FORMAT);
+}
+
+TEST(MtlMap, ADirectiveWithNoPathCanBeIgnored) {
+  GMDL_Mtl_Options options;
+  gmdl_mtl_options_default(&options);
+  options.accept_map_without_path = true;
+  GMDL_Mtl * mtl = load_text(
+      "newmtl a\nmap_Kd brick.png\nmap_Ka\n", &options);
+  ASSERT_NE(mtl, nullptr);
+  ASSERT_EQ(mtl->material_count, 1u);
+  EXPECT_STREQ(mtl->materials[0].map_Kd.path, "brick.png");
+  EXPECT_EQ(mtl->materials[0].map_Ka.path, nullptr);
+  gmdl_mtl_free(mtl);
+}
+
+TEST(MtlParse, NonFiniteNumbersCanBeRejected) {
+  GMDL_Mtl * kept = load_text("newmtl a\nKd nan 0 0\nNs nan\n");
+  ASSERT_NE(kept, nullptr);
+  EXPECT_TRUE(std::isnan(kept->materials[0].Kd[0]));
+  EXPECT_TRUE(std::isnan(kept->materials[0].Ns));
+  gmdl_mtl_free(kept);
+
+  GMDL_Mtl_Options options;
+  gmdl_mtl_options_default(&options);
+  options.reject_non_finite = true;
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nKd nan 0 0\n", &options),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("newmtl a\nNs inf\n", &options),
+      GMDL_ERR_FORMAT);
+  GMDL_Mtl * finite = load_text("newmtl a\nKd 0.5 0.25 0.125\n", &options);
+  ASSERT_NE(finite, nullptr);
+  gmdl_mtl_free(finite);
 }
 
 TEST(MtlMap, BumpAndMapBumpAreOneProperty) {

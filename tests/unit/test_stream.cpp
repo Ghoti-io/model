@@ -250,12 +250,20 @@ TEST(Result, StringCoversEveryCode) {
   EXPECT_STREQ(gmdl_result_string((GMDL_Result)9999), "Unknown error");
 }
 
-TEST(Limits, DefaultsAreFilledIn) {
-  GMDL_Limits limits;
-  memset(&limits, 0xAA, sizeof(limits));
-  gmdl_limits_default(&limits);
-  EXPECT_GT(limits.max_line_length, 0u);
-  gmdl_limits_default(nullptr); // Must not crash.
+TEST(Options, DefaultsAreFilledIn) {
+  GMDL_Obj_Options obj;
+  memset(&obj, 0xAA, sizeof(obj));
+  gmdl_obj_options_default(&obj);
+  EXPECT_GT(obj.max_line_length, 0u);
+  EXPECT_FALSE(obj.accept_short_vertex);
+  gmdl_obj_options_default(nullptr); // Must not crash.
+
+  GMDL_Mtl_Options mtl;
+  memset(&mtl, 0xAA, sizeof(mtl));
+  gmdl_mtl_options_default(&mtl);
+  EXPECT_GT(mtl.max_line_length, 0u);
+  EXPECT_FALSE(mtl.accept_map_without_path);
+  gmdl_mtl_options_default(nullptr);
 }
 
 int main(int argc, char ** argv) {

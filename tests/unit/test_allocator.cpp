@@ -162,8 +162,8 @@ TEST(Allocator, FailedParseReturnsEverything) {
   Counting counting;
   GMDL_Allocator allocator = make_allocator(&counting);
 
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Obj_Options limits;
+  gmdl_obj_options_default(&limits);
   limits.max_faces = 4;
 
   std::string text;

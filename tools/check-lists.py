@@ -398,46 +398,65 @@ if not link_lines:
     fail("found no link lines at all; this check would pass vacuously")
 
 #
-# GMDL_Limits: every field in the documented table
+# Options: every field of each format's struct is in section 5
 #
-# A limit is named in three places: the struct, gmdl_limits_default(), and
-# the table in section 5 of documentation/obj-mtl.md.  The first two are
-# checked by the compiler and by ObjLimits.EveryFieldRefusesSomething, which
-# fails the moment a field arrives without a case row.  Nothing checked the
-# third, and it drifted: max_mtllibs was added to the struct, given a
+# A cap is named in the struct, the default function, and the table in
+# section 5 of documentation/obj-mtl.md.  The first two are checked by the
+# compiler and, for OBJ, by ObjLimits.EveryFieldRefusesSomething, which
+# fails the moment a cap arrives without a case row.  Nothing checked the
+# table, and it drifted: max_mtllibs was added to the struct, given a
 # default, given a cap in the parser and given a test, and never reached the
 # table - so the document told a caller bounding memory from untrusted input
 # that a cap they could set did not exist.  That is the worst shape a
 # documentation defect takes, because the reader has no way to find it: the
 # absence reads exactly like a field that was never added.
 #
-core_header = read("include/ghoti.io/model/core.h")
-limits_body = re.search(
-    r"typedef struct GMDL_Limits \{(.*?)\} GMDL_Limits;", core_header, re.S)
-if not limits_body:
-    fail("could not find GMDL_Limits in core.h; the pattern must have rotted")
-limit_fields = re.findall(r"^\s*size_t (\w+);", limits_body.group(1), re.M)
-if not limit_fields:
-    fail("found no fields in GMDL_Limits; the pattern must have rotted")
+# The two structs are checked separately.  A field that exists on both
+# (max_line_length, max_materials, reject_non_finite) is one row, and that
+# is enough: the row says what the name means, and each struct's comment
+# says which format.
+#
+def option_fields(header_path, struct):
+    header = read(header_path)
+    body = re.search(
+        r"typedef struct %s \{(.*?)\} %s;" % (struct, struct), header, re.S)
+    if not body:
+        fail("could not find %s in %s; the pattern must have rotted"
+             % (struct, header_path))
+        return []
+    fields = re.findall(
+        r"^\s*(?:size_t|bool) (\w+);", body.group(1), re.M)
+    if not fields:
+        fail("found no fields in %s; the pattern must have rotted" % struct)
+    return fields
+
+obj_fields = option_fields("include/ghoti.io/model/obj.h", "GMDL_Obj_Options")
+mtl_fields = option_fields("include/ghoti.io/model/mtl.h", "GMDL_Mtl_Options")
+option_fields_all = obj_fields + mtl_fields
 
 doc = read("documentation/obj-mtl.md")
-table = re.search(r"^## 5\. Limits$(.*?)^`0` means no limit", doc, re.S | re.M)
-if not table:
-    fail("could not find the limits table in section 5 of "
-         "documentation/obj-mtl.md")
-documented = set(re.findall(r"^\| `(\w+)` \|", table.group(1), re.M))
+section = re.search(r"^## 5\. Options$(.*?)^## 6\.", doc, re.S | re.M)
+if not section:
+    fail("could not find section 5 of documentation/obj-mtl.md")
+    section_text = ""
+else:
+    section_text = section.group(1)
+documented = set(re.findall(r"^\| `(\w+)` \|", section_text, re.M))
 
-undocumented = [f for f in limit_fields if f not in documented]
+undocumented = [f for f in option_fields_all if f not in documented]
+# A name on both structs is one field.  Report it once.
+undocumented = sorted(set(undocumented))
 if undocumented:
-    fail("GMDL_Limits has %s that section 5 of documentation/obj-mtl.md does "
-         "not list: %s.  Add a row saying what it counts."
+    fail("an options struct has %s that section 5 of "
+         "documentation/obj-mtl.md does not list: %s.  Add a row saying "
+         "what it counts."
          % ("fields" if len(undocumented) > 1 else "a field",
             ", ".join(undocumented)))
-invented = sorted(documented - set(limit_fields))
+invented = sorted(documented - set(option_fields_all))
 if invented:
-    fail("section 5 of documentation/obj-mtl.md lists %s that GMDL_Limits "
-         "does not have: %s." % ("caps" if len(invented) > 1 else "a cap",
-                                 ", ".join(invented)))
+    fail("section 5 of documentation/obj-mtl.md lists %s that neither "
+         "options struct has: %s."
+         % ("fields" if len(invented) > 1 else "a field", ", ".join(invented)))
 
 #
 # The fuzzer's index exemption against the types that carry an index
@@ -550,7 +569,7 @@ print("check-lists: %d flag stamps guarding %d compile rules, each recording "
 print("check-lists: %d builder capacities, largest %d, all under the sweep's "
       "kGrow of %d; %d deliberately empty"
       % (len(capacities), max(c for _, _, c in capacities), grow, len(empty)))
-print("check-lists: %d GMDL_Limits fields, each with a row in section 5"
-      % len(limit_fields))
+print("check-lists: %d OBJ options fields and %d MTL options fields, each "
+      "with a row in section 5" % (len(obj_fields), len(mtl_fields)))
 print("check-lists: %d index-carrying types, each named in the fuzzer's "
       "index exemption" % len(carrying))

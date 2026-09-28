@@ -368,8 +368,8 @@ void check_round_trip(const GMDL_Obj * obj) {
   // the original parse used came from the options byte, and the question
   // here is whether the dump describes the same model - not whether it fits
   // inside somebody's caps.
-  GMDL_Limits generous;
-  gmdl_limits_default(&generous);
+  GMDL_Obj_Options generous;
+  gmdl_obj_options_default(&generous);
   generous.max_line_length = 1u << 20;
   GMDL_Obj * again = nullptr;
   GMDL_Result reloaded = gmdl_obj_load(stream, &generous, nullptr, &again);
@@ -722,7 +722,7 @@ char * dump_to_buffer(const GMDL_Obj * obj, size_t * out_length) {
  * @param reference_obj The model it produced, or nullptr.
  */
 void check_under_refusal(const uint8_t * data, size_t size,
-    const GMDL_Limits * limits, const Injection & how, GMDL_Result reference,
+    const GMDL_Obj_Options * limits, const Injection & how, GMDL_Result reference,
     const GMDL_Obj * reference_obj) {
   GMDL_Stream * stream = nullptr;
   if (gmdl_stream_create_memory(data, size, &stream) != GMDL_OK) {
@@ -782,8 +782,8 @@ void check_under_refusal(const uint8_t * data, size_t size,
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   // The first byte selects the limits, so that the capped paths are reachable
   // too rather than only the wide-open defaults.
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Obj_Options limits;
+  gmdl_obj_options_default(&limits);
   Injection how;
   const uint8_t * body = data;
   size_t body_size = size;

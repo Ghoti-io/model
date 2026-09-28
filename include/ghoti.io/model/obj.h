@@ -994,17 +994,91 @@ typedef struct {
 } GMDL_Obj;
 
 /**
+ * @brief Caps and readings for one OBJ parse.
+ *
+ * Caps are the size_t fields and come first, so a test can tell a new cap
+ * from a reading by where the bools begin. Zero for a cap means no cap,
+ * except ::max_line_length, where zero means
+ * ::GMDL_DEFAULT_MAX_LINE_LENGTH: the line buffer is allocated before the
+ * first line is read, and a caller who zeroes this struct and sets only the
+ * caps they care about must still get a bounded line.
+ *
+ * A reading's zero is the behaviour the specification states. Set the field
+ * to take the other reading. Pass NULL to a load function for
+ * gmdl_obj_options_default().
+ */
+typedef struct GMDL_Obj_Options {
+  /**
+   * Longest accepted line, in bytes, not counting its ending.
+   *
+   * Zero means ::GMDL_DEFAULT_MAX_LINE_LENGTH, not "unlimited".
+   */
+  size_t max_line_length;
+  size_t max_vertices;       ///< Cap on `v` records.
+  size_t max_texcoords;      ///< Cap on `vt` records.
+  size_t max_normals;        ///< Cap on `vn` records.
+  size_t max_param_vertices; ///< Cap on `vp` records.
+  size_t max_faces;          ///< Cap on `f`, `l` and `p` elements together.
+  size_t max_face_indices;   ///< Cap on references in one element.
+  size_t max_groups;         ///< Cap on `g` and `o` records together.
+  size_t max_materials;      ///< Cap on distinct `usemtl` names.
+  size_t max_statements;     ///< Cap on `call` and `csh` records.
+  size_t max_mtllibs;        ///< Cap on `mtllib` records.
+  size_t max_maplibs;        ///< Cap on `maplib` records.
+  size_t max_maps;           ///< Cap on distinct `usemap` names.
+  size_t max_render_states;  ///< Cap on distinct render-attribute states.
+  size_t max_shadow_objs;    ///< Cap on `shadow_obj` records.
+  size_t max_trace_objs;     ///< Cap on `trace_obj` records.
+  size_t max_freeforms;      ///< Cap on `curv`, `curv2` and `surf` together.
+  size_t max_basis_values;   ///< Cap on `bmat` values, across every line.
+  size_t max_freeform_bodies; ///< Cap on `parm`, `trim`, `hole`, `scrv` and
+                              ///< `sp` lines, across every element.
+  size_t max_parm_values;    ///< Cap on `parm` values, across every line.
+  size_t max_curve_refs;     ///< Cap on curve references in `trim`, `hole`
+                             ///< and `scrv`.
+  size_t max_special_points; ///< Cap on `sp` indices, across every line.
+  size_t max_connections;    ///< Cap on `con` records.
+
+  /**
+   * Accept `v` with one or two numbers, padding the missing ones with zero.
+   *
+   * Zero, the default, is ::GMDL_ERR_FORMAT. A line with no numbers stays
+   * ::GMDL_ERR_FORMAT either way: there is no vertex to pad.
+   */
+  bool accept_short_vertex;
+  /**
+   * Reject a face, line or free-form reference with a fourth `/` field.
+   *
+   * Zero, the default, ignores that field (3.5).
+   */
+  bool reject_extra_face_field;
+  /**
+   * Reject `nan` and `inf` wherever a float is read.
+   *
+   * Zero, the default, records the value.
+   */
+  bool reject_non_finite;
+} GMDL_Obj_Options;
+
+/**
+ * @brief Fill in the default OBJ options.
+ *
+ * @param options Structure to populate. NULL is ignored.
+ */
+GMDL_API void gmdl_obj_options_default(GMDL_Obj_Options * options);
+
+/**
  * @brief Parse an OBJ file from a stream.
  *
  * @param stream Stream positioned at the start of the OBJ data.
- * @param limits Parsing caps, or NULL for gmdl_limits_default().
+ * @param options Caps and readings, or NULL for gmdl_obj_options_default().
  * @param allocator Allocator for the result, or NULL for the default.
  * @param out_obj Receives the parsed model on success.
  * @return GMDL_OK, or GMDL_ERR_FORMAT, GMDL_ERR_LIMIT, GMDL_ERR_OOM, or
  *   GMDL_ERR_INVALID.
  */
 GMDL_API GMDL_Result gmdl_obj_load(GMDL_Stream * stream,
-    const GMDL_Limits * limits, const GMDL_Allocator * allocator,
+    const GMDL_Obj_Options * options, const GMDL_Allocator * allocator,
     GMDL_Obj ** out_obj);
 
 /**
@@ -1013,14 +1087,14 @@ GMDL_API GMDL_Result gmdl_obj_load(GMDL_Stream * stream,
  * Equivalent to opening a stream on the file and calling gmdl_obj_load().
  *
  * @param path Path to the OBJ file.
- * @param limits Parsing caps, or NULL for gmdl_limits_default().
+ * @param options Caps and readings, or NULL for gmdl_obj_options_default().
  * @param allocator Allocator for the result, or NULL for the default.
  * @param out_obj Receives the parsed model on success.
  * @return GMDL_OK, GMDL_ERR_IO if the file cannot be read, or any result
  *   gmdl_obj_load() can return.
  */
 GMDL_API GMDL_Result gmdl_obj_load_file(const char * path,
-    const GMDL_Limits * limits, const GMDL_Allocator * allocator,
+    const GMDL_Obj_Options * options, const GMDL_Allocator * allocator,
     GMDL_Obj ** out_obj);
 
 /**

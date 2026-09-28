@@ -29,6 +29,7 @@
 
 #include <ghoti.io/cutil/allocator.h>
 #include <ghoti.io/cutil/array.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,7 +84,8 @@ static GMDL_Result mtl_copy_token(const char * token, size_t length,
  * @return ::GMDL_OK, ::GMDL_ERR_FORMAT or ::GMDL_ERR_OOM.
  */
 static GMDL_Result mtl_parse_color(const char * rest,
-    const GMDL_Allocator * allocator, float * out, GMDL_Mtl_Color * statement) {
+    const GMDL_Allocator * allocator, float * out, GMDL_Mtl_Color * statement,
+    bool reject_non_finite) {
   GMDL_Mtl_Color parsed;
   memset(&parsed, 0, sizeof(parsed));
   float values[3] = {0.0f, 0.0f, 0.0f};
@@ -97,6 +99,9 @@ static GMDL_Result mtl_parse_color(const char * rest,
       float value = strtof(cursor, &end);
       if (end == cursor) {
         break;
+      }
+      if (reject_non_finite && !isfinite(value)) {
+        return GMDL_ERR_FORMAT;
       }
       values[count++] = value;
       cursor = end;
@@ -126,7 +131,7 @@ static GMDL_Result mtl_parse_color(const char * rest,
     if (*after) {
       char * end = NULL;
       float factor = strtof(after, &end);
-      if (end == after) {
+      if (end == after || (reject_non_finite && !isfinite(factor))) {
         gcu_allocator_free(allocator, parsed.spectral);
         return GMDL_ERR_FORMAT;
       }
@@ -143,6 +148,9 @@ static GMDL_Result mtl_parse_color(const char * rest,
       float value = strtof(cursor, &end);
       if (end == cursor) {
         break;
+      }
+      if (reject_non_finite && !isfinite(value)) {
+        return GMDL_ERR_FORMAT;
       }
       values[count++] = value;
       cursor = end;
@@ -190,7 +198,7 @@ static GMDL_Result mtl_parse_color(const char * rest,
  * @return ::GMDL_OK or ::GMDL_ERR_FORMAT.
  */
 static GMDL_Result mtl_parse_dissolve(
-    const char * rest, float * out, bool * halo) {
+    const char * rest, float * out, bool * halo, bool reject_non_finite) {
   const char * cursor = rest;
   *halo = false;
   if (gmdl_line_is(rest, "-halo", &cursor)) {
@@ -198,7 +206,7 @@ static GMDL_Result mtl_parse_dissolve(
   }
   char * end = NULL;
   float value = strtof(cursor, &end);
-  if (end == cursor) {
+  if (end == cursor || (reject_non_finite && !isfinite(value))) {
     return GMDL_ERR_FORMAT;
   }
   *out = value;
@@ -273,7 +281,8 @@ static bool mtl_token_is(const char * token, size_t length, const char * name) {
  * the "2" off the front of "2.png" and leave ".png" behind as the filename.
  * A token counts as a number only when the conversion consumes all of it.
  */
-static bool mtl_token_float(const char * token, size_t length, float * out) {
+static bool mtl_token_float(const char * token, size_t length, float * out,
+    bool reject_non_finite) {
   char buffer[64];
   if (length == 0 || length >= sizeof(buffer)) {
     return false;
@@ -285,13 +294,16 @@ static bool mtl_token_float(const char * token, size_t length, float * out) {
   if (end != buffer + length) {
     return false;
   }
+  if (reject_non_finite && !isfinite(value)) {
+    return false;
+  }
   *out = value;
   return true;
 }
 
 /** Read up to @p max floats, stopping at the first token that is not one. */
-static size_t mtl_take_floats(
-    const char ** cursor, float * out, size_t max, size_t min) {
+static size_t mtl_take_floats(const char ** cursor, float * out, size_t max,
+    size_t min, bool reject_non_finite) {
   size_t taken = 0;
   while (taken < max) {
     size_t length = 0;
@@ -301,7 +313,7 @@ static size_t mtl_take_floats(
     // it here as well left that clause of its guard unreachable: one
     // predicate written twice, where the copy nobody can reach is the copy
     // that stops being maintained.
-    if (!mtl_token_float(token, length, &value)) {
+    if (!mtl_token_float(token, length, &value, reject_non_finite)) {
       break;
     }
     out[taken++] = value;
@@ -350,7 +362,8 @@ static const char * const kReflTypeNames[GMDL_MTL_REFL_COUNT] = {"", "sphere",
  */
 static GMDL_Result mtl_parse_map(const char * rest,
     const GMDL_Allocator * allocator, GMDL_Mtl_Map * slot,
-    GMDL_Mtl_Refl_Type * out_type) {
+    GMDL_Mtl_Refl_Type * out_type, bool accept_without_path,
+    bool reject_non_finite) {
   GMDL_Mtl_Map parsed;
   mtl_map_defaults(&parsed);
   if (out_type) {
@@ -382,32 +395,33 @@ static GMDL_Result mtl_parse_map(const char * rest,
       parsed.present |= GMDL_MTL_MAP_HAS_CLAMP;
     }
     else if (mtl_token_is(token, length, "-boost")) {
-      ok = mtl_take_floats(&argument, &parsed.boost, 1, 1) == 1;
+      ok = mtl_take_floats(&argument, &parsed.boost, 1, 1, reject_non_finite)
+          == 1;
       parsed.present |= GMDL_MTL_MAP_HAS_BOOST;
     }
     else if (mtl_token_is(token, length, "-bm")) {
-      ok = mtl_take_floats(&argument, &parsed.bm, 1, 1) == 1;
+      ok = mtl_take_floats(&argument, &parsed.bm, 1, 1, reject_non_finite) == 1;
       parsed.present |= GMDL_MTL_MAP_HAS_BM;
     }
     else if (mtl_token_is(token, length, "-mm")) {
-      ok = mtl_take_floats(&argument, parsed.mm, 2, 2) == 2;
+      ok = mtl_take_floats(&argument, parsed.mm, 2, 2, reject_non_finite) == 2;
       parsed.present |= GMDL_MTL_MAP_HAS_MM;
     }
     else if (mtl_token_is(token, length, "-o")) {
-      ok = mtl_take_floats(&argument, parsed.o, 3, 1) != 0;
+      ok = mtl_take_floats(&argument, parsed.o, 3, 1, reject_non_finite) != 0;
       parsed.present |= GMDL_MTL_MAP_HAS_O;
     }
     else if (mtl_token_is(token, length, "-s")) {
-      ok = mtl_take_floats(&argument, parsed.s, 3, 1) != 0;
+      ok = mtl_take_floats(&argument, parsed.s, 3, 1, reject_non_finite) != 0;
       parsed.present |= GMDL_MTL_MAP_HAS_S;
     }
     else if (mtl_token_is(token, length, "-t")) {
-      ok = mtl_take_floats(&argument, parsed.t, 3, 1) != 0;
+      ok = mtl_take_floats(&argument, parsed.t, 3, 1, reject_non_finite) != 0;
       parsed.present |= GMDL_MTL_MAP_HAS_T;
     }
     else if (mtl_token_is(token, length, "-texres")) {
       float value = 0.0f;
-      ok = mtl_take_floats(&argument, &value, 1, 1) == 1;
+      ok = mtl_take_floats(&argument, &value, 1, 1, reject_non_finite) == 1;
       if (ok) {
         // Casting a float that does not fit is undefined behaviour, and the
         // bounds are written as powers of two because those are the ones a
@@ -481,9 +495,12 @@ static GMDL_Result mtl_parse_map(const char * rest,
     length--;
   }
   if (length == 0) {
-    // "map_Kd" with nothing after it. Both references ignore the line; this
-    // library calls it FORMAT for the same reason 4.2 calls "Kd 0.5 x"
-    // FORMAT, and 4.5 records the divergence.
+    // "map_Kd" with nothing after it. The default is FORMAT, for the same
+    // reason 4.2 calls "Kd 0.5 x" FORMAT. accept_without_path skips the
+    // line instead, which is what both reference readers do (4.5).
+    if (accept_without_path) {
+      return GMDL_OK;
+    }
     return GMDL_ERR_FORMAT;
   }
 
@@ -524,7 +541,8 @@ static GMDL_Result mtl_parse_map(const char * rest,
  *   ::GMDL_ERR_OOM.
  */
 static GMDL_Result mtl_parse_refl(const char * rest,
-    const GMDL_Allocator * allocator, GMDL_Mtl_Material * material) {
+    const GMDL_Allocator * allocator, GMDL_Mtl_Material * material,
+    bool accept_without_path, bool reject_non_finite) {
   // The slot a "refl" belongs in is decided by an option inside it, so the
   // map is parsed into a scratch record first and only then committed. That
   // also means "-type" may appear anywhere among the other options rather
@@ -532,9 +550,16 @@ static GMDL_Result mtl_parse_refl(const char * rest,
   GMDL_Mtl_Map parsed;
   mtl_map_defaults(&parsed);
   GMDL_Mtl_Refl_Type type = GMDL_MTL_REFL_UNTYPED;
-  GMDL_Result result = mtl_parse_map(rest, allocator, &parsed, &type);
+  GMDL_Result result = mtl_parse_map(rest, allocator, &parsed, &type,
+      accept_without_path, reject_non_finite);
   if (result != GMDL_OK) {
     return result;
+  }
+  // A bare `refl` that the caller asked to ignore never filled the scratch
+  // record in. Writing it over the slot would clear a reflection the file
+  // had already named.
+  if (!parsed.path) {
+    return GMDL_OK;
   }
   gcu_allocator_free(allocator, material->refl[type].path);
   material->refl[type] = parsed;
@@ -564,8 +589,20 @@ static GMDL_Result mtl_parse_toggle(const char * rest, bool * out) {
   return GMDL_ERR_FORMAT;
 }
 
+/** Read one float, rejecting a non-finite value when @p reject_non_finite. */
+static GMDL_Result mtl_read_float(
+    const char * rest, float * out, bool reject_non_finite) {
+  char * end = NULL;
+  float value = strtof(rest, &end);
+  if (end == rest || (reject_non_finite && !isfinite(value))) {
+    return GMDL_ERR_FORMAT;
+  }
+  *out = value;
+  return GMDL_OK;
+}
+
 static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
-    const GMDL_Limits * limits, const GMDL_Allocator * allocator,
+    const GMDL_Mtl_Options * limits, const GMDL_Allocator * allocator,
     GMDL_Mtl ** out_mtl) {
   if (!out_mtl) {
     return GMDL_ERR_INVALID;
@@ -575,13 +612,13 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     return GMDL_ERR_INVALID;
   }
 
-  GMDL_Limits defaults;
+  GMDL_Mtl_Options defaults;
   if (!limits) {
-    gmdl_limits_default(&defaults);
+    gmdl_mtl_options_default(&defaults);
     limits = &defaults;
   }
 
-  // Zero is not "unlimited" here - see GMDL_Limits.max_line_length - because
+  // Zero is not "unlimited" here - see GMDL_Mtl_Options.max_line_length - because
   // this buffer is allocated before the first line is read.
   size_t line_size = limits->max_line_length ? limits->max_line_length
                                              : GMDL_DEFAULT_MAX_LINE_LENGTH;
@@ -685,7 +722,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
 
     if (gmdl_line_is(line_text, "Ka", &rest)) {
       GMDL_Result parsed = mtl_parse_color(
-          rest, allocator, material->Ka, &material->Ka_color);
+          rest, allocator, material->Ka, &material->Ka_color,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -694,7 +732,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     }
     else if (gmdl_line_is(line_text, "Kd", &rest)) {
       GMDL_Result parsed = mtl_parse_color(
-          rest, allocator, material->Kd, &material->Kd_color);
+          rest, allocator, material->Kd, &material->Kd_color,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -703,7 +742,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     }
     else if (gmdl_line_is(line_text, "Ks", &rest)) {
       GMDL_Result parsed = mtl_parse_color(
-          rest, allocator, material->Ks, &material->Ks_color);
+          rest, allocator, material->Ks, &material->Ks_color,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -711,15 +751,19 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_KS;
     }
     else if (gmdl_line_is(line_text, "Ns", &rest)) {
-      if (sscanf(rest, "%f", &material->Ns) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->Ns,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_NS;
     }
     else if (gmdl_line_is(line_text, "d", &rest)) {
       GMDL_Result parsed = mtl_parse_dissolve(
-          rest, &material->d, &material->d_halo);
+          rest, &material->d, &material->d_halo,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -738,7 +782,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     }
     else if (gmdl_line_is(line_text, "Ke", &rest)) {
       GMDL_Result parsed = mtl_parse_color(
-          rest, allocator, material->Ke, &material->Ke_color);
+          rest, allocator, material->Ke, &material->Ke_color,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -747,7 +792,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     }
     else if (gmdl_line_is(line_text, "Tf", &rest)) {
       GMDL_Result parsed = mtl_parse_color(
-          rest, allocator, material->Tf, &material->Tf_color);
+          rest, allocator, material->Tf, &material->Tf_color,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -755,64 +801,91 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_TF;
     }
     else if (gmdl_line_is(line_text, "Ni", &rest)) {
-      if (sscanf(rest, "%f", &material->Ni) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->Ni,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_NI;
     }
     else if (gmdl_line_is(line_text, "Tr", &rest)) {
-      if (sscanf(rest, "%f", &material->Tr) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->Tr,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_TR;
     }
     else if (gmdl_line_is(line_text, "Pr", &rest)) {
-      if (sscanf(rest, "%f", &material->Pr) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->Pr,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_PR;
     }
     else if (gmdl_line_is(line_text, "Pm", &rest)) {
-      if (sscanf(rest, "%f", &material->Pm) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->Pm,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_PM;
     }
     else if (gmdl_line_is(line_text, "Ps", &rest)) {
-      if (sscanf(rest, "%f", &material->Ps) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->Ps,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_PS;
     }
     else if (gmdl_line_is(line_text, "Pc", &rest)) {
-      if (sscanf(rest, "%f", &material->Pc) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->Pc,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_PC;
     }
     else if (gmdl_line_is(line_text, "Pcr", &rest)) {
-      if (sscanf(rest, "%f", &material->Pcr) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->Pcr,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_PCR;
     }
     else if (gmdl_line_is(line_text, "aniso", &rest)) {
-      if (sscanf(rest, "%f", &material->aniso) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->aniso,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_ANISO;
     }
     else if (gmdl_line_is(line_text, "anisor", &rest)) {
-      if (sscanf(rest, "%f", &material->anisor) != 1) {
-        result = GMDL_ERR_FORMAT;
+      GMDL_Result parsed = mtl_read_float(
+          rest, &material->anisor,
+          limits->reject_non_finite);
+      if (parsed != GMDL_OK) {
+        result = parsed;
         goto cleanup;
       }
       material->present |= GMDL_MTL_HAS_ANISOR;
@@ -836,35 +909,45 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
       material->present |= GMDL_MTL_HAS_MAP_AAT;
     }
     else if (gmdl_line_is(line_text, "map_Ka", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ka, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ka, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Kd", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Kd, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Kd, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Ks", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ks, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ks, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Ns", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ns, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ns, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_d", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_d, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_d, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -883,56 +966,72 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_bump", &rest)
         || gmdl_line_is(line_text, "bump", &rest)
         || gmdl_line_is(line_text, "map_Bump", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_bump, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_bump, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Ke", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ke, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ke, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Pr", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pr, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pr, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Pm", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pm, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pm, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "map_Ps", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ps, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ps, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "norm", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->norm, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->norm, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "disp", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->disp, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->disp, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "decal", &rest)) {
-      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->decal, NULL);
+      GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->decal, NULL,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -941,7 +1040,9 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     // "map_refl" is the same directive under the spelling Blender accepts.
     else if (gmdl_line_is(line_text, "refl", &rest)
         || gmdl_line_is(line_text, "map_refl", &rest)) {
-      GMDL_Result parsed = mtl_parse_refl(rest, allocator, material);
+      GMDL_Result parsed = mtl_parse_refl(rest, allocator, material,
+          limits->accept_map_without_path,
+          limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -979,8 +1080,20 @@ cleanup:
   return result;
 }
 
+void gmdl_mtl_options_default(GMDL_Mtl_Options * options) {
+  if (!options) {
+    return;
+  }
+  // Same line-cap reason as OBJ. The material cap is open because the input
+  // already bounds it. A reading's zero is the behaviour the specification
+  // states.
+  *options = (GMDL_Mtl_Options) {
+    .max_line_length = GMDL_DEFAULT_MAX_LINE_LENGTH,
+  };
+}
+
 /** Read an MTL document with the numeric locale pinned (number_internal.h). */
-GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
+GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Mtl_Options * limits,
     const GMDL_Allocator * allocator, GMDL_Mtl ** out_mtl) {
   GMDL_Numeric_Scope numeric;
   gmdl_numeric_scope_begin(&numeric);
@@ -989,7 +1102,7 @@ GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Limits * limits,
   return result;
 }
 
-GMDL_Result gmdl_mtl_load_file(const char * path, const GMDL_Limits * limits,
+GMDL_Result gmdl_mtl_load_file(const char * path, const GMDL_Mtl_Options * limits,
     const GMDL_Allocator * allocator, GMDL_Mtl ** out_mtl) {
   if (!out_mtl) {
     return GMDL_ERR_INVALID;

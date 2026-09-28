@@ -33,6 +33,7 @@
 #include <ghoti.io/cutil/array.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -257,6 +258,20 @@ static void * obj_steal_into(GCU_Array * array, size_t * out_count) {
  * @param max How many to read before stopping, however many follow.
  * @return How many numbers were read, 0 to @p max.
  */
+/** True when @p reject is set and one of @p values is nan or inf. */
+static bool obj_rejected_non_finite(
+    const float * values, size_t count, bool reject) {
+  if (!reject) {
+    return false;
+  }
+  for (size_t i = 0; i < count; i++) {
+    if (!isfinite(values[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static size_t obj_take_floats(const char * rest, float * out, size_t max) {
   size_t taken = 0;
   while (taken < max) {
@@ -378,7 +393,8 @@ static GMDL_Result obj_append_group(obj_builder_t * b, const char * name,
 // arrived as that same in-range-looking value. long long is 64 bits on every
 // platform this library builds for, as long already was on Linux.
 static bool obj_parse_face_token(const char * token, const char * token_end,
-    long long * out_v, long long * out_vt, long long * out_vn) {
+    long long * out_v, long long * out_vt, long long * out_vn,
+    bool reject_extra) {
   *out_v = 0;
   *out_vt = 0;
   *out_vn = 0;
@@ -431,8 +447,12 @@ static bool obj_parse_face_token(const char * token, const char * token_end,
   if (cursor == token_end) {
     return true;
   }
-  // A fourth '/'-separated field is ignored (3.5). Anything else is junk.
-  return *cursor == '/';
+  // A fourth '/'-separated field is ignored, unless the caller asked for it
+  // to be a format error (3.5). Anything else is junk either way.
+  if (*cursor == '/') {
+    return !reject_extra;
+  }
+  return false;
 }
 
 /**
@@ -584,7 +604,7 @@ _Static_assert(sizeof(GMDL_Obj_Render_Object) == GMDL_OBJ_MAX_PATH_LENGTH,
  *
  * @param rest The text after the directive.
  * @param paths The builder's array for that directive.
- * @param max The cap from GMDL_Limits, or 0.
+ * @param max The cap from GMDL_Obj_Options, or 0.
  * @return GMDL_OK - including for a bare directive - GMDL_ERR_LIMIT or
  *   GMDL_ERR_OOM.
  */
@@ -656,7 +676,7 @@ static bool obj_render_same(
  *
  * @param states The builder's array.
  * @param wanted The attributes now in force.
- * @param max The cap from GMDL_Limits, or 0.
+ * @param max The cap from GMDL_Obj_Options, or 0.
  * @param out_index Receives the index, or -1.
  * @return GMDL_OK, GMDL_ERR_LIMIT or GMDL_ERR_OOM.
  */
@@ -760,7 +780,7 @@ static GMDL_Result obj_parse_cstype(
  * Append one free-form control-point reference.
  *
  * @param builder The builder.
- * @param max The per-element cap from GMDL_Limits, or 0.
+ * @param max The per-element cap from GMDL_Obj_Options, or 0.
  * @param count How many this element already has.
  * @return ::GMDL_OK, ::GMDL_ERR_LIMIT or ::GMDL_ERR_OOM.
  */
@@ -805,7 +825,7 @@ static GMDL_Result obj_freeform_vertex(obj_builder_t * b, size_t max,
  */
 static GMDL_Result obj_record_freeform_element(obj_builder_t * b,
     const char * rest, GMDL_Obj_Freeform_Kind kind,
-    const GMDL_Obj_Freeform_State * state, const GMDL_Limits * limits,
+    const GMDL_Obj_Freeform_State * state, const GMDL_Obj_Options * limits,
     int32_t material, int32_t map, int32_t render) {
   if (gmdl_limit_reached(
           gcu_array_count(&b->freeforms), limits->max_freeforms)) {
@@ -843,6 +863,9 @@ static GMDL_Result obj_record_freeform_element(obj_builder_t * b,
     if (end == cursor) {
       return GMDL_ERR_FORMAT;
     }
+    if (limits->reject_non_finite && !isfinite(value)) {
+      return GMDL_ERR_FORMAT;
+    }
     element.range[i] = value;
     cursor = end;
   }
@@ -871,7 +894,8 @@ static GMDL_Result obj_record_freeform_element(obj_builder_t * b,
     long long v = 0;
     long long vt = 0;
     long long vn = 0;
-    if (!obj_parse_face_token(token, cursor, &v, &vt, &vn)) {
+    if (!obj_parse_face_token(token, cursor, &v, &vt, &vn,
+            limits->reject_extra_face_field)) {
       return GMDL_ERR_FORMAT;
     }
     // Only a `surf` reference has a `v/vt/vn` form. Accepting one on a
@@ -917,7 +941,8 @@ static GMDL_Result obj_record_freeform_element(obj_builder_t * b,
  * @param out Receives the value.
  * @return Whether a whole token was a number.
  */
-static bool obj_take_one_float(const char ** cursor, float * out) {
+static bool obj_take_one_float(
+    const char ** cursor, float * out, bool reject_non_finite) {
   const char * rest = *cursor;
   while (*rest == ' ' || *rest == '\t') {
     rest++;
@@ -925,6 +950,9 @@ static bool obj_take_one_float(const char ** cursor, float * out) {
   char * end = NULL;
   float value = strtof(rest, &end);
   if (end == rest || (*end && *end != ' ' && *end != '\t')) {
+    return false;
+  }
+  if (reject_non_finite && !isfinite(value)) {
     return false;
   }
   *out = value;
@@ -978,10 +1006,10 @@ static bool obj_take_one_index(const char ** cursor, long long * out) {
  * @param out Receives them; the unused entry is left at 0.
  * @return ::GMDL_OK or ::GMDL_ERR_FORMAT.
  */
-static GMDL_Result obj_take_technique_values(
-    const char * cursor, size_t arity, float * out) {
+static GMDL_Result obj_take_technique_values(const char * cursor,
+    size_t arity, float * out, bool reject_non_finite) {
   for (size_t i = 0; i < arity; i++) {
-    if (!obj_take_one_float(&cursor, &out[i])) {
+    if (!obj_take_one_float(&cursor, &out[i], reject_non_finite)) {
       return GMDL_ERR_FORMAT;
     }
   }
@@ -997,8 +1025,8 @@ static GMDL_Result obj_take_technique_values(
  * surface technique, and accepting it here would record a curve as
  * approximated by a rule the format does not give curves.
  */
-static GMDL_Result obj_parse_ctech(
-    const char * rest, GMDL_Obj_Freeform_State * state) {
+static GMDL_Result obj_parse_ctech(const char * rest,
+    GMDL_Obj_Freeform_State * state, bool reject_non_finite) {
   GMDL_Obj_Ctech technique = GMDL_OBJ_CTECH_NONE;
   size_t arity = 0;
   const char * after = NULL;
@@ -1006,7 +1034,8 @@ static GMDL_Result obj_parse_ctech(
     return GMDL_ERR_FORMAT;
   }
   float value[2] = {0, 0};
-  GMDL_Result taken = obj_take_technique_values(after, arity, value);
+  GMDL_Result taken =
+      obj_take_technique_values(after, arity, value, reject_non_finite);
   if (taken != GMDL_OK) {
     return taken;
   }
@@ -1017,8 +1046,8 @@ static GMDL_Result obj_parse_ctech(
 }
 
 /** obj_parse_ctech() for `stech`. */
-static GMDL_Result obj_parse_stech(
-    const char * rest, GMDL_Obj_Freeform_State * state) {
+static GMDL_Result obj_parse_stech(const char * rest,
+    GMDL_Obj_Freeform_State * state, bool reject_non_finite) {
   GMDL_Obj_Stech technique = GMDL_OBJ_STECH_NONE;
   size_t arity = 0;
   const char * after = NULL;
@@ -1026,7 +1055,8 @@ static GMDL_Result obj_parse_stech(
     return GMDL_ERR_FORMAT;
   }
   float value[2] = {0, 0};
-  GMDL_Result taken = obj_take_technique_values(after, arity, value);
+  GMDL_Result taken =
+      obj_take_technique_values(after, arity, value, reject_non_finite);
   if (taken != GMDL_OK) {
     return taken;
   }
@@ -1051,8 +1081,8 @@ static GMDL_Result obj_parse_stech(
  * A group outside `int32_t` is ::GMDL_ERR_LIMIT, which is the answer `s` and
  * `lod` already give to a number the model cannot hold.
  */
-static GMDL_Result obj_parse_mg(
-    const char * rest, GMDL_Obj_Freeform_State * state) {
+static GMDL_Result obj_parse_mg(const char * rest,
+    GMDL_Obj_Freeform_State * state, bool reject_non_finite) {
   if (gmdl_line_is(rest, "off", NULL)) {
     state->merge = GMDL_OBJ_MERGE_OFF;
     state->merge_group = 0;
@@ -1069,7 +1099,8 @@ static GMDL_Result obj_parse_mg(
     return GMDL_ERR_LIMIT;
   }
   float resolution = 0;
-  bool has_resolution = obj_take_one_float(&cursor, &resolution);
+  bool has_resolution =
+      obj_take_one_float(&cursor, &resolution, reject_non_finite);
   if (!has_resolution) {
     // A second token that is not a number is a malformed line rather than
     // trailing text to ignore, which is what `v` does with it: there the
@@ -1117,7 +1148,7 @@ static GMDL_Result obj_parse_mg(
  * @return ::GMDL_OK, ::GMDL_ERR_FORMAT, ::GMDL_ERR_LIMIT or ::GMDL_ERR_OOM.
  */
 static GMDL_Result obj_take_body_entries(obj_builder_t * b,
-    const char * cursor, GMDL_Obj_Body_Kind kind, const GMDL_Limits * limits,
+    const char * cursor, GMDL_Obj_Body_Kind kind, const GMDL_Obj_Options * limits,
     size_t declared, size_t * out_start, size_t * out_count) {
   GCU_Array * into = &b->curve_refs;
   size_t cap = limits->max_curve_refs;
@@ -1150,7 +1181,7 @@ static GMDL_Result obj_take_body_entries(obj_builder_t * b,
     // switch above and forgotten here would read curve references into the
     // parameter values without either decision noticing the other.
     if (into == &b->parm_values) {
-      if (!obj_take_one_float(&cursor, &value)) {
+      if (!obj_take_one_float(&cursor, &value, limits->reject_non_finite)) {
         return GMDL_ERR_FORMAT;
       }
       entry = &value;
@@ -1165,8 +1196,8 @@ static GMDL_Result obj_take_body_entries(obj_builder_t * b,
     else {
       // A triple that stops short is refused rather than kept as far as it
       // got: two of the three numbers name a range with no curve in it.
-      if (!obj_take_one_float(&cursor, &ref.u0)
-          || !obj_take_one_float(&cursor, &ref.u1)
+      if (!obj_take_one_float(&cursor, &ref.u0, limits->reject_non_finite)
+          || !obj_take_one_float(&cursor, &ref.u1, limits->reject_non_finite)
           || !obj_take_one_index(&cursor, &index)) {
         return GMDL_ERR_FORMAT;
       }
@@ -1208,7 +1239,7 @@ static GMDL_Result obj_take_body_entries(obj_builder_t * b,
  * @return ::GMDL_OK, ::GMDL_ERR_FORMAT, ::GMDL_ERR_LIMIT or ::GMDL_ERR_OOM.
  */
 static GMDL_Result obj_record_body(obj_builder_t * b, const char * rest,
-    GMDL_Obj_Body_Kind kind, size_t open, const GMDL_Limits * limits,
+    GMDL_Obj_Body_Kind kind, size_t open, const GMDL_Obj_Options * limits,
     size_t declared) {
   if (open == SIZE_MAX) {
     return GMDL_ERR_FORMAT;
@@ -1238,7 +1269,7 @@ static GMDL_Result obj_record_body(obj_builder_t * b, const char * rest,
 }
 
 static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
-    const GMDL_Limits * limits, const GMDL_Allocator * allocator,
+    const GMDL_Obj_Options * limits, const GMDL_Allocator * allocator,
     GMDL_Obj ** out_obj) {
   if (!out_obj) {
     return GMDL_ERR_INVALID;
@@ -1248,13 +1279,13 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     return GMDL_ERR_INVALID;
   }
 
-  GMDL_Limits defaults;
+  GMDL_Obj_Options defaults;
   if (!limits) {
-    gmdl_limits_default(&defaults);
+    gmdl_obj_options_default(&defaults);
     limits = &defaults;
   }
 
-  // Zero is not "unlimited" here - see GMDL_Limits.max_line_length - because
+  // Zero is not "unlimited" here - see GMDL_Obj_Options.max_line_length - because
   // this buffer is allocated before the first line is read.
   size_t line_size = limits->max_line_length ? limits->max_line_length
                                              : GMDL_DEFAULT_MAX_LINE_LENGTH;
@@ -1327,9 +1358,23 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // point that makes it so is gone (3.1).
       float number[6];
       size_t count = obj_take_floats(rest, number, 6);
-      if (count < 3) {
+      if (obj_rejected_non_finite(number, count, limits->reject_non_finite)) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
+      }
+      if (count < 3) {
+        // One or two numbers are a vertex with the missing coordinates
+        // padded to zero, when the caller asked for that reading. No
+        // numbers is still not a vertex. The count is left as read, so the
+        // padded line is not then taken as a weight or a colour.
+        if (!limits->accept_short_vertex || count == 0) {
+          result = GMDL_ERR_FORMAT;
+          goto cleanup;
+        }
+        if (count < 2) {
+          number[1] = 0.0f;
+        }
+        number[2] = 0.0f;
       }
       GMDL_Obj_Vertex v = {number[0], number[1], number[2]};
       GMDL_Obj_Color color = obj_color_absent;
@@ -1369,7 +1414,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // model is three-dimensional in texture space.
       float number[3];
       size_t count = obj_take_floats(rest, number, 3);
-      if (count < 1) {
+      if (count < 1
+          || obj_rejected_non_finite(
+              number, count, limits->reject_non_finite)) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
@@ -1386,7 +1433,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     }
     else if (gmdl_line_is(line_text, "vn", &rest)) {
       float number[3];
-      if (obj_take_floats(rest, number, 3) < 3) {
+      size_t count = obj_take_floats(rest, number, 3);
+      if (count < 3
+          || obj_rejected_non_finite(
+              number, count, limits->reject_non_finite)) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
@@ -1414,7 +1464,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // dump cannot write the statement back without it.
       float number[3];
       size_t count = obj_take_floats(rest, number, 3);
-      if (count < 1) {
+      if (count < 1
+          || obj_rejected_non_finite(
+              number, count, limits->reject_non_finite)) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
       }
@@ -1505,6 +1557,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         float value = strtof(cursor, &end);
         if (end == cursor) {
           break;
+        }
+        if (limits->reject_non_finite && !isfinite(value)) {
+          result = GMDL_ERR_FORMAT;
+          goto cleanup;
         }
         cursor = end;
         if (gmdl_limit_reached(gcu_array_count(&builder.basis_values),
@@ -1655,8 +1711,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         long long surface = 0;
         long long curve = 0;
         complete = obj_take_one_index(&cursor, &surface)
-            && obj_take_one_float(&cursor, &ends[i]->curve.u0)
-            && obj_take_one_float(&cursor, &ends[i]->curve.u1)
+            && obj_take_one_float(
+                &cursor, &ends[i]->curve.u0, limits->reject_non_finite)
+            && obj_take_one_float(
+                &cursor, &ends[i]->curve.u1, limits->reject_non_finite)
             && obj_take_one_index(&cursor, &curve);
         if (complete) {
           ends[i]->surface = obj_index(surface, surface_count);
@@ -1731,7 +1789,8 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         long long v = 0;
         long long vt = 0;
         long long vn = 0;
-        if (!obj_parse_face_token(token, cursor, &v, &vt, &vn)) {
+        if (!obj_parse_face_token(token, cursor, &v, &vt, &vn,
+                limits->reject_extra_face_field)) {
           gcu_array_destroy_in_place(&overflow);
           result = GMDL_ERR_FORMAT;
           goto cleanup;
@@ -1899,7 +1958,8 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         // does not give lines, and refusing it would reject a file every
         // other reader accepts. The normal is read and dropped - a polyline
         // has nothing to do with one.
-        if (!obj_parse_face_token(token, cursor, &v, &vt, &vn)) {
+        if (!obj_parse_face_token(token, cursor, &v, &vt, &vn,
+                limits->reject_extra_face_field)) {
           result = GMDL_ERR_FORMAT;
           goto cleanup;
         }
@@ -2231,21 +2291,24 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     // they describe existed; it does now (3.19), and this is the breaking
     // change 3.18 documented as coming.
     else if (gmdl_line_is(line_text, "ctech", &rest)) {
-      GMDL_Result parsed = obj_parse_ctech(rest, &current_freeform);
+      GMDL_Result parsed = obj_parse_ctech(
+          rest, &current_freeform, limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "stech", &rest)) {
-      GMDL_Result parsed = obj_parse_stech(rest, &current_freeform);
+      GMDL_Result parsed = obj_parse_stech(
+          rest, &current_freeform, limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
       }
     }
     else if (gmdl_line_is(line_text, "mg", &rest)) {
-      GMDL_Result parsed = obj_parse_mg(rest, &current_freeform);
+      GMDL_Result parsed = obj_parse_mg(
+          rest, &current_freeform, limits->reject_non_finite);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -2331,6 +2394,20 @@ cleanup:
   return result;
 }
 
+void gmdl_obj_options_default(GMDL_Obj_Options * options) {
+  if (!options) {
+    return;
+  }
+  // A line cap is the one limit that has to have a value: the parser reads a
+  // line at a time, so without it a single unterminated line would be read
+  // into memory in its entirety. The record caps are left open because the
+  // size of the input already bounds them. A reading's zero is the behaviour
+  // the specification states.
+  *options = (GMDL_Obj_Options) {
+    .max_line_length = GMDL_DEFAULT_MAX_LINE_LENGTH,
+  };
+}
+
 /**
  * Read an OBJ document with the numeric locale pinned.
  *
@@ -2339,7 +2416,7 @@ cleanup:
  * worth making impossible is a future directive whose author does not know
  * this rule exists.
  */
-GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
+GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Obj_Options * limits,
     const GMDL_Allocator * allocator, GMDL_Obj ** out_obj) {
   GMDL_Numeric_Scope numeric;
   gmdl_numeric_scope_begin(&numeric);
@@ -2348,7 +2425,7 @@ GMDL_Result gmdl_obj_load(GMDL_Stream * stream, const GMDL_Limits * limits,
   return result;
 }
 
-GMDL_Result gmdl_obj_load_file(const char * path, const GMDL_Limits * limits,
+GMDL_Result gmdl_obj_load_file(const char * path, const GMDL_Obj_Options * limits,
     const GMDL_Allocator * allocator, GMDL_Obj ** out_obj) {
   if (!out_obj) {
     return GMDL_ERR_INVALID;

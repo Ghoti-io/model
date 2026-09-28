@@ -15,6 +15,7 @@
 // precondition nothing checks - and only a direct call exercises that.
 #include "../../src/obj/obj_internal.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <fstream>
@@ -32,17 +33,18 @@ using gmdltest::TempFile;
 namespace {
 
 /** Parse an inline OBJ document, or fail the test. */
-GMDL_Obj * load_text(const std::string & text) {
+GMDL_Obj * load_text(const std::string & text,
+    const GMDL_Obj_Options * options = nullptr) {
   MemStream stream(text);
   GMDL_Obj * obj = nullptr;
-  GMDL_Result r = gmdl_obj_load(stream.get(), nullptr, nullptr, &obj);
+  GMDL_Result r = gmdl_obj_load(stream.get(), options, nullptr, &obj);
   EXPECT_EQ(r, GMDL_OK) << gmdl_result_string(r);
   return obj;
 }
 
 /** Parse an inline OBJ document that is expected to fail. */
 GMDL_Result load_text_expecting_failure(
-    const std::string & text, const GMDL_Limits * limits = nullptr) {
+    const std::string & text, const GMDL_Obj_Options * limits = nullptr) {
   MemStream stream(text);
   GMDL_Obj * obj = nullptr;
   GMDL_Result r = gmdl_obj_load(stream.get(), limits, nullptr, &obj);
@@ -209,6 +211,66 @@ TEST(ObjParse, IncompleteVertexIsAFormatError) {
   EXPECT_EQ(load_text_expecting_failure("vn 1 2\n"), GMDL_ERR_FORMAT);
   // "vt" is the exception: only u is required (3.2).
   EXPECT_EQ(load_text_expecting_failure("vt\n"), GMDL_ERR_FORMAT);
+}
+
+// The other reading of a short `v`: pad the missing coordinates with zero,
+// which is what Blender and VTK do. A line with no numbers is still not a
+// vertex. The count of numbers actually written stays what the weight and
+// colour decision sees, so `v 1 2` does not become a weight.
+TEST(ObjParse, AShortVertexCanBePadded) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.accept_short_vertex = true;
+  GMDL_Obj * obj = load_text("v 1 2\nv 4\n", &options);
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->vertex_count, 2u);
+  EXPECT_FLOAT_EQ(obj->vertices[0].x, 1.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[0].y, 2.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[0].z, 0.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[1].x, 4.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[1].y, 0.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[1].z, 0.0f);
+  EXPECT_EQ(obj->weight_count, 0u);
+  gmdl_obj_free(obj);
+  EXPECT_EQ(load_text_expecting_failure("v\n", &options), GMDL_ERR_FORMAT);
+}
+
+TEST(ObjParse, AnExtraFaceFieldCanBeRejected) {
+  GMDL_Obj * kept = load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1/1/1/9 2 3\n");
+  ASSERT_NE(kept, nullptr);
+  EXPECT_EQ(kept->face_count, 1u);
+  gmdl_obj_free(kept);
+
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.reject_extra_face_field = true;
+  EXPECT_EQ(load_text_expecting_failure(
+                "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1/1/1/9 2 3\n", &options),
+      GMDL_ERR_FORMAT);
+}
+
+TEST(ObjParse, NonFiniteNumbersCanBeRejected) {
+  GMDL_Obj * kept = load_text("v nan 0 0\n");
+  ASSERT_NE(kept, nullptr);
+  EXPECT_TRUE(std::isnan(kept->vertices[0].x));
+  gmdl_obj_free(kept);
+
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.reject_non_finite = true;
+  EXPECT_EQ(
+      load_text_expecting_failure("v nan 0 0\n", &options), GMDL_ERR_FORMAT);
+  EXPECT_EQ(
+      load_text_expecting_failure("v 0 0 inf\n", &options), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure(
+                "v 0 0 0\ncurv 0 1 1\nparm u nan\nend\n", &options),
+      GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure(
+                "cstype bmatrix\nbmat u nan\n", &options),
+      GMDL_ERR_FORMAT);
+  GMDL_Obj * finite = load_text("v 1 2 3\n", &options);
+  ASSERT_NE(finite, nullptr);
+  gmdl_obj_free(finite);
 }
 
 // `vt u [v] [w]` - v and w are optional and default to 0, which is what the
@@ -2151,8 +2213,8 @@ TEST(ObjDump, AGroupLineRoundTripsAsOneLine) {
 // The second name counts against max_groups. A cap of one used to cover the
 // whole line, because the line was stored as one group.
 TEST(ObjParse, ASecondGroupNameOnTheSameLineCountsAgainstTheCap) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Obj_Options limits;
+  gmdl_obj_options_default(&limits);
   limits.max_groups = 1;
   EXPECT_EQ(load_text_expecting_failure("g alpha beta\n", &limits),
       GMDL_ERR_LIMIT);
@@ -2330,8 +2392,8 @@ TEST(ObjParse, RepeatedUsemtlReusesTheSameMapping) {
 //
 
 TEST(ObjLimits, LineLongerThanTheCapIsRejected) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Obj_Options limits;
+  gmdl_obj_options_default(&limits);
   limits.max_line_length = 8;
   EXPECT_EQ(load_text_expecting_failure(
                 "v 1.000000 2.000000 3.000000\n", &limits),
@@ -2339,8 +2401,8 @@ TEST(ObjLimits, LineLongerThanTheCapIsRejected) {
 }
 
 TEST(ObjLimits, VertexCapIsEnforced) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Obj_Options limits;
+  gmdl_obj_options_default(&limits);
   limits.max_vertices = 2;
   EXPECT_EQ(
       load_text_expecting_failure("v 0 0 0\nv 1 1 1\nv 2 2 2\n", &limits),
@@ -2348,8 +2410,8 @@ TEST(ObjLimits, VertexCapIsEnforced) {
 }
 
 TEST(ObjLimits, FaceCapIsEnforced) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Obj_Options limits;
+  gmdl_obj_options_default(&limits);
   limits.max_faces = 1;
   EXPECT_EQ(load_text_expecting_failure(
                 "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\nf 1 2 3\n", &limits),
@@ -2357,21 +2419,21 @@ TEST(ObjLimits, FaceCapIsEnforced) {
 }
 
 TEST(ObjLimits, FaceIndexCapIsEnforced) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Obj_Options limits;
+  gmdl_obj_options_default(&limits);
   limits.max_face_indices = 4;
   EXPECT_EQ(load_text_expecting_failure("f 1 2 3 4 5\n", &limits),
       GMDL_ERR_LIMIT);
 }
 
 TEST(ObjLimits, GroupAndMaterialCapsAreEnforced) {
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Obj_Options limits;
+  gmdl_obj_options_default(&limits);
   limits.max_groups = 1;
   EXPECT_EQ(load_text_expecting_failure("g a\ng b\n", &limits),
       GMDL_ERR_LIMIT);
 
-  gmdl_limits_default(&limits);
+  gmdl_obj_options_default(&limits);
   limits.max_materials = 1;
   EXPECT_EQ(load_text_expecting_failure("usemtl a\nusemtl b\n", &limits),
       GMDL_ERR_LIMIT);
@@ -2603,8 +2665,8 @@ TEST(ObjLine, ContinuationAtEndOfStreamEndsTheLine) {
 TEST(ObjLine, TheCapAppliesToTheJoinedLine) {
   // Section 2.6: max_line_length bounds the join, not each physical piece.
   // Neither half alone exceeds the cap; together they do.
-  GMDL_Limits limits;
-  gmdl_limits_default(&limits);
+  GMDL_Obj_Options limits;
+  gmdl_obj_options_default(&limits);
   limits.max_line_length = 16;
   EXPECT_EQ(load_text_expecting_failure("v 1 2 3 4 5 6 \\\n7 8 9 10 11 12\n",
                 &limits),
@@ -4580,7 +4642,7 @@ TEST(ObjStatement, TheySurviveTheRoundTrip) {
 namespace {
 
 /**
- * One field of GMDL_Limits, and every document shape that must exceed it.
+ * One field of GMDL_Obj_Options, and every document shape that must exceed it.
  *
  * A list rather than a single document, because a field is not one gate: it
  * is read wherever the parser counts the thing it caps, and each of those is
@@ -4597,18 +4659,18 @@ struct LimitCase {
 };
 
 const LimitCase kLimitCases[] = {
-    {offsetof(GMDL_Limits, max_line_length), "max_line_length",
+    {offsetof(GMDL_Obj_Options, max_line_length), "max_line_length",
         {"v 0 0 0\n"}},
-    {offsetof(GMDL_Limits, max_vertices), "max_vertices",
+    {offsetof(GMDL_Obj_Options, max_vertices), "max_vertices",
         {"v 0 0 0\nv 1 0 0\nv 2 0 0\n"}},
-    {offsetof(GMDL_Limits, max_texcoords), "max_texcoords",
+    {offsetof(GMDL_Obj_Options, max_texcoords), "max_texcoords",
         {"vt 0 0\nvt 1 0\nvt 2 0\n"}},
-    {offsetof(GMDL_Limits, max_normals), "max_normals",
+    {offsetof(GMDL_Obj_Options, max_normals), "max_normals",
         {"vn 0 0 1\nvn 0 1 0\nvn 1 0 0\n"}},
-    {offsetof(GMDL_Limits, max_param_vertices), "max_param_vertices",
+    {offsetof(GMDL_Obj_Options, max_param_vertices), "max_param_vertices",
         {"vp 0\nvp 0.5\nvp 1\n"}},
     // Three element kinds, and the one written last is the one that decides.
-    {offsetof(GMDL_Limits, max_faces), "max_faces",
+    {offsetof(GMDL_Obj_Options, max_faces), "max_faces",
         {"v 0 0 0\nf 1 1 1\nf 1 1 1\nf 1 1 1\n",
             "v 0 0 0\nv 1 0 0\nl 1 2\nl 1 2\nl 1 2\n",
             "v 0 0 0\np 1\np 1\np 1\n"}},
@@ -4616,81 +4678,83 @@ const LimitCase kLimitCases[] = {
     // a face and once for a polyline and only the face was driven, which is
     // what this table's per-site rule came from; the three free-form kinds
     // are three more sites and each is its own branch.
-    {offsetof(GMDL_Limits, max_face_indices), "max_face_indices",
+    {offsetof(GMDL_Obj_Options, max_face_indices), "max_face_indices",
         {"v 0 0 0\nf 1 1 1\n", "v 0 0 0\nv 1 0 0\nl 1 2 1 2\n",
             "v 0 0 0\ncurv 0 1 1 1 1\n", "vp 0\ncurv2 1 1 1\n",
             "v 0 0 0\nsurf 0 1 0 1 1 1 1\n"}},
-    {offsetof(GMDL_Limits, max_groups), "max_groups", {"g a\ng b\ng c\n"}},
-    {offsetof(GMDL_Limits, max_materials), "max_materials",
+    {offsetof(GMDL_Obj_Options, max_groups), "max_groups", {"g a\ng b\ng c\n"}},
+    {offsetof(GMDL_Obj_Options, max_materials), "max_materials",
         {"usemtl a\nusemtl b\nusemtl c\n"}},
     // Read once for `call` and once for `csh`; only `call` was driven.
-    {offsetof(GMDL_Limits, max_statements), "max_statements",
+    {offsetof(GMDL_Obj_Options, max_statements), "max_statements",
         {"call a\ncall b\ncall c\n", "csh a\ncsh b\ncsh c\n"}},
-    {offsetof(GMDL_Limits, max_mtllibs), "max_mtllibs",
+    {offsetof(GMDL_Obj_Options, max_mtllibs), "max_mtllibs",
         {"mtllib a.mtl\nmtllib b.mtl\nmtllib c.mtl\n"}},
-    {offsetof(GMDL_Limits, max_maplibs), "max_maplibs",
+    {offsetof(GMDL_Obj_Options, max_maplibs), "max_maplibs",
         {"maplib a.map\nmaplib b.map\nmaplib c.map\n"}},
-    {offsetof(GMDL_Limits, max_maps), "max_maps",
+    {offsetof(GMDL_Obj_Options, max_maps), "max_maps",
         {"usemap a\nusemap b\nusemap c\n"}},
     // Three distinct combinations, which is what the cap counts - toggling
     // one attribute back and forth would reuse two records for ever.
-    {offsetof(GMDL_Limits, max_render_states), "max_render_states",
+    {offsetof(GMDL_Obj_Options, max_render_states), "max_render_states",
         {"lod 1\nlod 2\nlod 3\n"}},
-    {offsetof(GMDL_Limits, max_shadow_objs), "max_shadow_objs",
+    {offsetof(GMDL_Obj_Options, max_shadow_objs), "max_shadow_objs",
         {"shadow_obj a.obj\nshadow_obj b.obj\nshadow_obj c.obj\n"}},
-    {offsetof(GMDL_Limits, max_trace_objs), "max_trace_objs",
+    {offsetof(GMDL_Obj_Options, max_trace_objs), "max_trace_objs",
         {"trace_obj a.obj\ntrace_obj b.obj\ntrace_obj c.obj\n"}},
     // Read once for each of the three element directives; only `curv` was
     // driven when this row was written.
-    {offsetof(GMDL_Limits, max_freeforms), "max_freeforms",
+    {offsetof(GMDL_Obj_Options, max_freeforms), "max_freeforms",
         {"v 0 0 0\ncurv 0 1 1 1\ncurv 0 1 1 1\ncurv 0 1 1 1\n",
             "vp 0\ncurv2 1 1\ncurv2 1 1\ncurv2 1 1\n",
             "v 0 0 0\nsurf 0 1 0 1 1 1\nsurf 0 1 0 1 1 1\n"
             "surf 0 1 0 1 1 1\n"}},
     // One budget across every `bmat` line, not one per line: a file of many
     // short matrices is the same unbounded quantity as one long one.
-    {offsetof(GMDL_Limits, max_basis_values), "max_basis_values",
+    {offsetof(GMDL_Obj_Options, max_basis_values), "max_basis_values",
         {"bmat u 1 2 3\n", "bmat u 1\nbmat u 1\nbmat v 1\n"}},
     // One budget across every body statement of every element, for the
     // reason `max_basis_values` is one across every `bmat`.
-    {offsetof(GMDL_Limits, max_freeform_bodies), "max_freeform_bodies",
+    {offsetof(GMDL_Obj_Options, max_freeform_bodies), "max_freeform_bodies",
         {"vp 0\ncurv2 1\nparm u 0 1\ntrim 0 1 1\nsp 1\nend\n"}},
-    {offsetof(GMDL_Limits, max_parm_values), "max_parm_values",
+    {offsetof(GMDL_Obj_Options, max_parm_values), "max_parm_values",
         {"vp 0\ncurv2 1\nparm u 0 0.5 1\nend\n",
             "vp 0\ncurv2 1\nparm u 0\nparm u 0\nparm v 0\nend\n"}},
     // One budget across the three directives that fill the array. A `con`
     // does not: it holds its two references by value, so it is capped by
     // `max_connections` and adds nothing here.
-    {offsetof(GMDL_Limits, max_curve_refs), "max_curve_refs",
+    {offsetof(GMDL_Obj_Options, max_curve_refs), "max_curve_refs",
         {"vp 0\ncurv2 1\ntrim 0 1 1 0 1 1 0 1 1\nend\n",
             "vp 0\ncurv2 1\ntrim 0 1 1\nhole 0 1 1\nscrv 0 1 1\nend\n"}},
-    {offsetof(GMDL_Limits, max_special_points), "max_special_points",
+    {offsetof(GMDL_Obj_Options, max_special_points), "max_special_points",
         {"vp 0\ncurv2 1\nsp 1 1 1\nend\n"}},
-    {offsetof(GMDL_Limits, max_connections), "max_connections",
+    {offsetof(GMDL_Obj_Options, max_connections), "max_connections",
         {"con 1 0 1 1 1 0 1 1\ncon 1 0 1 1 1 0 1 1\n"
          "con 1 0 1 1 1 0 1 1\n"}},
 };
 
 } // namespace
 
-// Every field GMDL_Limits offers must actually refuse something.
+// Every cap GMDL_Obj_Options offers must actually refuse something.
 //
 // max_statements was missing for exactly as long as nothing asserted the set
 // was complete: `call` and `csh` allocated without bound while every other
 // record honoured a cap, and a caller who set every field still could not
 // stop it. The fuzzers cannot find that class of gap either - what they drive
 // is the set of caps that EXIST, so a quantity with no field is invisible to
-// them. This is the gate that catches the next one.
+// them. This is the gate that catches the next one. The readings are bools
+// after the caps, so the first of them is where the size_t prefix ends.
 TEST(ObjLimits, EveryFieldRefusesSomething) {
-  // If this fails, a size_t was added to GMDL_Limits without a row here.
+  // If this fails, a size_t was added to GMDL_Obj_Options without a row here,
+  // or a cap was placed after the readings.
   ASSERT_EQ(sizeof(kLimitCases) / sizeof(kLimitCases[0]),
-      sizeof(GMDL_Limits) / sizeof(size_t))
-      << "GMDL_Limits has a field this table does not cover";
+      offsetof(GMDL_Obj_Options, accept_short_vertex) / sizeof(size_t))
+      << "GMDL_Obj_Options has a cap this table does not cover";
 
   for (const LimitCase & c : kLimitCases) {
     ASSERT_FALSE(c.documents.empty()) << c.field << " has no document";
     for (const char * document : c.documents) {
-      GMDL_Limits limits;
+      GMDL_Obj_Options limits;
       memset(&limits, 0, sizeof(limits)); // 0 == unlimited, for every field.
       *reinterpret_cast<size_t *>(
           reinterpret_cast<char *>(&limits) + c.offset) = 2;
@@ -4724,7 +4788,7 @@ TEST(ObjLimits, FacesLinesAndPointsShareOneBudget) {
       "v 0 0 0\nv 1 0 0\nf 1 1 1\nl 1 2\np 1\n", // points decide
   };
   for (const char * document : kOrders) {
-    GMDL_Limits limits;
+    GMDL_Obj_Options limits;
     memset(&limits, 0, sizeof(limits));
     limits.max_faces = 2;
 
@@ -4741,7 +4805,7 @@ TEST(ObjLimits, FacesLinesAndPointsShareOneBudget) {
 // The budget still admits what it should, or the test above would pass
 // against a cap that refuses everything.
 TEST(ObjLimits, TwoElementsOfDifferentKindsFitUnderACapOfTwo) {
-  GMDL_Limits limits;
+  GMDL_Obj_Options limits;
   memset(&limits, 0, sizeof(limits));
   limits.max_faces = 2;
 
@@ -4757,7 +4821,7 @@ TEST(ObjLimits, TwoElementsOfDifferentKindsFitUnderACapOfTwo) {
 // A `p` statement costs one per index it names, not one per line, because
 // that is what the model stores (3.10). `p 1 2 3` is three elements.
 TEST(ObjLimits, APointStatementCostsOnePerIndex) {
-  GMDL_Limits limits;
+  GMDL_Obj_Options limits;
   memset(&limits, 0, sizeof(limits));
   limits.max_faces = 2;
 
@@ -4822,7 +4886,7 @@ void peak_free(void * ctx, void * q) {
 }
 
 /** Parse @p text under @p limits and report the high-water mark. */
-size_t peak_bytes_to_parse(const std::string & text, const GMDL_Limits & limits) {
+size_t peak_bytes_to_parse(const std::string & text, const GMDL_Obj_Options & limits) {
   Peak state;
   GMDL_Allocator allocator{};
   allocator.ctx = &state;
@@ -4850,7 +4914,7 @@ size_t peak_bytes_to_parse(const std::string & text, const GMDL_Limits & limits)
 // an arbitrary byte count - it is that the high-water mark does not move when
 // the input grows. Four times the input, the same caps, the same peak.
 TEST(ObjLimits, PeakMemoryDoesNotFollowTheInputSize) {
-  GMDL_Limits limits;
+  GMDL_Obj_Options limits;
   memset(&limits, 0, sizeof(limits));
   limits.max_line_length = 128;
   limits.max_vertices = 16;
@@ -4898,7 +4962,7 @@ TEST(ObjLimits, AnOverlongElementDoesNotAllocateBeforeItIsRefused) {
   // of indices leaves the buffer identical between the two runs. Anything
   // that differs is the face's own storage, which is what the cap is
   // supposed to stop.
-  GMDL_Limits limits;
+  GMDL_Obj_Options limits;
   memset(&limits, 0, sizeof(limits));
   limits.max_line_length = 1u << 20; // room for the longer line
   limits.max_face_indices = 8;
@@ -4956,7 +5020,7 @@ TEST(ObjParse, ARecordedStatementLosesItsTrailingBlanks) {
 }
 
 TEST(ObjLimits, StatementsUnderTheCapAreKept) {
-  GMDL_Limits limits;
+  GMDL_Obj_Options limits;
   memset(&limits, 0, sizeof(limits));
   limits.max_statements = 2;
 

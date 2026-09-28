@@ -40,7 +40,8 @@ a prefix. A name longer than its field is `GMDL_ERR_LIMIT`, not the first 127
 bytes. A prefix that parses is worse than an error because it parses as
 something else.
 
-**Limits are promises.** Every unbounded quantity has a cap in `GMDL_Limits`,
+**Limits are promises.** Every unbounded quantity has a cap in that format's
+options struct,
 and the fuzzers drive every cap to check the promise holds.
 
 ---
@@ -240,6 +241,7 @@ f v/vt/vn v/vt/vn v/vt/vn ...
 Each token references a vertex and optionally a texture coordinate and a
 normal, by index. The four forms may be mixed within one face, though no
 writer does that. A fourth `/`-separated field is ignored.
+`GMDL_Obj_Options.reject_extra_face_field` makes it `GMDL_ERR_FORMAT`.
 
 **Indices.** In the file an index is 1-based; a negative index is relative,
 with `-1` naming the most recently declared element *of that kind at that
@@ -362,7 +364,7 @@ clearing was the behaviour being kept rather than the invariant being
 checked. Deriving the field is what makes the two unable to differ,
 which is why the fix is that rather than one more place to remember.
 
-`GMDL_Limits.max_mtllibs` caps the count, and like the other record caps it
+`GMDL_Obj_Options.max_mtllibs` caps the count, and like the other record caps it
 defaults to 0, meaning the size of the input is the bound.
 
 ### 3.9 Names and paths
@@ -569,7 +571,7 @@ and the work is one array and one `int32_t` per element, reusing the shape
 `usemtl` already has. Neither is a reason a file that carries them should
 lose them.
 
-`GMDL_Limits.max_maplibs` and `GMDL_Limits.max_maps` cap the two counts, and
+`GMDL_Obj_Options.max_maplibs` and `GMDL_Obj_Options.max_maps` cap the two counts, and
 like every other record cap they default to 0, meaning the size of the input
 is the bound.
 
@@ -627,7 +629,7 @@ The dump writes **only the attributes that change**, so a document that sets
 a file carrying all nine of 3.14's render attributes prints `OBJ element not
 recognized` for every one and loads the geometry without them.
 
-`GMDL_Limits.max_render_states` caps the number of distinct combinations.
+`GMDL_Obj_Options.max_render_states` caps the number of distinct combinations.
 
 ### 3.17 `shadow_obj path` and `trace_obj path`
 
@@ -661,7 +663,7 @@ the vertices.
 different formats, and these both name an OBJ file. The type says what the
 path points at.
 
-`GMDL_Limits.max_shadow_objs` and `GMDL_Limits.max_trace_objs` cap the two
+`GMDL_Obj_Options.max_shadow_objs` and `GMDL_Obj_Options.max_trace_objs` cap the two
 counts.
 
 ### 3.18 `ctech`, `stech` and `mg`
@@ -757,7 +759,7 @@ answer `s`, `lod` and `illum` already give.
 #### Caps
 
 None. These are fixed-size fields on a record 3.19 already caps with
-`GMDL_Limits.max_freeforms`, so there is nothing here a document can make
+`GMDL_Obj_Options.max_freeforms`, so there is nothing here a document can make
 arbitrarily large. `max_freeform_attrs`, which capped the text array, is
 removed with it.
 
@@ -798,7 +800,7 @@ The coordinates a line did not carry hold the format's own defaults, 0 for
 something rather than whatever the allocation held. A line with no numbers
 at all is `GMDL_ERR_FORMAT`, as `vt` with none is.
 
-`GMDL_Limits.max_param_vertices` caps the count.
+`GMDL_Obj_Options.max_param_vertices` caps the count.
 
 #### `cstype`, `deg`, `bmat` and `step` - the free-form state
 
@@ -875,7 +877,7 @@ writes one after every element, because the specification asks for it and a
 reader that needs it to know where an element stops would otherwise read the
 next directive as part of this one.
 
-`GMDL_Limits.max_freeforms` caps the elements, `max_basis_values` the `bmat`
+`GMDL_Obj_Options.max_freeforms` caps the elements, `max_basis_values` the `bmat`
 values across every line, and `max_face_indices` the references in one
 element - the same budget it already applies to one `f` and one `l`, because
 it is the same quantity.
@@ -936,7 +938,7 @@ and take that as the next triple's `u0` - accepting a line as a different
 line, silently. So a token that begins with a number and continues into
 something else is refused.
 
-`GMDL_Limits.max_freeform_bodies` caps the statements across every element,
+`GMDL_Obj_Options.max_freeform_bodies` caps the statements across every element,
 `max_parm_values` the `parm` values, `max_curve_refs` the references `trim`,
 `hole` and `scrv` name, and `max_special_points` the `sp` indices.
 
@@ -1247,9 +1249,17 @@ assuming a surface would record something the file never said.
 
 ---
 
-## 5. Limits
+## 5. Options
 
-`GMDL_Limits`, with `gmdl_limits_default()`:
+Each format has its own options struct. A later format does not inherit
+either of these: a cap on `curv` means nothing to a material file, and a
+binary format has no line length. `NULL` passed to a load is that format's
+defaults. The result codes, the allocator and the stream are what the
+formats share.
+
+### 5.1 OBJ
+
+`GMDL_Obj_Options`, with `gmdl_obj_options_default()`:
 
 | Field | Default | Counts |
 | --- | --- | --- |
@@ -1261,7 +1271,7 @@ assuming a surface would record something the file never said.
 | `max_faces` | 0 | `f`, `l` and `p` elements **together**, one budget |
 | `max_face_indices` | 0 | references in one `f`, `l`, `curv`, `curv2` or `surf` |
 | `max_groups` | 0 | `g` and `o` together |
-| `max_materials` | 0 | distinct `usemtl` names in OBJ; `newmtl` in MTL |
+| `max_materials` | 0 | distinct `usemtl` names |
 | `max_statements` | 0 | `call` and `csh` records |
 | `max_mtllibs` | 0 | `mtllib` records |
 | `max_maplibs` | 0 | `maplib` records |
@@ -1276,6 +1286,20 @@ assuming a surface would record something the file never said.
 | `max_curve_refs` | 0 | curve references in `trim`, `hole` and `scrv` |
 | `max_special_points` | 0 | `sp` indices, across every line |
 | `max_connections` | 0 | `con` records |
+| `accept_short_vertex` | false | `v` with one or two numbers is padded with zero |
+| `reject_extra_face_field` | false | a fourth `/` field is `GMDL_ERR_FORMAT` |
+| `reject_non_finite` | false | `nan` and `inf` are `GMDL_ERR_FORMAT` |
+
+### 5.2 MTL
+
+`GMDL_Mtl_Options`, with `gmdl_mtl_options_default()`:
+
+| Field | Default | Counts |
+| --- | --- | --- |
+| `max_line_length` | `GMDL_DEFAULT_MAX_LINE_LENGTH` (65536) | bytes in one line, excluding its ending |
+| `max_materials` | 0 | `newmtl` records |
+| `accept_map_without_path` | false | a map directive with no path is skipped |
+| `reject_non_finite` | false | `nan` and `inf` are `GMDL_ERR_FORMAT` |
 
 `0` means no limit - **except for `max_line_length`**, where it means
 `GMDL_DEFAULT_MAX_LINE_LENGTH`. That one field is the odd one out on purpose:
@@ -1295,7 +1319,7 @@ the one axis the field exists for. The whole suite passed either way, because
 every case exercised one element kind at a time: a limit spanning several
 arrays needs a case that spans them. A `p` statement costs one per index it
 names rather than one per line, because that is what the model stores
-(3.10). `NULL` limits
+(3.10). `NULL` options
 mean the defaults. Only the line cap has a default because the input's size
 already bounds the record counts, and a legitimate model can be very large;
 set the others for untrusted input.
@@ -1336,7 +1360,7 @@ was missing from this table until it was measured for: with every other field
 set, a file of nothing but `call` lines was still accepted without bound. The
 fuzzers cannot find that class of gap, because what they drive is the set of
 caps that *exist* - a quantity with no field is invisible to them. What
-catches the next one is a test that walks `GMDL_Limits` field by field and
+catches the next one is a test that walks `GMDL_Obj_Options` cap by cap and
 requires each to refuse something, which fails if a field is added without
 enforcement.
 
@@ -1360,7 +1384,7 @@ notice. The table lists one document per site now.
 | `GMDL_ERR_IO` | `_file` could not open or read the path, for any reason including a path too long for the filesystem |
 | `GMDL_ERR_FORMAT` | a line was malformed (sections 3 and 4) |
 | `GMDL_ERR_UNSUPPORTED` | a map option this library does not implement (4.5) |
-| `GMDL_ERR_LIMIT` | a `GMDL_Limits` cap was exceeded, or a name or path was too long |
+| `GMDL_ERR_LIMIT` | an options cap was exceeded, or a name or path was too long |
 | `GMDL_ERR_OOM` | the allocator returned `NULL`, or the system had no memory to open the file |
 
 On any failure `*out` is `NULL` and nothing is allocated for the caller. The
@@ -1830,7 +1854,7 @@ ordinary state of this class and the reason a compile-time gate is worth more
 here than another runtime one.
 
 **What the fuzzers structurally cannot find.** They drive the caps that
-exist, so a quantity with no field in `GMDL_Limits` is invisible to them -
+exist, so a quantity with no field in the format's options is invisible to them -
 `call` and `csh` allocated without bound for as long as `max_statements` was
 missing, and no amount of fuzzing would have said so. They compare a load
 against a reload, so a defect that is symmetric across both survives the
@@ -1863,21 +1887,19 @@ section 12 is where they are written down.
   tessellates a surface or walks a trimming loop, and a polygon-mesh consumer
   like `libs/cjelly` wants neither. Recording it costs a consumer nothing and
   loses nothing; evaluating it is a different library.
-- **A map directive with no path.** `GMDL_ERR_FORMAT` here, ignored by both
-  references. Strictness is defensible and this is now the only place 4.5
-  takes it further than either: `-type` on a colour map was the other, and it
-  was an oversight rather than a position (4.6).
-- **A `v` line with fewer than three numbers.** `GMDL_ERR_FORMAT` here;
-  Blender and VTK both read `v 0 1` as `(0, 1, 0)`. The specification requires
-  three, so this is the specification against both references - the opposite
-  of the call made for `vt` in 3.2, where the specification said the numbers
-  were optional and the strict reference was the one out on its own. Worth
-  noting together, because "follow the specification" and "follow the
-  references" pick different sides here and it is not obvious either is wrong.
-- **Extra face fields.** Reject `1/2/3/4`, or keep ignoring it?
-- **`nan` and `inf`.** Record faithfully (current) or reject at parse time?
-  Section 1 argues for faithful; a stricter mode via `GMDL_Limits` is an
-  option that changes no default.
+- **A map directive with no path.** `GMDL_ERR_FORMAT` by default.
+  `GMDL_Mtl_Options.accept_map_without_path` skips the line, which is what
+  both references do. The default is the stricter reading; the field is the
+  other one, and leaving it zero changes nothing (4.5).
+- **A `v` line with fewer than three numbers.** `GMDL_ERR_FORMAT` by default.
+  `GMDL_Obj_Options.accept_short_vertex` pads the missing coordinates with
+  zero, which is what Blender and VTK do with `v 0 1`. A line with no
+  numbers stays `GMDL_ERR_FORMAT` either way.
+- **Extra face fields.** Ignored by default.
+  `GMDL_Obj_Options.reject_extra_face_field` makes `1/2/3/4`
+  `GMDL_ERR_FORMAT` (3.5).
+- **`nan` and `inf`.** Recorded by default, on both parsers.
+  `reject_non_finite` on the format's options makes them `GMDL_ERR_FORMAT`.
 - **Which exporters' spellings are still missing.** `map_Bump` and `map_refl`
   were found by asking Blender about 27 candidate spellings, not by reading
   the reference - the reference does not list them. Blender is one exporter;

@@ -21,7 +21,7 @@
 /**
  * @file
  *
- * Result strings and default limits.
+ * Result strings.
  */
 
 #include <ghoti.io/model/macros.h>
@@ -53,39 +53,3 @@ const char * gmdl_result_string(GMDL_Result result) {
   }
 }
 
-void gmdl_limits_default(GMDL_Limits * limits) {
-  if (!limits) {
-    return;
-  }
-
-  // A line cap is the one limit that has to have a value: the parser reads a
-  // line at a time, so without it a single unterminated line would be read
-  // into memory in its entirety. The record caps are left open because the
-  // size of the input already bounds them - every record costs at least a
-  // couple of bytes - and a legitimate model can be very large.
-  *limits = (GMDL_Limits) {
-    .max_line_length = GMDL_DEFAULT_MAX_LINE_LENGTH,
-    .max_vertices = 0,
-    .max_texcoords = 0,
-    .max_normals = 0,
-    .max_param_vertices = 0,
-    .max_faces = 0,
-    .max_face_indices = 0,
-    .max_groups = 0,
-    .max_materials = 0,
-    .max_statements = 0,
-    .max_mtllibs = 0,
-    .max_maplibs = 0,
-    .max_maps = 0,
-    .max_render_states = 0,
-    .max_shadow_objs = 0,
-    .max_trace_objs = 0,
-    .max_freeforms = 0,
-    .max_basis_values = 0,
-    .max_freeform_bodies = 0,
-    .max_parm_values = 0,
-    .max_curve_refs = 0,
-    .max_special_points = 0,
-    .max_connections = 0,
-  };
-}
