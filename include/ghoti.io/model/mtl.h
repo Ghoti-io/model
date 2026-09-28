@@ -357,6 +357,16 @@ typedef struct GMDL_Mtl_Options {
    * the field cannot hold, not a non-finite one.
    */
   bool reject_non_finite;
+  /**
+   * An unrecognised map option begins the path.
+   *
+   * Zero, the default, is ::GMDL_ERR_UNSUPPORTED (4.5). Set, the option
+   * token and everything after it are the filename, which is what VTK does
+   * with an option it does not know. An option this library does know,
+   * `-clamp` included, is still that option: VTK folds `-clamp` into the
+   * filename only because VTK does not recognise it.
+   */
+  bool unknown_map_option_is_path;
 } GMDL_Mtl_Options;
 
 /**

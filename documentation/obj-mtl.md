@@ -225,8 +225,10 @@ texture space.
 
 The two references disagree here - Blender reads `vt 0.5` and VTK calls it
 "Error reading 'vt'" - so this follows the specification, which says both are
-optional, and with it the more permissive of the two. `vt` with no number at
-all is `GMDL_ERR_FORMAT`.
+optional, and with it the more permissive of the two.
+`GMDL_Obj_Options.reject_short_texcoord` takes VTK's side: fewer than two
+numbers is `GMDL_ERR_FORMAT`. `vt` with no number at all is
+`GMDL_ERR_FORMAT` either way.
 
 ### 3.3 `vn x y z`
 
@@ -311,11 +313,13 @@ write them - Blender makes an *object* of an `o` and a *vertex group* of a
 `g` - and a reader that flattened them could not put the distinction back.
 
 **Each word of a `g` line is a group.** The documentation permits `g a b c`
-to put the following faces in three groups at once. Blender reads that line
-as one group called `a b c`; this follows the documentation. The groups
-share one face range, and `joined` on every name after the first says they
-were one line, which is what lets the dump write `g a b c` back. Two `g`
-lines would close the first group before the faces and leave it empty.
+to put the following faces in three groups at once. The groups share one
+face range, and `joined` on every name after the first says they were one
+line, which is what lets the dump write `g a b c` back. Two `g` lines would
+close the first group before the faces and leave it empty. Blender and VTK
+read that line as one group called `a b c`.
+`GMDL_Obj_Options.group_line_is_one_name` is their reading: the rest of the
+line is one name, spaces included, the way `o` already works.
 
 **An `o` line is one name**, spaces included, as for `mtllib` and `usemtl`
 (3.7, 3.8). The specification gives an object a single name. Splitting
@@ -1201,6 +1205,10 @@ An option this library does not know is still `GMDL_ERR_UNSUPPORTED`. Several
 of the documented ones change what a map *means* - `-clamp` and `-imfchan`
 among them - so handing a consumer the path while dropping an option it could
 not read would describe a material the file did not.
+`GMDL_Mtl_Options.unknown_map_option_is_path` is VTK's reading of an option
+it has not heard of: that token and the rest of the line are the filename.
+An option this library knows stays an option. `-clamp` is one of those, so
+the flag does not fold it into the path the way VTK does.
 
 **A vector option takes only as many components as are really numbers.**
 `map_Kd -o 1 2 2.png` is an origin of `(1, 2, 0)` and a path of `2.png`: a
@@ -1319,6 +1327,8 @@ formats share.
 | `reject_vertex_continuation` | false | a continued `v` is `GMDL_ERR_FORMAT` |
 | `reject_face_comment` | false | `#` on an `f` line is `GMDL_ERR_FORMAT` |
 | `break_group_continuation` | false | `\` on `g` or `o` stays in the name |
+| `group_line_is_one_name` | false | `g a b` is one group named `a b` |
+| `reject_short_texcoord` | false | `vt` with one number is `GMDL_ERR_FORMAT` |
 
 `freecad` is the reading measured against FreeCAD 1.0.0's `ReaderOBJ` on
 2026-09-28. It turns off the line rewriting in 2.1 and 2.4 through 2.6, omits
@@ -1340,6 +1350,7 @@ omitted rather than padded or rejected.
 | `max_materials` | 0 | `newmtl` records |
 | `accept_map_without_path` | false | a map directive with no path is skipped |
 | `reject_non_finite` | false | `nan` and `inf` are `GMDL_ERR_FORMAT` |
+| `unknown_map_option_is_path` | false | unknown `-option` starts the path |
 
 `0` means no limit - **except for `max_line_length`**, where it means
 `GMDL_DEFAULT_MAX_LINE_LENGTH`. That one field is the odd one out on purpose:
@@ -1956,6 +1967,17 @@ section 12 is where they are written down.
   a continued `v` is one vertex, and the face after `g a\` is lost.
   `reject_vertex_continuation` fails that `v`, and
   `break_group_continuation` keeps that face. Both are VTK.
+- **`g a b`.** Two groups by default, which is the specification.
+  `GMDL_Obj_Options.group_line_is_one_name` stores one group named `a b`,
+  which is what Blender and VTK store (3.6).
+- **`vt` with one number.** Accepted by default, which is the specification
+  and Blender. `GMDL_Obj_Options.reject_short_texcoord` fails the file,
+  which is VTK (3.2).
+- **An unknown map option.** `GMDL_ERR_UNSUPPORTED` by default.
+  `GMDL_Mtl_Options.unknown_map_option_is_path` takes that token as the
+  start of the filename, which is VTK's reading of an option it does not
+  know. An option this library knows, `-clamp` included, stays an option
+  (4.5).
 - **FreeCAD's mesh.** `GMDL_Obj_Options.freecad` is that reader's polygon
   behaviour, measured on FreeCAD 1.0.0: no line rewriting, a bad face
   omitted rather than fatal, quads split, faces of five or more corners

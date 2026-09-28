@@ -1458,7 +1458,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       if (!limits->reject_non_finite) {
         obj_zero_non_finite(number, count, limits->non_finite_becomes_zero);
       }
-      if (count < 1
+      if (count < 1 || (limits->reject_short_texcoord && count < 2)
           || obj_rejected_non_finite(
               number, count, limits->reject_non_finite)) {
         result = GMDL_ERR_FORMAT;
@@ -2012,7 +2012,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // field is refused rather than cut, because the first 127 bytes of a
       // name name something else (3.9).
       size_t first = gcu_array_count(&builder.groups);
-      if (is_object) {
+      // `o` is one name, spaces included. `g` is one name per word unless
+      // the caller asked for Blender and VTK's reading, where `g a b` is
+      // the single name `a b`.
+      if (is_object || limits->group_line_is_one_name) {
         // `o` takes one name, and the name may contain spaces. Splitting it
         // would rename the object.
         char name[GMDL_OBJ_MAX_NAME_LENGTH];
@@ -2025,7 +2028,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           goto cleanup;
         }
         result = obj_append_group(
-            &builder, name, true, false, limits->max_groups);
+            &builder, name, is_object, false, limits->max_groups);
         if (result != GMDL_OK) {
           goto cleanup;
         }

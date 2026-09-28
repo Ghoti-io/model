@@ -1126,6 +1126,23 @@ typedef struct GMDL_Obj_Options {
    * is VTK 9.3.
    */
   bool break_group_continuation;
+  /**
+   * `g a b` is one group named `a b`.
+   *
+   * Zero, the default, is one group per word, which is what the Wavefront
+   * documentation says (3.6). Set, the rest of the line is the name, spaces
+   * included, which is what Blender and VTK store. `o` is already one name
+   * either way.
+   */
+  bool group_line_is_one_name;
+  /**
+   * A `vt` with fewer than two numbers is ::GMDL_ERR_FORMAT.
+   *
+   * Zero, the default, requires only `u` (3.2), which is the specification
+   * and what Blender reads. Set, `vt 0.5` fails the file, which is VTK.
+   * A line with no numbers stays ::GMDL_ERR_FORMAT either way.
+   */
+  bool reject_short_texcoord;
 } GMDL_Obj_Options;
 
 /**

@@ -671,6 +671,34 @@ TEST(ObjParse, AGroupBackslashCanStayInTheName) {
   gmdl_obj_free(object);
 }
 
+// `g a b` is two groups by default (3.6). Blender and VTK store one name.
+TEST(ObjParse, AGroupLineCanBeOneName) {
+  GMDL_Obj * split =
+      load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\ng a b\nf 1 2 3\n");
+  ASSERT_NE(split, nullptr);
+  EXPECT_EQ(split->group_count, 2u);
+  gmdl_obj_free(split);
+
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.group_line_is_one_name = true;
+  GMDL_Obj * obj =
+      load_text("v 0 0 0\nv 1 0 0\nv 0 1 0\ng a b\nf 1 2 3\n", &options);
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->group_count, 1u);
+  EXPECT_STREQ(obj->groups[0].name, "a b");
+  EXPECT_FALSE(obj->groups[0].is_object);
+  EXPECT_EQ(obj->groups[0].face_count, 1u);
+  EXPECT_EQ(obj->face_count, 1u);
+  gmdl_obj_free(obj);
+
+  GMDL_Obj * bare = load_text("g\n", &options);
+  ASSERT_NE(bare, nullptr);
+  ASSERT_EQ(bare->group_count, 1u);
+  EXPECT_STREQ(bare->groups[0].name, "default");
+  gmdl_obj_free(bare);
+}
+
 // `vt u [v] [w]` - v and w are optional and default to 0, which is what the
 // specification says and what Blender reads. VTK calls "vt 0.5" an error;
 // this follows the more permissive of the two references deliberately, so the
@@ -686,6 +714,19 @@ TEST(ObjParse, ATextureCoordinateNeedsOnlyItsFirstNumber) {
   // A third number is read and dropped, not a format error.
   EXPECT_FLOAT_EQ(obj->texcoords[2].u, 1.0f);
   EXPECT_FLOAT_EQ(obj->texcoords[2].v, 2.0f);
+  gmdl_obj_free(obj);
+}
+
+// VTK refuses `vt 0.5`. The default above keeps it; this is the other side.
+TEST(ObjParse, AShortTextureCoordinateCanBeRejected) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.reject_short_texcoord = true;
+  EXPECT_EQ(load_text_expecting_failure("vt 0.5\n", &options), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure("vt\n", &options), GMDL_ERR_FORMAT);
+  GMDL_Obj * obj = load_text("vt 0.5 0.25\nvt 1 2 3\n", &options);
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->texcoord_count, 2u);
   gmdl_obj_free(obj);
 }
 

@@ -363,7 +363,7 @@ static const char * const kReflTypeNames[GMDL_MTL_REFL_COUNT] = {"", "sphere",
 static GMDL_Result mtl_parse_map(const char * rest,
     const GMDL_Allocator * allocator, GMDL_Mtl_Map * slot,
     GMDL_Mtl_Refl_Type * out_type, bool accept_without_path,
-    bool reject_non_finite) {
+    bool reject_non_finite, bool unknown_option_is_path) {
   GMDL_Mtl_Map parsed;
   mtl_map_defaults(&parsed);
   if (out_type) {
@@ -476,7 +476,12 @@ static GMDL_Result mtl_parse_map(const char * rest,
     else {
       // A documented option this library does not implement, or one no
       // reference defines. Either way the map would mean something other
-      // than what we would store.
+      // than what we would store. VTK instead treats that token as the
+      // start of the filename; unknown_option_is_path is that reading.
+      // The cursor still points at the token, so the path below keeps it.
+      if (unknown_option_is_path) {
+        break;
+      }
       return GMDL_ERR_UNSUPPORTED;
     }
 
@@ -542,7 +547,8 @@ static GMDL_Result mtl_parse_map(const char * rest,
  */
 static GMDL_Result mtl_parse_refl(const char * rest,
     const GMDL_Allocator * allocator, GMDL_Mtl_Material * material,
-    bool accept_without_path, bool reject_non_finite) {
+    bool accept_without_path, bool reject_non_finite,
+    bool unknown_option_is_path) {
   // The slot a "refl" belongs in is decided by an option inside it, so the
   // map is parsed into a scratch record first and only then committed. That
   // also means "-type" may appear anywhere among the other options rather
@@ -551,7 +557,7 @@ static GMDL_Result mtl_parse_refl(const char * rest,
   mtl_map_defaults(&parsed);
   GMDL_Mtl_Refl_Type type = GMDL_MTL_REFL_UNTYPED;
   GMDL_Result result = mtl_parse_map(rest, allocator, &parsed, &type,
-      accept_without_path, reject_non_finite);
+      accept_without_path, reject_non_finite, unknown_option_is_path);
   if (result != GMDL_OK) {
     return result;
   }
@@ -911,7 +917,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_Ka", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ka, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -920,7 +927,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_Kd", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Kd, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -929,7 +937,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_Ks", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ks, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -938,7 +947,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_Ns", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ns, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -947,7 +957,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_d", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_d, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -968,7 +979,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
         || gmdl_line_is(line_text, "map_Bump", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_bump, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -977,7 +989,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_Ke", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ke, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -986,7 +999,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_Pr", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pr, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -995,7 +1009,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_Pm", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Pm, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -1004,7 +1019,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "map_Ps", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->map_Ps, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -1013,7 +1029,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "norm", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->norm, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -1022,7 +1039,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "disp", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->disp, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -1031,7 +1049,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "decal", &rest)) {
       GMDL_Result parsed = mtl_parse_map(rest, allocator, &material->decal, NULL,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;
@@ -1042,7 +1061,8 @@ static GMDL_Result mtl_load_pinned(GMDL_Stream * stream,
         || gmdl_line_is(line_text, "map_refl", &rest)) {
       GMDL_Result parsed = mtl_parse_refl(rest, allocator, material,
           limits->accept_map_without_path,
-          limits->reject_non_finite);
+          limits->reject_non_finite,
+          limits->unknown_map_option_is_path);
       if (parsed != GMDL_OK) {
         result = parsed;
         goto cleanup;

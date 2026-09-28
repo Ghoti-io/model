@@ -1072,6 +1072,35 @@ TEST(MtlMap, AnUnknownOptionIsStillUnsupported) {
       GMDL_ERR_UNSUPPORTED);
 }
 
+// VTK keeps an option it has not heard of as the start of the filename.
+// `-clamp` is still an option: this library knows it, so the flag does not
+// fold it the way VTK does.
+TEST(MtlMap, AnUnknownOptionCanBeginThePath) {
+  GMDL_Mtl_Options options;
+  gmdl_mtl_options_default(&options);
+  options.unknown_map_option_is_path = true;
+  GMDL_Mtl * folded =
+      load_text("newmtl a\nmap_Kd -nope 1 tex.png\n", &options);
+  ASSERT_NE(folded, nullptr);
+  EXPECT_STREQ(folded->materials[0].map_Kd.path, "-nope 1 tex.png");
+  gmdl_mtl_free(folded);
+
+  GMDL_Mtl * after = load_text(
+      "newmtl a\nmap_Kd -s 2 2 2 -nope tex.png\n", &options);
+  ASSERT_NE(after, nullptr);
+  EXPECT_STREQ(after->materials[0].map_Kd.path, "-nope tex.png");
+  EXPECT_TRUE(after->materials[0].map_Kd.present & GMDL_MTL_MAP_HAS_S);
+  EXPECT_FLOAT_EQ(after->materials[0].map_Kd.s[0], 2.0f);
+  gmdl_mtl_free(after);
+
+  GMDL_Mtl * known =
+      load_text("newmtl a\nmap_Kd -clamp on tex.png\n", &options);
+  ASSERT_NE(known, nullptr);
+  EXPECT_STREQ(known->materials[0].map_Kd.path, "tex.png");
+  EXPECT_TRUE(known->materials[0].map_Kd.clamp);
+  gmdl_mtl_free(known);
+}
+
 TEST(MtlMap, ADirectiveWithNoPathIsMalformed) {
   // Both references ignore the line instead; 4.5 records that divergence,
   // and accept_map_without_path is that reading.
