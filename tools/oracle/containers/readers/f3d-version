@@ -1,0 +1,15 @@
+#!/bin/sh
+# What f3d says it is, and which VTK it reaches.
+#
+# First line only is what the version check reads, so both facts go on it.
+# f3d's own --version spreads them: "F3D 3.1.0" first, "VTK version: 9.3.0."
+# several lines down. VTK is the reader. A probe that stopped at the first
+# line would accept a different VTK behind the same f3d.
+out=$(f3d --version 2>/dev/null) || exit 1
+f3d_line=$(printf '%s\n' "$out" | head -1)
+vtk_line=$(printf '%s\n' "$out" | sed -n 's/^VTK version: //p')
+if [ -z "$f3d_line" ] || [ -z "$vtk_line" ]; then
+  printf '%s\n' "$out" >&2
+  exit 1
+fi
+printf '%s, VTK %s\n' "$f3d_line" "$vtk_line"

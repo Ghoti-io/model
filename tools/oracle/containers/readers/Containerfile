@@ -1,0 +1,58 @@
+# Blender and f3d, pinned, in one image.
+#
+# One image rather than two, because the questions interlock. The measurements
+# in the workspace notes exist to say where these two readers disagree, and a
+# disagreement between two images would first have to be shown not to be the
+# images' fault.
+#
+# blender    Its own C++ OBJ and MTL importer. Driven with
+#            --background --factory-startup --python.
+# f3d        The way VTK's vtkOBJReader is reached. VTK ships no OBJ binary.
+#            Driven with --no-render. The version that decides an answer is
+#            VTK's, which the probe prints beside f3d's own.
+#
+# Everything the build reads is pinned, because an image built here cannot be
+# pinned by digest. The base is pinned by digest and the packages by full apt
+# version, and the run-time version check in oracle_env.py is the real
+# guarantee - which is why check_pin() runs in both modes.
+#
+# The apt pins do not expire, because apt is pointed at a dated snapshot.
+# The date is the snapshot the base image itself records, the same one every
+# other oracle image in the suite builds against, so every package comes from
+# the archive state the base was built against.
+#
+# The URL is http because the slim base carries no CA certificates, and
+# Check-Valid-Until is off because a dated Release file is stale by design.
+# Apt still verifies by signature.
+#
+# The same base digest as every other oracle image in the suite.
+FROM docker.io/library/debian@sha256:7792b1f7702a86946cd518db72b6a407302c3e9bc1635634368b878189e8221c
+
+# The snapshot the base records; override only to move every pin at once.
+ARG SNAPSHOT=20260918T000000Z
+
+RUN printf 'Types: deb\nURIs: http://snapshot.debian.org/archive/debian/%s\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n\nTypes: deb\nURIs: http://snapshot.debian.org/archive/debian-security/%s\nSuites: trixie-security\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' \
+      "$SNAPSHOT" "$SNAPSHOT" > /etc/apt/sources.list.d/debian.sources \
+    && printf 'Acquire::Check-Valid-Until "false";\n' \
+      > /etc/apt/apt.conf.d/99snapshot
+
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+      blender=4.3.2+dfsg-2 \
+      f3d=3.1.0+dfsg-1 \
+      libvtk9.3=9.3.0+dfsg1-4+b1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# The probes oracle_env.py runs, copied in rather than written with printf
+# inside a RUN: a quoting layer between a check and the fact it checks is how
+# a probe passes while reading the wrong line.
+COPY blender-version f3d-version /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/blender-version /usr/local/bin/f3d-version
+
+# A locale, pinned. Blender and VTK both parse the numbers in a file, and an
+# image with no locale takes that from whatever the engine happens to set.
+# C.UTF-8 is a UTF-8 locale whose numeric format is the format's own.
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+ENTRYPOINT []
+CMD ["sh", "-c", "blender-version; f3d-version"]

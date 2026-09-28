@@ -1,0 +1,34 @@
+# The oracle references, pinned.
+#
+# One line per reference, tab-separated: <name> <image> <version> <what it
+# answers>.
+#
+# **Every line names the same image.** These are not two tools each answering
+# about its own format; they are two OBJ readers asked the same question, and
+# the whole value is in where they disagree. In two images with two base
+# states, a disagreement would first have to be shown not to be the images'
+# fault. One image makes "the reference set" one fact.
+#
+# The image is built here, so the tag is not a digest of the finished image:
+# two builds of one Containerfile are not two copies of one image. What is
+# pinned instead is everything the build reads - the base by digest, the
+# packages by full apt version, resolved against a dated snapshot of the
+# Debian archive so the pins do not expire - and the run-time version check
+# is the real guarantee. oracle_env.check_pin() therefore runs in both modes.
+# There is no stock image named here, so relaxing the check in host mode would
+# leave nothing checking anything.
+#
+# The tag is Blender's version, then f3d's: 4.3.2-3.1.0. The version field
+# names what decides an answer, which for f3d is not f3d. f3d is how VTK's
+# vtkOBJReader is reached, and a newer VTK behind the same f3d package is a
+# different reader, so the field names both.
+#
+# Raising a pin is deliberate. A new reference version is new answers, and a
+# new answer that disagrees is a finding to triage rather than a regression
+# to fix.
+#
+# Building it:
+#   make oracle-build
+
+blender	localhost/ghoti-model-oracle-readers:4.3.2-3.1.0	Blender 4.3.2	Blender's OBJ importer, and the only reader of the MTL statements VTK declines
+f3d	localhost/ghoti-model-oracle-readers:4.3.2-3.1.0	F3D 3.1.0, VTK 9.3.0.	vtkOBJReader, reached through f3d because VTK ships no OBJ binary of its own

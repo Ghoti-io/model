@@ -56,3 +56,32 @@ The OBJ parser builds into `GCU_Array`s and hands the finished contents to the
 model with `gcu_array_steal()`, so the public struct still exposes plain
 pointers and counts. The model is built last, after parsing has succeeded,
 which means there is no half-built model to unwind on an error path.
+
+## Oracles
+
+Two other OBJ readers are how a reading of the format gets checked when the
+specification and the file disagree: Blender's importer, and VTK's
+`vtkOBJReader` reached through f3d. They are pinned together in
+`tools/oracle/containers/IMAGES`, in one image, because the useful fact is
+where they disagree and two images would make that fact ambiguous.
+
+```bash
+make oracle-build      # once
+make oracle-version    # fail if the image is absent or the versions moved
+```
+
+`tools/oracle/oracle_run.py` asks each named reference its version, in the
+image, and prints which one answered before it runs the command after `--`.
+That command is still this machine's. The reference itself is reached with
+`oracle_env.command()`, which is the `docker run` prefix:
+
+```python
+argv = oracle_env.command(
+    "f3d", ["f3d", "--no-render", "--verbose=debug", path])
+```
+
+Blender is the same call with `blender --background --factory-startup
+--python`. `GHOTI_ORACLE_MODE=host` uses binaries of the same names on this
+machine, and still requires them to report the pinned versions. There is no
+fallback from a missing image to those binaries: a run whose reference is not
+the one it names is worse than a run that did not happen.

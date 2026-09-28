@@ -378,7 +378,12 @@ INCLUDE := -I include/ -I $(GEN_DIR)/
 # was failing at parse time - before doxygen was ever reached - on any machine
 # where the suite is not installed.  Every other goal still gets the hard
 # error below, which is the point of having no fallback.
-DEPLESS_GOALS := docs docs-pdf clean fuzz-clean cloc help
+# The oracle goals are here too: they compile and link nothing, and a machine
+# that can build the reference image is not necessarily one with the suite
+# installed. Failing at parse time on a missing cutil - before a container was
+# reached - is what put the same list on archive's Makefile.
+DEPLESS_GOALS := docs docs-pdf clean fuzz-clean cloc help \
+	oracle-build oracle-version
 ifeq ($(filter-out $(DEPLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
 SKIP_DEP_CHECK := 1
 endif
@@ -615,6 +620,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-lists check-aliasing
+.PHONY: oracle-build oracle-version
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1386,6 +1392,27 @@ clean: ## Remove all contents of the build directories.
 	-@rm -rvf $(APP_DIR)/*
 	-@rm -rvf $(GEN_DIR)/*
 	-@rm -rvf $(ASAN_BUILD_DIR)
+
+####################################################################
+# Oracles
+#
+# Blender and f3d live in one image, pinned in tools/oracle/containers/IMAGES.
+# Not in TEST_GATES: `make test` must stay green on a machine with no engine.
+# oracle-version fails closed when it is asked and the image is absent, which
+# is the difference between a gate that did not run and a gate that passed.
+####################################################################
+
+ORACLE := tools/oracle
+ORACLE_RUN := python3 $(ORACLE)/oracle_run.py
+ORACLE_IMAGE := localhost/ghoti-model-oracle-readers:4.3.2-3.1.0
+
+oracle-build: ## Build the pinned Blender and f3d image
+	docker build -t $(ORACLE_IMAGE) \
+		-f $(ORACLE)/containers/readers/Containerfile \
+		$(ORACLE)/containers/readers
+
+oracle-version: ## Print which references would answer, and fail if none would
+	@GHOTI_ORACLE_REQUIRED=1 $(ORACLE_RUN) blender,f3d -- true
 
 help: ## Display this help
 	@grep -E '^[ a-zA-Z_-]+:.*?## .*$$' Makefile | sort | sed 's/\\([^:]*\\):.*## \\(.*\\)/\\1:\\2/' | awk -F: '{printf "%-20s %s\n", $$1, $$2}' | sed "s/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g"

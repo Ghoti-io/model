@@ -1,0 +1,5 @@
+#!/bin/sh
+# What Blender says it is. First line only: later lines are a build hash, and
+# a version check that reads them all would pin a string that moves on every
+# rebuild of the same release.
+exec blender --version 2>/dev/null | head -1
