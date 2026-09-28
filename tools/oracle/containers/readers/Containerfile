@@ -1,15 +1,20 @@
-# Blender and f3d, pinned, in one image.
+# Blender, f3d, FreeCAD and OpenSCAD, pinned, in one image.
 #
-# One image rather than two, because the questions interlock. The measurements
-# in the workspace notes exist to say where these two readers disagree, and a
-# disagreement between two images would first have to be shown not to be the
-# images' fault.
+# One image rather than four, because the questions interlock. A disagreement
+# between two of them has to be a fact about the two programs, and two images
+# with two base states would make that fact ambiguous.
 #
 # blender    Its own C++ OBJ and MTL importer. Driven with
 #            --background --factory-startup --python.
 # f3d        The way VTK's vtkOBJReader is reached. VTK ships no OBJ binary.
 #            Driven with --no-render. The version that decides an answer is
 #            VTK's, which the probe prints beside f3d's own.
+# freecad    Its own OBJ reader, ReaderOBJ, and the writer beside it. The
+#            package also links VTK; that link is not the OBJ path. Driven
+#            with freecadcmd.
+# openscad   CGAL and OpenCSG. The 2021.01 release does not read or write OBJ.
+#            It is pinned now so a later format asks this release rather than
+#            whatever is installed that day.
 #
 # Everything the build reads is pinned, because an image built here cannot be
 # pinned by digest. The base is pinned by digest and the packages by full apt
@@ -41,18 +46,27 @@ RUN apt-get update -qq \
       blender=4.3.2+dfsg-2 \
       f3d=3.1.0+dfsg-1 \
       libvtk9.3=9.3.0+dfsg1-4+b1 \
+      freecad=1.0.0+dfsg-8+deb13u3 \
+      freecad-python3=1.0.0+dfsg-8+deb13u3 \
+      openscad=2021.01-8 \
     && rm -rf /var/lib/apt/lists/*
 
 # The probes oracle_env.py runs, copied in rather than written with printf
 # inside a RUN: a quoting layer between a check and the fact it checks is how
 # a probe passes while reading the wrong line.
-COPY blender-version f3d-version /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/blender-version /usr/local/bin/f3d-version
+COPY blender-version f3d-version freecad-version openscad-version /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/blender-version /usr/local/bin/f3d-version \
+      /usr/local/bin/freecad-version /usr/local/bin/openscad-version
 
-# A locale, pinned. Blender and VTK both parse the numbers in a file, and an
-# image with no locale takes that from whatever the engine happens to set.
+# A locale, pinned. These programs parse the numbers in a file, and an image
+# with no locale takes that from whatever the engine happens to set.
 # C.UTF-8 is a UTF-8 locale whose numeric format is the format's own.
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
+# No display. FreeCAD and OpenSCAD look for one, and this image is not a
+# desktop. offscreen is Qt's way of saying so; Blender's --background does
+# not consult it.
+ENV QT_QPA_PLATFORM=offscreen
+
 ENTRYPOINT []
-CMD ["sh", "-c", "blender-version; f3d-version"]
+CMD ["sh", "-c", "blender-version; f3d-version; freecad-version; openscad-version"]

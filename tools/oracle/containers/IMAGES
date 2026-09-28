@@ -3,11 +3,13 @@
 # One line per reference, tab-separated: <name> <image> <version> <what it
 # answers>.
 #
-# **Every line names the same image.** These are not two tools each answering
-# about its own format; they are two OBJ readers asked the same question, and
-# the whole value is in where they disagree. In two images with two base
-# states, a disagreement would first have to be shown not to be the images'
-# fault. One image makes "the reference set" one fact.
+# **Every line names the same image.** These are not four tools each answering
+# about its own format. Blender, f3d and FreeCAD are asked the same question
+# about an OBJ, and the whole value is in where they disagree. OpenSCAD does
+# not read OBJ in this release; it is in the set so a later format asks the
+# same image. In four images with four base states, a disagreement would first
+# have to be shown not to be the images' fault. One image makes "the reference
+# set" one fact.
 #
 # The image is built here, so the tag is not a digest of the finished image:
 # two builds of one Containerfile are not two copies of one image. What is
@@ -18,10 +20,12 @@
 # There is no stock image named here, so relaxing the check in host mode would
 # leave nothing checking anything.
 #
-# The tag is Blender's version, then f3d's: 4.3.2-3.1.0. The version field
-# names what decides an answer, which for f3d is not f3d. f3d is how VTK's
-# vtkOBJReader is reached, and a newer VTK behind the same f3d package is a
-# different reader, so the field names both.
+# The tag is Blender, then f3d, then FreeCAD, then OpenSCAD:
+# 4.3.2-3.1.0-1.0.0-2021.01. The version field names what decides an answer,
+# which for f3d is not f3d. f3d is how VTK's vtkOBJReader is reached, and a
+# newer VTK behind the same f3d package is a different reader, so the field
+# names both. FreeCAD's field is FreeCAD's own version: the package also
+# links VTK, and that is not the code that reads an OBJ.
 #
 # Raising a pin is deliberate. A new reference version is new answers, and a
 # new answer that disagrees is a finding to triage rather than a regression
@@ -30,5 +34,7 @@
 # Building it:
 #   make oracle-build
 
-blender	localhost/ghoti-model-oracle-readers:4.3.2-3.1.0	Blender 4.3.2	Blender's OBJ importer, and the only reader of the MTL statements VTK declines
-f3d	localhost/ghoti-model-oracle-readers:4.3.2-3.1.0	F3D 3.1.0, VTK 9.3.0.	vtkOBJReader, reached through f3d because VTK ships no OBJ binary of its own
+blender	localhost/ghoti-model-oracle-readers:4.3.2-3.1.0-1.0.0-2021.01	Blender 4.3.2	Blender's OBJ importer, and the only reader of the MTL statements VTK declines
+f3d	localhost/ghoti-model-oracle-readers:4.3.2-3.1.0-1.0.0-2021.01	F3D 3.1.0, VTK 9.3.0.	vtkOBJReader, reached through f3d because VTK ships no OBJ binary of its own
+freecad	localhost/ghoti-model-oracle-readers:4.3.2-3.1.0-1.0.0-2021.01	FreeCAD 1.0.0	FreeCAD's own OBJ reader and writer, ReaderOBJ and WriterOBJ, which also load the MTL
+openscad	localhost/ghoti-model-oracle-readers:4.3.2-3.1.0-1.0.0-2021.01	OpenSCAD version 2021.01	CGAL and OpenCSG. This release has no OBJ; it answers STL, OFF, AMF and 3MF when those formats arrive

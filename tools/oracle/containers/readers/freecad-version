@@ -1,0 +1,8 @@
+#!/bin/sh
+# What FreeCAD says it is. One line, because the version check reads the first.
+#
+# freecadcmd writes its startup chatter on stderr. The pin is the three-part
+# version the interpreter itself reports, not a banner a rebuild of the same
+# release can reword.
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
+exec freecadcmd -c 'import FreeCAD; v = FreeCAD.Version(); print("FreeCAD %s.%s.%s" % (v[0], v[1], v[2]))'

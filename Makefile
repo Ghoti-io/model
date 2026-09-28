@@ -1396,7 +1396,8 @@ clean: ## Remove all contents of the build directories.
 ####################################################################
 # Oracles
 #
-# Blender and f3d live in one image, pinned in tools/oracle/containers/IMAGES.
+# Blender, f3d, FreeCAD and OpenSCAD live in one image, pinned in
+# tools/oracle/containers/IMAGES.
 # Not in TEST_GATES: `make test` must stay green on a machine with no engine.
 # oracle-version fails closed when it is asked and the image is absent, which
 # is the difference between a gate that did not run and a gate that passed.
@@ -1404,15 +1405,15 @@ clean: ## Remove all contents of the build directories.
 
 ORACLE := tools/oracle
 ORACLE_RUN := python3 $(ORACLE)/oracle_run.py
-ORACLE_IMAGE := localhost/ghoti-model-oracle-readers:4.3.2-3.1.0
+ORACLE_IMAGE := localhost/ghoti-model-oracle-readers:4.3.2-3.1.0-1.0.0-2021.01
 
-oracle-build: ## Build the pinned Blender and f3d image
+oracle-build: ## Build the pinned Blender, f3d, FreeCAD and OpenSCAD image
 	docker build -t $(ORACLE_IMAGE) \
 		-f $(ORACLE)/containers/readers/Containerfile \
 		$(ORACLE)/containers/readers
 
 oracle-version: ## Print which references would answer, and fail if none would
-	@GHOTI_ORACLE_REQUIRED=1 $(ORACLE_RUN) blender,f3d -- true
+	@GHOTI_ORACLE_REQUIRED=1 $(ORACLE_RUN) blender,f3d,freecad,openscad -- true
 
 help: ## Display this help
 	@grep -E '^[ a-zA-Z_-]+:.*?## .*$$' Makefile | sort | sed 's/\\([^:]*\\):.*## \\(.*\\)/\\1:\\2/' | awk -F: '{printf "%-20s %s\n", $$1, $$2}' | sed "s/(SUITE)/$(SUITE)/g; s/(PROJECT)/$(PROJECT)/g; s/(BRANCH)/$(BRANCH)/g"

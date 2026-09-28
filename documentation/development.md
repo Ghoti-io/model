@@ -59,11 +59,12 @@ which means there is no half-built model to unwind on an error path.
 
 ## Oracles
 
-Two other OBJ readers are how a reading of the format gets checked when the
-specification and the file disagree: Blender's importer, and VTK's
-`vtkOBJReader` reached through f3d. They are pinned together in
-`tools/oracle/containers/IMAGES`, in one image, because the useful fact is
-where they disagree and two images would make that fact ambiguous.
+Four references are pinned in `tools/oracle/containers/IMAGES`, in one image,
+because a disagreement has to be a fact about the programs and two images
+would make that fact ambiguous. Blender's importer and VTK's `vtkOBJReader`,
+reached through f3d, read OBJ. FreeCAD reads it with its own `ReaderOBJ`, not
+with the VTK it also links. OpenSCAD 2021.01 does not read or write OBJ; it is
+pinned so a later format asks this release.
 
 ```bash
 make oracle-build      # once
@@ -81,7 +82,8 @@ argv = oracle_env.command(
 ```
 
 Blender is the same call with `blender --background --factory-startup
---python`. `GHOTI_ORACLE_MODE=host` uses binaries of the same names on this
-machine, and still requires them to report the pinned versions. There is no
-fallback from a missing image to those binaries: a run whose reference is not
-the one it names is worse than a run that did not happen.
+--python`. FreeCAD is `freecadcmd`, and OpenSCAD is `openscad`.
+`GHOTI_ORACLE_MODE=host` uses binaries of the same names on this machine, and
+still requires them to report the pinned versions. There is no fallback from
+a missing image to those binaries: a run whose reference is not the one it
+names is worse than a run that did not happen.

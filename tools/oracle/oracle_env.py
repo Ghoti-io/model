@@ -19,10 +19,10 @@ text.
 `command("blender")` returns the argv prefix that runs the reference, which
 is `docker run` into the image built by `containers/readers/Containerfile`.
 
-The two references share one image, so `command()` returns the same `docker
-run` for both - the name selects the program, not the image. That is
-deliberate (containers/IMAGES): a disagreement between them is a fact about
-the two readers rather than about two container builds.
+The four references share one image, so `command()` returns the same `docker
+run` for each of them - the name selects the program, not the image. That is
+deliberate (containers/IMAGES): a disagreement between two of them is a fact
+about those two programs rather than about two container builds.
 
 Modes, from GHOTI_ORACLE_MODE:
 
@@ -56,6 +56,8 @@ class OracleUnavailable(Exception):
 PROBE = {
     "blender": (["blender-version"], "Blender 4.3.2"),
     "f3d": (["f3d-version"], "F3D 3.1.0, VTK 9.3.0."),
+    "freecad": (["freecad-version"], "FreeCAD 1.0.0"),
+    "openscad": (["openscad-version"], "OpenSCAD version 2021.01"),
 }
 
 # The program each reference is invoked as. Host mode checks this binary's
@@ -63,6 +65,8 @@ PROBE = {
 BINARY = {
     "blender": "blender",
     "f3d": "f3d",
+    "freecad": "freecadcmd",
+    "openscad": "openscad",
 }
 
 _pins = None
