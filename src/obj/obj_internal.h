@@ -55,13 +55,22 @@ extern "C" {
  * - a `\` as the last non-blank character joins the next line to this one,
  *   and `max_line_length` applies to the join as a whole (2.6).
  *
- * Both parsers read through this, so a file is seen the same way by each.
+ * Both parsers read through this. `literal` is off unless a caller sets it,
+ * so a file is seen the same way by each until then.
  */
 typedef struct {
   GMDL_Stream * stream; ///< Where the bytes come from.
   char * buffer;        ///< Scratch, at least `max_length + 1` bytes.
   size_t max_length;    ///< Longest logical line, excluding the terminator.
   bool at_start;        ///< No byte of the input has been consumed yet.
+  /**
+   * Take each physical line as its own bytes.
+   *
+   * Off, the four rules above apply. On, none of them do: no byte-order
+   * mark, no comment cut, no continuation, no leading whitespace skipped.
+   * OBJ sets this from `GMDL_Obj_Options.freecad`. MTL leaves it off.
+   */
+  bool literal;
 } GMDL_Line_Reader;
 
 /**

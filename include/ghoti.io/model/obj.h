@@ -1058,6 +1058,18 @@ typedef struct GMDL_Obj_Options {
    * Zero, the default, records the value.
    */
   bool reject_non_finite;
+  /**
+   * Read polygons the way FreeCAD 1.0's ReaderOBJ does.
+   *
+   * Zero is the specification. Set, lines are not rewritten (2.1, 2.4, 2.5,
+   * 2.6), a short or non-finite `v` is omitted and takes no index, a face
+   * that does not parse or names a missing vertex is omitted, a face of five
+   * or more corners is omitted, and a quad is two triangles, corners
+   * (0, 1, 2) and (2, 3, 0). A `g` line ending in an unpaired `\` is
+   * ::GMDL_ERR_FORMAT. Where this meets another reading, the element is
+   * omitted rather than padded or rejected.
+   */
+  bool freecad;
 } GMDL_Obj_Options;
 
 /**

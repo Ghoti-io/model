@@ -273,6 +273,268 @@ TEST(ObjParse, NonFiniteNumbersCanBeRejected) {
   gmdl_obj_free(finite);
 }
 
+// The polygon cases measured against Blender 4.3.2 and VTK 9.3 (via f3d
+// 3.1.0) on 2026-09-21, and rechecked on 2026-09-28. Each assertion is the
+// reading those two already agree with this library about, or the one of
+// them the specification follows where they do not. FreeCAD is the other
+// test: its reading is an option, and it must not become the default.
+TEST(ObjParse, ReferenceReadersOnTheMeasuredCases) {
+  // Continuation of a vertex joins. Blender keeps it; VTK errors.
+  GMDL_Obj * joined = load_text("v 5 5 \\\n5\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+  ASSERT_NE(joined, nullptr);
+  ASSERT_EQ(joined->vertex_count, 3u);
+  EXPECT_FLOAT_EQ(joined->vertices[0].z, 5.0f);
+  EXPECT_EQ(joined->face_count, 1u);
+  gmdl_obj_free(joined);
+
+  // Continuation of a face joins. Blender, VTK and FreeCAD do not all agree;
+  // Blender and VTK keep this face.
+  GMDL_Obj * face = load_text("v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 \\\n3\n");
+  ASSERT_NE(face, nullptr);
+  EXPECT_EQ(face->face_count, 1u);
+  gmdl_obj_free(face);
+
+  // A trailing backslash on a group name joins, so the face is swallowed.
+  // Blender loses it. VTK keeps it.
+  GMDL_Obj * one = load_text("v 5 5 5\nv 1 0 0\nv 0 1 0\ng a\\\nf 1 2 3\n");
+  ASSERT_NE(one, nullptr);
+  EXPECT_EQ(one->vertex_count, 3u);
+  EXPECT_EQ(one->face_count, 0u);
+  gmdl_obj_free(one);
+  GMDL_Obj * two = load_text("v 5 5 5\nv 1 0 0\nv 0 1 0\ng a\\\\\nf 1 2 3\n");
+  ASSERT_NE(two, nullptr);
+  EXPECT_EQ(two->face_count, 0u);
+  gmdl_obj_free(two);
+
+  // The comment is cut before continuation is looked for, so the face
+  // survives. VTK keeps it. Blender's join-first reading loses it.
+  GMDL_Obj * note = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\n# note \\\nf 1 2 3\n");
+  ASSERT_NE(note, nullptr);
+  EXPECT_EQ(note->face_count, 1u);
+  gmdl_obj_free(note);
+
+  // Leading space and a byte-order mark are not part of the directive.
+  // VTK keeps the face in both. Blender loses it on the mark.
+  GMDL_Obj * spaced = load_text(" v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+  ASSERT_NE(spaced, nullptr);
+  EXPECT_EQ(spaced->vertex_count, 3u);
+  EXPECT_EQ(spaced->face_count, 1u);
+  gmdl_obj_free(spaced);
+  GMDL_Obj * marked = load_text(
+      "\xEF\xBB\xBFv 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+  ASSERT_NE(marked, nullptr);
+  EXPECT_EQ(marked->vertex_count, 3u);
+  EXPECT_EQ(marked->face_count, 1u);
+  gmdl_obj_free(marked);
+
+  // An inline comment is not part of the face. Blender keeps it. VTK errors.
+  GMDL_Obj * commented = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3 # tri\n");
+  ASSERT_NE(commented, nullptr);
+  EXPECT_EQ(commented->face_count, 1u);
+  gmdl_obj_free(commented);
+
+  // A short vertex is a format error, which is VTK's reading. Blender pads;
+  // that is accept_short_vertex, asserted below.
+  EXPECT_EQ(load_text_expecting_failure("v 5 5\nv 1 0\nv 0 1\nf 1 2 3\n"),
+      GMDL_ERR_FORMAT);
+
+  // A fourth field is ignored, which is Blender's reading. VTK errors; that
+  // is reject_extra_face_field.
+  GMDL_Obj * extra = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1/1/1/9 2 3\n");
+  ASSERT_NE(extra, nullptr);
+  EXPECT_EQ(extra->face_count, 1u);
+  gmdl_obj_free(extra);
+}
+
+// Blender 4.3.2 pads `v 5 5` to (5, 5, 0) and keeps the face. VTK 9.3 errors,
+// which is the default above.
+TEST(ObjParse, AShortVertexMatchesBlender) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.accept_short_vertex = true;
+  GMDL_Obj * obj = load_text("v 5 5\nv 1 0\nv 0 1\nf 1 2 3\n", &options);
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->vertex_count, 3u);
+  ASSERT_EQ(obj->face_count, 1u);
+  EXPECT_FLOAT_EQ(obj->vertices[0].x, 5.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[0].y, 5.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[0].z, 0.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[1].x, 1.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[1].z, 0.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[2].y, 1.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[2].z, 0.0f);
+  EXPECT_EQ(obj->faces[0].vertex[0], 0);
+  EXPECT_EQ(obj->faces[0].vertex[1], 1);
+  EXPECT_EQ(obj->faces[0].vertex[2], 2);
+  gmdl_obj_free(obj);
+}
+
+// FreeCAD 1.0.0 ReaderOBJ, measured 2026-09-28. The flag reproduces the
+// vertices and faces that reader keeps. Its mesh then reports only points a
+// facet uses; those vertices stay in the model.
+TEST(ObjParse, FreeCadReading) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.freecad = true;
+
+  GMDL_Obj * triangle = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
+  ASSERT_NE(triangle, nullptr);
+  EXPECT_EQ(triangle->vertex_count, 3u);
+  EXPECT_EQ(triangle->face_count, 1u);
+  gmdl_obj_free(triangle);
+
+  // A short vertex is omitted and does not take an index, so `f 1 2 3`
+  // names the three vertices that were long enough.
+  GMDL_Obj * short_v = load_text(
+      "v 5 5 5\nv 9 9\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
+  ASSERT_NE(short_v, nullptr);
+  ASSERT_EQ(short_v->vertex_count, 3u);
+  ASSERT_EQ(short_v->face_count, 1u);
+  EXPECT_FLOAT_EQ(short_v->vertices[0].z, 5.0f);
+  EXPECT_FLOAT_EQ(short_v->vertices[1].x, 1.0f);
+  EXPECT_FLOAT_EQ(short_v->vertices[2].y, 1.0f);
+  gmdl_obj_free(short_v);
+
+  // nan and inf are omitted the same way. The face names what remains.
+  GMDL_Obj * non_finite = load_text(
+      "v 5 5 5\nv nan 1 1\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
+  ASSERT_NE(non_finite, nullptr);
+  ASSERT_EQ(non_finite->vertex_count, 3u);
+  EXPECT_FLOAT_EQ(non_finite->vertices[1].x, 1.0f);
+  gmdl_obj_free(non_finite);
+  GMDL_Obj * infinite = load_text(
+      "v 5 5 5\nv inf 1 1\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
+  ASSERT_NE(infinite, nullptr);
+  EXPECT_EQ(infinite->vertex_count, 3u);
+  EXPECT_EQ(infinite->face_count, 1u);
+  gmdl_obj_free(infinite);
+
+  // A quad is the two triangles FreeCAD reported, in that corner order.
+  // A face of five corners is dropped; the triangle beside it is not.
+  GMDL_Obj * quad = load_text(
+      "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\ng body\nf 1 2 3 4\n", &options);
+  ASSERT_NE(quad, nullptr);
+  ASSERT_EQ(quad->vertex_count, 4u);
+  ASSERT_EQ(quad->face_count, 2u);
+  EXPECT_EQ(quad->faces[0].count, 3u);
+  EXPECT_EQ(quad->faces[0].vertex[0], 0);
+  EXPECT_EQ(quad->faces[0].vertex[1], 1);
+  EXPECT_EQ(quad->faces[0].vertex[2], 2);
+  EXPECT_EQ(quad->faces[1].vertex[0], 2);
+  EXPECT_EQ(quad->faces[1].vertex[1], 3);
+  EXPECT_EQ(quad->faces[1].vertex[2], 0);
+  ASSERT_EQ(quad->group_count, 1u);
+  EXPECT_EQ(quad->groups[0].face_count, 2u);
+  gmdl_obj_free(quad);
+
+  GMDL_Obj * pent = load_text(
+      "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nv 2 0 0\nv 2 1 0\n"
+      "f 1 2 3\nf 1 2 3 4 5\n",
+      &options);
+  ASSERT_NE(pent, nullptr);
+  // The pentagon's vertices were stated, so they stay. FreeCAD's mesh
+  // count is the triangle's three points.
+  EXPECT_EQ(pent->vertex_count, 6u);
+  ASSERT_EQ(pent->face_count, 1u);
+  EXPECT_EQ(pent->faces[0].count, 3u);
+  gmdl_obj_free(pent);
+
+  // A fourth field drops that face only. The next face is kept, and the
+  // vertex only the dropped face used is still recorded.
+  GMDL_Obj * extra = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\nv 2 0 0\nf 1/1/1/9 2 3\nf 2 3 4\n",
+      &options);
+  ASSERT_NE(extra, nullptr);
+  EXPECT_EQ(extra->vertex_count, 4u);
+  ASSERT_EQ(extra->face_count, 1u);
+  EXPECT_EQ(extra->faces[0].vertex[0], 1);
+  EXPECT_EQ(extra->faces[0].vertex[1], 2);
+  EXPECT_EQ(extra->faces[0].vertex[2], 3);
+  gmdl_obj_free(extra);
+
+  // A face that names a missing vertex is dropped. The other face stays.
+  GMDL_Obj * missing = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\nv 2 0 0\nf 1 2 9\nf 2 3 4\n", &options);
+  ASSERT_NE(missing, nullptr);
+  ASSERT_EQ(missing->face_count, 1u);
+  EXPECT_EQ(missing->faces[0].vertex[0], 1);
+  gmdl_obj_free(missing);
+
+  // No continuation. The broken vertex is omitted; `f 1 2 3` names the
+  // three that parsed. A broken face is omitted and the face after it stays.
+  GMDL_Obj * vcont = load_text(
+      "v 5 5 \\\n5\nv 1 0 0\nv 0 1 0\nv 2 0 0\nf 1 2 3\n", &options);
+  ASSERT_NE(vcont, nullptr);
+  ASSERT_EQ(vcont->vertex_count, 3u);
+  EXPECT_FLOAT_EQ(vcont->vertices[0].x, 1.0f);
+  EXPECT_FLOAT_EQ(vcont->vertices[2].x, 2.0f);
+  EXPECT_EQ(vcont->face_count, 1u);
+  gmdl_obj_free(vcont);
+  GMDL_Obj * fcont = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 \\\n3\nf 1 2 3\n", &options);
+  ASSERT_NE(fcont, nullptr);
+  EXPECT_EQ(fcont->vertex_count, 3u);
+  EXPECT_EQ(fcont->face_count, 1u);
+  gmdl_obj_free(fcont);
+
+  // A leading space or a byte-order mark hides that vertex. The face names
+  // the ones that remain, in order.
+  GMDL_Obj * spaced = load_text(
+      "v 5 5 5\n v 9 9 9\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
+  ASSERT_NE(spaced, nullptr);
+  ASSERT_EQ(spaced->vertex_count, 3u);
+  EXPECT_FLOAT_EQ(spaced->vertices[1].x, 1.0f);
+  EXPECT_EQ(spaced->face_count, 1u);
+  gmdl_obj_free(spaced);
+  GMDL_Obj * marked = load_text(
+      "\xEF\xBB\xBFv 9 9 9\nv 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
+  ASSERT_NE(marked, nullptr);
+  ASSERT_EQ(marked->vertex_count, 3u);
+  EXPECT_FLOAT_EQ(marked->vertices[0].x, 5.0f);
+  gmdl_obj_free(marked);
+
+  // The comment is a token, so that face is dropped and the next one kept.
+  GMDL_Obj * commented = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3 # tri\nf 1 2 3\n", &options);
+  ASSERT_NE(commented, nullptr);
+  EXPECT_EQ(commented->face_count, 1u);
+  gmdl_obj_free(commented);
+
+  // `g a\\` keeps the face. `g a\` is the format error FreeCAD raises.
+  // `o a\` and a backslash that is not the last byte are not that error.
+  GMDL_Obj * escaped = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\ng a\\\\\nf 1 2 3\n", &options);
+  ASSERT_NE(escaped, nullptr);
+  EXPECT_EQ(escaped->face_count, 1u);
+  gmdl_obj_free(escaped);
+  EXPECT_EQ(load_text_expecting_failure(
+                "v 5 5 5\nv 1 0 0\nv 0 1 0\ng a\\\nf 1 2 3\n", &options),
+      GMDL_ERR_FORMAT);
+  GMDL_Obj * object = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\no a\\\nf 1 2 3\n", &options);
+  ASSERT_NE(object, nullptr);
+  EXPECT_EQ(object->face_count, 1u);
+  gmdl_obj_free(object);
+  GMDL_Obj * spaced_slash = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\ng a\\ \nf 1 2 3\n", &options);
+  ASSERT_NE(spaced_slash, nullptr);
+  EXPECT_EQ(spaced_slash->face_count, 1u);
+  gmdl_obj_free(spaced_slash);
+
+  // A negative index still resolves. FreeCAD kept this face.
+  GMDL_Obj * negative = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\nf -3 -2 -1\n", &options);
+  ASSERT_NE(negative, nullptr);
+  ASSERT_EQ(negative->face_count, 1u);
+  EXPECT_EQ(negative->faces[0].vertex[0], 0);
+  EXPECT_EQ(negative->faces[0].vertex[2], 2);
+  gmdl_obj_free(negative);
+}
+
 // `vt u [v] [w]` - v and w are optional and default to 0, which is what the
 // specification says and what Blender reads. VTK calls "vt 0.5" an error;
 // this follows the more permissive of the two references deliberately, so the

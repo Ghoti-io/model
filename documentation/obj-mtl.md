@@ -57,6 +57,8 @@ Input is bytes. Directives and numbers are ASCII. Names (`g`, `o`, `usemtl`,
 UTF-8 name survives and so does a Latin-1 one.
 
 A UTF-8 byte-order mark at the start of the input is skipped.
+`GMDL_Obj_Options.freecad` leaves it in place, so the first line does not
+match a directive.
 
 ### 2.2 Line endings
 
@@ -75,17 +77,23 @@ is accepted.
 A line that is blank, or only a comment, is ignored. The comment is removed
 before the continuation in 2.6 is looked for; that ordering is a decision the
 format does not make for us, and 2.6 says why it was made this way.
+`GMDL_Obj_Options.freecad` does not cut comments, so `#` on a face line is a
+token and that face is omitted.
 
 ### 2.5 Whitespace
 
 Space and tab separate tokens. Any run of either is one separator. Leading
-whitespace before the directive is permitted and ignored. Commas are
-not separators: `v 1,2,3` is malformed.
+whitespace before the directive is permitted and ignored.
+`GMDL_Obj_Options.freecad` does not skip it, so a line that does not start
+at column 0 is not a directive. Commas are not separators:
+`v 1,2,3` is malformed.
 
 ### 2.6 Continuation
 
 A `\` as the last non-blank character joins the next line to this one.
 The joined line is subject to `max_line_length` as a whole.
+`GMDL_Obj_Options.freecad` does not join. A `g` line that then ends in an
+unpaired `\` is `GMDL_ERR_FORMAT`; `g a\\` and `o a\` are not.
 
 **The comment is cut first.** A `\` that ends a comment therefore does not
 continue anything, and a comment on a continued line still disappears. The
@@ -242,6 +250,9 @@ Each token references a vertex and optionally a texture coordinate and a
 normal, by index. The four forms may be mixed within one face, though no
 writer does that. A fourth `/`-separated field is ignored.
 `GMDL_Obj_Options.reject_extra_face_field` makes it `GMDL_ERR_FORMAT`.
+`GMDL_Obj_Options.freecad` omits the face instead, and does the same for a
+face that names a missing vertex. A quad is stored as two triangles,
+corners (0, 1, 2) and (2, 3, 0). A face with any other count is omitted.
 
 **Indices.** In the file an index is 1-based; a negative index is relative,
 with `-1` naming the most recently declared element *of that kind at that
@@ -1289,6 +1300,17 @@ formats share.
 | `accept_short_vertex` | false | `v` with one or two numbers is padded with zero |
 | `reject_extra_face_field` | false | a fourth `/` field is `GMDL_ERR_FORMAT` |
 | `reject_non_finite` | false | `nan` and `inf` are `GMDL_ERR_FORMAT` |
+| `freecad` | false | FreeCAD 1.0 ReaderOBJ, below |
+
+`freecad` is the reading measured against FreeCAD 1.0.0's `ReaderOBJ` on
+2026-09-28. It turns off the line rewriting in 2.1 and 2.4 through 2.6, omits
+a `v` with fewer than three numbers or a non-finite one without giving it an
+index, omits a face it cannot use, and splits a quad as 3.5 describes. A `g`
+line ending in an unpaired `\` is `GMDL_ERR_FORMAT`. Vertices no surviving
+face uses are still recorded; FreeCAD's mesh count is only the points a
+facet uses. Set, it wins over `accept_short_vertex`, `reject_extra_face_field`
+and `reject_non_finite` where they describe the same element: the element is
+omitted rather than padded or rejected.
 
 ### 5.2 MTL
 
@@ -1900,6 +1922,15 @@ section 12 is where they are written down.
   `GMDL_ERR_FORMAT` (3.5).
 - **`nan` and `inf`.** Recorded by default, on both parsers.
   `reject_non_finite` on the format's options makes them `GMDL_ERR_FORMAT`.
+  `freecad` omits a non-finite `v` and does not give it an index, which is
+  what FreeCAD 1.0 does. Blender 4.3 and VTK 9.3 substitute zero; that
+  reading is not an option.
+- **FreeCAD's mesh.** `GMDL_Obj_Options.freecad` is that reader's polygon
+  behaviour, measured on FreeCAD 1.0.0: no line rewriting, a bad face
+  omitted rather than fatal, quads split, faces of five or more corners
+  dropped, and `g a\` a format error. The default stays the specification.
+  FreeCAD's reported point count leaves out vertices no facet uses; the
+  model still holds those vertices.
 - **Which exporters' spellings are still missing.** `map_Bump` and `map_refl`
   were found by asking Blender about 27 candidate spellings, not by reading
   the reference - the reference does not list them. Blender is one exporter;

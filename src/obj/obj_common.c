@@ -71,6 +71,7 @@ void gmdl_line_reader_init(GMDL_Line_Reader * reader, GMDL_Stream * stream,
   reader->buffer = buffer;
   reader->max_length = max_length;
   reader->at_start = true;
+  reader->literal = false;
   buffer[0] = '\0';
 }
 
@@ -100,6 +101,13 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line) {
 
     char * physical = reader->buffer + used;
 
+    // FreeCAD's reader does none of the rewriting below. The line is the
+    // bytes between the endings, and a directive has to start at column 0.
+    if (reader->literal) {
+      reader->at_start = false;
+      break;
+    }
+
     if (reader->at_start) {
       reader->at_start = false;
       // A UTF-8 byte-order mark is not part of the first directive (2.1).
@@ -122,6 +130,11 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line) {
     if (!continues) {
       break;
     }
+  }
+
+  if (reader->literal) {
+    *out_line = reader->buffer;
+    return GMDL_OK;
   }
 
   const char * cursor = reader->buffer;

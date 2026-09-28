@@ -1335,6 +1335,7 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
 
   GMDL_Line_Reader reader;
   gmdl_line_reader_init(&reader, stream, line, line_size);
+  reader.literal = limits->freecad;
 
   for (;;) {
     const char * line_text = NULL;
@@ -1358,6 +1359,21 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // point that makes it so is gone (3.1).
       float number[6];
       size_t count = obj_take_floats(rest, number, 6);
+      // FreeCAD omits a vertex that is short or not finite, and the next
+      // vertex takes the index this one did not. Padding and rejecting are
+      // the other two readings; this one wins when both are set.
+      if (limits->freecad) {
+        bool finite = true;
+        size_t checked = count < 3 ? count : 3;
+        for (size_t i = 0; i < checked; i++) {
+          if (!isfinite(number[i])) {
+            finite = false;
+          }
+        }
+        if (count < 3 || !finite) {
+          continue;
+        }
+      }
       if (obj_rejected_non_finite(number, count, limits->reject_non_finite)) {
         result = GMDL_ERR_FORMAT;
         goto cleanup;
@@ -1773,8 +1789,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         goto cleanup;
       }
 
+      bool skip_face = false;
       const char * cursor = rest;
-      while (*cursor) {
+      while (*cursor && !skip_face) {
         while (*cursor == ' ' || *cursor == '\t') {
           cursor++;
         }
@@ -1790,8 +1807,16 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         long long vt = 0;
         long long vn = 0;
         if (!obj_parse_face_token(token, cursor, &v, &vt, &vn,
-                limits->reject_extra_face_field)) {
+                limits->reject_extra_face_field || limits->freecad)) {
           gcu_array_destroy_in_place(&overflow);
+          // A token FreeCAD cannot read drops that face and the file goes
+          // on. The fourth field is one such token; so is `#` once comments
+          // are left in the line. `continue` here would resume this loop,
+          // which has just destroyed `overflow`.
+          if (limits->freecad) {
+            skip_face = true;
+            break;
+          }
           result = GMDL_ERR_FORMAT;
           goto cleanup;
         }
@@ -1822,12 +1847,76 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           face.count++;
         }
       }
+      if (skip_face) {
+        continue;
+      }
 
       // Trim before handing it over: this block outlives the parse and there
       // may be one per face.
       (void)gcu_array_shrink_to_fit(&overflow);
       face.overflow = (GMDL_Obj_Face_Overflow *)gcu_array_steal(&overflow, NULL);
       gcu_array_destroy_in_place(&overflow);
+
+      // FreeCAD's mesh keeps a triangle, splits a quad into (0, 1, 2) and
+      // (2, 3, 0), and drops every other face, including one that names a
+      // vertex the file does not have. The vertices themselves stay: its
+      // point count is only the ones a facet uses.
+      if (limits->freecad) {
+        bool drop = face.count != 3 && face.count != 4;
+        for (size_t i = 0; i < face.count && i < 4 && !drop; i++) {
+          int32_t index = face.vertex[i];
+          if (index < 0 || (size_t)index >= vertex_count) {
+            drop = true;
+          }
+        }
+        if (face.count > 4) {
+          drop = true;
+        }
+        if (drop) {
+          gcu_allocator_free(allocator, face.overflow);
+          continue;
+        }
+        if (face.count == 4) {
+          static const int corner[2][3] = {{0, 1, 2}, {2, 3, 0}};
+          for (int tri = 0; tri < 2; tri++) {
+            if (tri == 1
+                && gmdl_limit_reached(
+                    obj_element_count(&builder), limits->max_faces)) {
+              gcu_allocator_free(allocator, face.overflow);
+              result = GMDL_ERR_LIMIT;
+              goto cleanup;
+            }
+            GMDL_Obj_Face half;
+            memset(&half, 0, sizeof(half));
+            half.count = 3;
+            half.material_index = face.material_index;
+            half.map_index = face.map_index;
+            half.render_index = face.render_index;
+            half.smoothing_group = face.smoothing_group;
+            for (int k = 0; k < 3; k++) {
+              int c = corner[tri][k];
+              half.vertex[k] = face.vertex[c];
+              half.texcoord[k] = face.texcoord[c];
+              half.normal[k] = face.normal[c];
+            }
+            if (!gcu_array_append(&builder.faces, &half)) {
+              gcu_allocator_free(allocator, face.overflow);
+              result = GMDL_ERR_OOM;
+              goto cleanup;
+            }
+            if (current_group >= 0) {
+              for (size_t gi = (size_t)current_group;
+                   gi < gcu_array_count(&builder.groups); gi++) {
+                GMDL_Obj_Group * group =
+                    (GMDL_Obj_Group *)gcu_array_at(&builder.groups, gi);
+                group->face_count++;
+              }
+            }
+          }
+          gcu_allocator_free(allocator, face.overflow);
+          continue;
+        }
+      }
 
       if (!gcu_array_append(&builder.faces, &face)) {
         // The face never reached the array, so its overflow will not be freed
@@ -1853,6 +1942,20 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // file used. They do not mean the same thing to the tools that write
       // them, and they do not parse the same way either (3.6).
       bool is_object = line_text[0] == 'o';
+      // FreeCAD raises SystemError on `g a\`. `g a\\` is a name and the
+      // face on the next line survives, and `o a\` is not the error, so
+      // this is an unpaired backslash at the end of a `g` line only.
+      if (limits->freecad && !is_object && line_text[0] != '\0') {
+        size_t length = strlen(line_text);
+        size_t slashes = 0;
+        while (length > slashes && line_text[length - 1 - slashes] == '\\') {
+          slashes++;
+        }
+        if (slashes % 2 == 1) {
+          result = GMDL_ERR_FORMAT;
+          goto cleanup;
+        }
+      }
       // A bare directive names the default group. A name too long for the
       // field is refused rather than cut, because the first 127 bytes of a
       // name name something else (3.9).
