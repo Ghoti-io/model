@@ -1347,10 +1347,10 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
 
   GMDL_Line_Reader reader;
   gmdl_line_reader_init(&reader, stream, line, line_size);
-  // freecad takes each line as its bytes, so the per-statement readings are
-  // not also applied: literal returns before they are consulted.
-  reader.literal = limits->freecad;
   reader.keep_byte_order_mark = limits->keep_byte_order_mark;
+  reader.keep_leading_whitespace = limits->keep_leading_whitespace;
+  reader.keep_inline_comments = limits->keep_inline_comments;
+  reader.no_line_continuation = limits->no_line_continuation;
   reader.join_before_comment = limits->join_before_comment;
   reader.reject_vertex_continuation = limits->reject_vertex_continuation;
   reader.reject_face_comment = limits->reject_face_comment;
@@ -1378,10 +1378,13 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // point that makes it so is gone (3.1).
       float number[6];
       size_t count = obj_take_floats(rest, number, 6);
-      // FreeCAD omits a vertex that is short or not finite, and the next
-      // vertex takes the index this one did not. Padding and rejecting are
-      // the other two readings; this one wins when both are set.
-      if (limits->freecad) {
+      // Omitting a short or non-finite vertex leaves no index for it.
+      // Padding and rejecting are the other readings; omitting wins when
+      // more than one is set.
+      if (limits->omit_short_vertex && count < 3) {
+        continue;
+      }
+      if (limits->omit_non_finite_vertex) {
         bool finite = true;
         size_t checked = count < 3 ? count : 3;
         for (size_t i = 0; i < checked; i++) {
@@ -1389,12 +1392,11 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
             finite = false;
           }
         }
-        if (count < 3 || !finite) {
+        if (!finite) {
           continue;
         }
       }
       // Substitution loses to a rejection: both set still fails the file.
-      // freecad already omitted a non-finite vertex above.
       if (!limits->reject_non_finite) {
         obj_zero_non_finite(
             number, count, limits->non_finite_becomes_zero);
@@ -1841,13 +1843,12 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         long long vt = 0;
         long long vn = 0;
         if (!obj_parse_face_token(token, cursor, &v, &vt, &vn,
-                limits->reject_extra_face_field || limits->freecad)) {
+                limits->reject_extra_face_field)) {
           gcu_array_destroy_in_place(&overflow);
-          // A token FreeCAD cannot read drops that face and the file goes
-          // on. The fourth field is one such token; so is `#` once comments
-          // are left in the line. `continue` here would resume this loop,
-          // which has just destroyed `overflow`.
-          if (limits->freecad) {
+          // A token that does not parse drops that face when the caller
+          // asked to omit it; otherwise the file fails. `continue` here
+          // would resume this loop, which has just destroyed `overflow`.
+          if (limits->omit_malformed_faces) {
             skip_face = true;
             break;
           }
@@ -1891,71 +1892,14 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       face.overflow = (GMDL_Obj_Face_Overflow *)gcu_array_steal(&overflow, NULL);
       gcu_array_destroy_in_place(&overflow);
 
-      // FreeCAD's mesh keeps a triangle, splits a quad into (0, 1, 2) and
-      // (2, 3, 0), and drops every other face, including one that names a
-      // vertex the file does not have. The vertices themselves stay: its
-      // point count is only the ones a facet uses.
-      if (limits->freecad) {
-        bool drop = face.count != 3 && face.count != 4;
-        for (size_t i = 0; i < face.count && i < 4 && !drop; i++) {
-          int32_t index = face.vertex[i];
-          if (index < 0 || (size_t)index >= vertex_count) {
-            drop = true;
-          }
-        }
-        if (face.count > 4) {
-          drop = true;
-        }
-        if (drop) {
-          gcu_allocator_free(allocator, face.overflow);
-          continue;
-        }
-        if (face.count == 4) {
-          static const int corner[2][3] = {{0, 1, 2}, {2, 3, 0}};
-          for (int tri = 0; tri < 2; tri++) {
-            if (tri == 1
-                && gmdl_limit_reached(
-                    obj_element_count(&builder), limits->max_faces)) {
-              gcu_allocator_free(allocator, face.overflow);
-              result = GMDL_ERR_LIMIT;
-              goto cleanup;
-            }
-            GMDL_Obj_Face half;
-            memset(&half, 0, sizeof(half));
-            half.count = 3;
-            half.material_index = face.material_index;
-            half.map_index = face.map_index;
-            half.render_index = face.render_index;
-            half.smoothing_group = face.smoothing_group;
-            for (int k = 0; k < 3; k++) {
-              int c = corner[tri][k];
-              half.vertex[k] = face.vertex[c];
-              half.texcoord[k] = face.texcoord[c];
-              half.normal[k] = face.normal[c];
-            }
-            if (!gcu_array_append(&builder.faces, &half)) {
-              gcu_allocator_free(allocator, face.overflow);
-              result = GMDL_ERR_OOM;
-              goto cleanup;
-            }
-            if (current_group >= 0) {
-              for (size_t gi = (size_t)current_group;
-                   gi < gcu_array_count(&builder.groups); gi++) {
-                GMDL_Obj_Group * group =
-                    (GMDL_Obj_Group *)gcu_array_at(&builder.groups, gi);
-                group->face_count++;
-              }
-            }
-          }
-          gcu_allocator_free(allocator, face.overflow);
-          continue;
-        }
+      // A face outside the triangle/quad set, or one that names a missing
+      // vertex, can be left out. A quad can then be stored as two triangles.
+      if (limits->omit_non_triangle_quad_faces
+          && face.count != 3 && face.count != 4) {
+        gcu_allocator_free(allocator, face.overflow);
+        continue;
       }
-
-      // A face that names a missing vertex can be left out without the rest
-      // of the FreeCAD reading. The vertices stay. Corners past the fourth
-      // live in the overflow, so the check cannot stop at the inline four.
-      if (!limits->freecad && limits->omit_unresolved_faces) {
+      if (limits->omit_unresolved_faces) {
         bool missing = false;
         for (size_t i = 0; i < face.count && !missing; i++) {
           int32_t index =
@@ -1968,6 +1912,46 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
           gcu_allocator_free(allocator, face.overflow);
           continue;
         }
+      }
+      if (limits->triangulate_quads && face.count == 4) {
+        static const int corner[2][3] = {{0, 1, 2}, {2, 3, 0}};
+        for (int tri = 0; tri < 2; tri++) {
+          if (tri == 1
+              && gmdl_limit_reached(
+                  obj_element_count(&builder), limits->max_faces)) {
+            gcu_allocator_free(allocator, face.overflow);
+            result = GMDL_ERR_LIMIT;
+            goto cleanup;
+          }
+          GMDL_Obj_Face half;
+          memset(&half, 0, sizeof(half));
+          half.count = 3;
+          half.material_index = face.material_index;
+          half.map_index = face.map_index;
+          half.render_index = face.render_index;
+          half.smoothing_group = face.smoothing_group;
+          for (int k = 0; k < 3; k++) {
+            int c = corner[tri][k];
+            half.vertex[k] = face.vertex[c];
+            half.texcoord[k] = face.texcoord[c];
+            half.normal[k] = face.normal[c];
+          }
+          if (!gcu_array_append(&builder.faces, &half)) {
+            gcu_allocator_free(allocator, face.overflow);
+            result = GMDL_ERR_OOM;
+            goto cleanup;
+          }
+          if (current_group >= 0) {
+            for (size_t gi = (size_t)current_group;
+                 gi < gcu_array_count(&builder.groups); gi++) {
+              GMDL_Obj_Group * group =
+                  (GMDL_Obj_Group *)gcu_array_at(&builder.groups, gi);
+              group->face_count++;
+            }
+          }
+        }
+        gcu_allocator_free(allocator, face.overflow);
+        continue;
       }
 
       if (!gcu_array_append(&builder.faces, &face)) {
@@ -1997,7 +1981,8 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // FreeCAD raises SystemError on `g a\`. `g a\\` is a name and the
       // face on the next line survives, and `o a\` is not the error, so
       // this is an unpaired backslash at the end of a `g` line only.
-      if (limits->freecad && !is_object && line_text[0] != '\0') {
+      if (limits->reject_unpaired_group_backslash && !is_object
+          && line_text[0] != '\0') {
         size_t length = strlen(line_text);
         size_t slashes = 0;
         while (length > slashes && line_text[length - 1 - slashes] == '\\') {
@@ -2564,6 +2549,52 @@ void gmdl_obj_options_default(GMDL_Obj_Options * options) {
   *options = (GMDL_Obj_Options) {
     .max_line_length = GMDL_DEFAULT_MAX_LINE_LENGTH,
   };
+}
+
+void gmdl_obj_options_freecad(GMDL_Obj_Options * options) {
+  if (!options) {
+    return;
+  }
+  gmdl_obj_options_default(options);
+  options->keep_byte_order_mark = true;
+  options->keep_leading_whitespace = true;
+  options->keep_inline_comments = true;
+  options->no_line_continuation = true;
+  options->omit_short_vertex = true;
+  options->omit_non_finite_vertex = true;
+  options->reject_extra_face_field = true;
+  options->omit_malformed_faces = true;
+  options->omit_unresolved_faces = true;
+  options->omit_non_triangle_quad_faces = true;
+  options->triangulate_quads = true;
+  options->reject_unpaired_group_backslash = true;
+}
+
+void gmdl_obj_options_blender(GMDL_Obj_Options * options) {
+  if (!options) {
+    return;
+  }
+  gmdl_obj_options_default(options);
+  options->accept_short_vertex = true;
+  options->non_finite_becomes_zero = true;
+  options->keep_byte_order_mark = true;
+  options->omit_unresolved_faces = true;
+  options->join_before_comment = true;
+  options->group_line_is_one_name = true;
+}
+
+void gmdl_obj_options_vtk(GMDL_Obj_Options * options) {
+  if (!options) {
+    return;
+  }
+  gmdl_obj_options_default(options);
+  options->reject_extra_face_field = true;
+  options->non_finite_becomes_zero = true;
+  options->reject_vertex_continuation = true;
+  options->reject_face_comment = true;
+  options->break_group_continuation = true;
+  options->group_line_is_one_name = true;
+  options->reject_short_texcoord = true;
 }
 
 /**

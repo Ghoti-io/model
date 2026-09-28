@@ -377,6 +377,20 @@ typedef struct GMDL_Mtl_Options {
 GMDL_API void gmdl_mtl_options_default(GMDL_Mtl_Options * options);
 
 /**
+ * @brief Fill options that match Blender 4.3.2's MTL reading.
+ *
+ * @param options Structure to populate. NULL is ignored.
+ */
+GMDL_API void gmdl_mtl_options_blender(GMDL_Mtl_Options * options);
+
+/**
+ * @brief Fill options that match VTK 9.3's MTL reading.
+ *
+ * @param options Structure to populate. NULL is ignored.
+ */
+GMDL_API void gmdl_mtl_options_vtk(GMDL_Mtl_Options * options);
+
+/**
  * @brief Parse an MTL file from a stream.
  *
  * @param stream Stream positioned at the start of the MTL data.

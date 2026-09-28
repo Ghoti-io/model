@@ -17,6 +17,7 @@ in [documentation/obj-mtl.md](documentation/obj-mtl.md).
 
 - Every load takes that format's options pointer and a `GMDL_Allocator *`. `NULL` is the defaults. OBJ's is `GMDL_Obj_Options`; MTL's is `GMDL_Mtl_Options`. A later format brings its own.
 - The only cap with a value by default is `max_line_length` (64 KiB). The parser reads a line at a time, so without it one unterminated line would be read in full. The record caps default to no limit, because the size of the input already bounds them. A reading's zero is the behaviour the specification states.
+- Named combinations that match a measured reader are filled by `gmdl_obj_options_freecad()`, `gmdl_obj_options_blender()`, and `gmdl_obj_options_vtk()` (and the MTL blender/vtk helpers). Those only write the individual reading fields; the loader never asks for an oracle by name.
 - A line longer than the buffer is `GMDL_ERR_LIMIT`. The reader does not hand back a prefix: the rest of a split line would be parsed as a line of its own, and a face cut in half would become a second face.
 - An index that names a vertex the file does not contain is recorded, not rejected. Readers disagree about that case, and the check belongs with the consumer that is about to use the index.
 

@@ -372,13 +372,13 @@ TEST(ObjParse, AShortVertexMatchesBlender) {
   gmdl_obj_free(obj);
 }
 
-// FreeCAD 1.0.0 ReaderOBJ, measured 2026-09-28. The flag reproduces the
-// vertices and faces that reader keeps. Its mesh then reports only points a
-// facet uses; those vertices stay in the model.
+// FreeCAD 1.0.0 ReaderOBJ, measured 2026-09-28. The preset fills the
+// individual readings that reproduce the vertices and faces that reader
+// keeps. Its mesh then reports only points a facet uses; those vertices
+// stay in the model.
 TEST(ObjParse, FreeCadReading) {
   GMDL_Obj_Options options;
-  gmdl_obj_options_default(&options);
-  options.freecad = true;
+  gmdl_obj_options_freecad(&options);
 
   GMDL_Obj * triangle = load_text(
       "v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
@@ -535,8 +535,59 @@ TEST(ObjParse, FreeCadReading) {
   gmdl_obj_free(negative);
 }
 
+// The oracle presets only fill fields. The loader never asks for an oracle
+// by name, so each preset is the same machinery as setting the flags by hand.
+TEST(ObjParse, OraclePresetsFillTheMeasuredReadings) {
+  GMDL_Obj_Options freecad;
+  gmdl_obj_options_freecad(&freecad);
+  EXPECT_TRUE(freecad.omit_short_vertex);
+  EXPECT_TRUE(freecad.omit_non_finite_vertex);
+  EXPECT_TRUE(freecad.keep_leading_whitespace);
+  EXPECT_TRUE(freecad.keep_inline_comments);
+  EXPECT_TRUE(freecad.no_line_continuation);
+  EXPECT_TRUE(freecad.omit_malformed_faces);
+  EXPECT_TRUE(freecad.omit_non_triangle_quad_faces);
+  EXPECT_TRUE(freecad.triangulate_quads);
+  EXPECT_TRUE(freecad.reject_unpaired_group_backslash);
+  EXPECT_TRUE(freecad.reject_extra_face_field);
+  EXPECT_TRUE(freecad.omit_unresolved_faces);
+  EXPECT_TRUE(freecad.keep_byte_order_mark);
+
+  GMDL_Obj_Options blender;
+  gmdl_obj_options_blender(&blender);
+  EXPECT_TRUE(blender.accept_short_vertex);
+  EXPECT_TRUE(blender.non_finite_becomes_zero);
+  EXPECT_TRUE(blender.keep_byte_order_mark);
+  EXPECT_TRUE(blender.omit_unresolved_faces);
+  EXPECT_TRUE(blender.join_before_comment);
+  EXPECT_TRUE(blender.group_line_is_one_name);
+  EXPECT_FALSE(blender.reject_extra_face_field);
+
+  GMDL_Obj_Options vtk;
+  gmdl_obj_options_vtk(&vtk);
+  EXPECT_TRUE(vtk.reject_extra_face_field);
+  EXPECT_TRUE(vtk.non_finite_becomes_zero);
+  EXPECT_TRUE(vtk.reject_vertex_continuation);
+  EXPECT_TRUE(vtk.reject_face_comment);
+  EXPECT_TRUE(vtk.break_group_continuation);
+  EXPECT_TRUE(vtk.group_line_is_one_name);
+  EXPECT_TRUE(vtk.reject_short_texcoord);
+  EXPECT_FALSE(vtk.accept_short_vertex);
+
+  GMDL_Obj * short_v = load_text("v 0 1\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &blender);
+  ASSERT_NE(short_v, nullptr);
+  EXPECT_EQ(short_v->vertex_count, 3u);
+  EXPECT_FLOAT_EQ(short_v->vertices[0].z, 0.0f);
+  gmdl_obj_free(short_v);
+
+  EXPECT_EQ(load_text_expecting_failure("vt 0.5\n", &vtk), GMDL_ERR_FORMAT);
+  EXPECT_EQ(load_text_expecting_failure(
+                "v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3 # tri\n", &vtk),
+      GMDL_ERR_FORMAT);
+}
+
 // Blender 4.3 and VTK 9.3 store 0 for a non-finite component. Rejection
-// still fails the file, and freecad still omits the vertex.
+// still fails the file, and omit_non_finite_vertex still omits the vertex.
 TEST(ObjParse, NonFiniteNumbersCanBecomeZero) {
   GMDL_Obj_Options options;
   gmdl_obj_options_default(&options);
@@ -557,7 +608,8 @@ TEST(ObjParse, NonFiniteNumbersCanBecomeZero) {
       GMDL_ERR_FORMAT);
 
   options.reject_non_finite = false;
-  options.freecad = true;
+  options.non_finite_becomes_zero = false;
+  options.omit_non_finite_vertex = true;
   GMDL_Obj * omitted = load_text(
       "v 5 5 5\nv nan 1 1\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
   ASSERT_NE(omitted, nullptr);

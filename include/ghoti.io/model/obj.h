@@ -1059,24 +1059,27 @@ typedef struct GMDL_Obj_Options {
    */
   bool reject_non_finite;
   /**
-   * Read polygons the way FreeCAD 1.0's ReaderOBJ does.
+   * Omit a `v` with fewer than three numbers. It takes no index.
    *
-   * Zero is the specification. Set, lines are not rewritten (2.1, 2.4, 2.5,
-   * 2.6), a short or non-finite `v` is omitted and takes no index, a face
-   * that does not parse or names a missing vertex is omitted, a face of five
-   * or more corners is omitted, and a quad is two triangles, corners
-   * (0, 1, 2) and (2, 3, 0). A `g` line ending in an unpaired `\` is
-   * ::GMDL_ERR_FORMAT. Where this meets another reading, the element is
-   * omitted rather than padded or rejected. It is applied before the line
-   * readings below, which describe one statement at a time.
+   * Zero, the default, is ::GMDL_ERR_FORMAT, or padding when
+   * ::accept_short_vertex is set. Set, the line is skipped. Omitting wins
+   * over padding when both are set. A line with no numbers is omitted too.
    */
-  bool freecad;
+  bool omit_short_vertex;
+  /**
+   * Omit a `v` whose coordinates are not finite. It takes no index.
+   *
+   * Zero, the default, records the value, or substitutes zero when
+   * ::non_finite_becomes_zero is set, or fails the file when
+   * ::reject_non_finite is set. Omitting wins over those when it is set.
+   */
+  bool omit_non_finite_vertex;
   /**
    * Replace `nan` and `inf` with zero on `v`, `vt`, `vn` and `vp`.
    *
    * Zero, the default, records the value. This is what Blender 4.3 and
    * VTK 9.3 do with a non-finite vertex. ::reject_non_finite still fails
-   * the file when both are set, and ::freecad still omits the vertex.
+   * the file when both are set, and ::omit_non_finite_vertex still omits.
    */
   bool non_finite_becomes_zero;
   /**
@@ -1089,6 +1092,29 @@ typedef struct GMDL_Obj_Options {
    */
   bool keep_byte_order_mark;
   /**
+   * Leave leading space and tab on the line (2.5).
+   *
+   * Zero, the default, skips them before the directive. Set, a line that
+   * does not start at column 0 is not a directive.
+   */
+  bool keep_leading_whitespace;
+  /**
+   * Leave `#` and the text after it on the line (2.4).
+   *
+   * Zero, the default, cuts the comment. Set, `#` is a token. A face that
+   * then fails to parse is ::GMDL_ERR_FORMAT unless ::omit_malformed_faces
+   * is also set.
+   */
+  bool keep_inline_comments;
+  /**
+   * Do not join a line that ends in `\` (2.6).
+   *
+   * Zero, the default, joins. Set, the backslash stays on the line.
+   * ::reject_vertex_continuation and ::break_group_continuation still win
+   * when they refuse or stop a join before this applies.
+   */
+  bool no_line_continuation;
+  /**
    * Omit a face that names a vertex the file does not have.
    *
    * Zero, the default, records the index and leaves the range check to the
@@ -1096,10 +1122,33 @@ typedef struct GMDL_Obj_Options {
    */
   bool omit_unresolved_faces;
   /**
+   * Omit a face whose corners do not parse, and keep reading.
+   *
+   * Zero, the default, is ::GMDL_ERR_FORMAT for that file. Set, that face
+   * is left out. Pair with ::reject_extra_face_field when a fourth `/`
+   * field should count as a failed parse rather than be ignored.
+   */
+  bool omit_malformed_faces;
+  /**
+   * Omit a face whose corner count is not three or four.
+   *
+   * Zero, the default, keeps every count. Set, triangles and quads stay;
+   * every other face is left out. ::triangulate_quads still splits a quad.
+   */
+  bool omit_non_triangle_quad_faces;
+  /**
+   * Store a quad as two triangles, corners (0, 1, 2) and (2, 3, 0).
+   *
+   * Zero, the default, keeps one face of four corners. Set, two faces are
+   * appended and the group's face count grows by two.
+   */
+  bool triangulate_quads;
+  /**
    * Join a continued line before cutting a comment (2.4, 2.6).
    *
    * Zero, the default, cuts the comment first, so a `\` inside one does not
    * continue. Set, `# note \` swallows the next line, which is Blender 4.3.
+   * ::keep_inline_comments leaves the comment either way.
    */
   bool join_before_comment;
   /**
@@ -1127,6 +1176,14 @@ typedef struct GMDL_Obj_Options {
    */
   bool break_group_continuation;
   /**
+   * A `g` line ending in an unpaired `\` is ::GMDL_ERR_FORMAT.
+   *
+   * Zero, the default, leaves the backslash to continuation. Set, an odd
+   * trailing count fails the file. `g a\\`, `o a\`, and a slash that is
+   * not the last byte are not that error. This is FreeCAD 1.0.
+   */
+  bool reject_unpaired_group_backslash;
+  /**
    * `g a b` is one group named `a b`.
    *
    * Zero, the default, is one group per word, which is what the Wavefront
@@ -1151,6 +1208,30 @@ typedef struct GMDL_Obj_Options {
  * @param options Structure to populate. NULL is ignored.
  */
 GMDL_API void gmdl_obj_options_default(GMDL_Obj_Options * options);
+
+/**
+ * @brief Fill options that match FreeCAD 1.0.0's ReaderOBJ.
+ *
+ * Sets the individual readings measured against that reader. The loader
+ * never asks for FreeCAD by name; this is sugar over those fields.
+ *
+ * @param options Structure to populate. NULL is ignored.
+ */
+GMDL_API void gmdl_obj_options_freecad(GMDL_Obj_Options * options);
+
+/**
+ * @brief Fill options that match Blender 4.3.2's OBJ importer.
+ *
+ * @param options Structure to populate. NULL is ignored.
+ */
+GMDL_API void gmdl_obj_options_blender(GMDL_Obj_Options * options);
+
+/**
+ * @brief Fill options that match VTK 9.3's vtkOBJReader.
+ *
+ * @param options Structure to populate. NULL is ignored.
+ */
+GMDL_API void gmdl_obj_options_vtk(GMDL_Obj_Options * options);
 
 /**
  * @brief Parse an OBJ file from a stream.

@@ -1112,6 +1112,23 @@ void gmdl_mtl_options_default(GMDL_Mtl_Options * options) {
   };
 }
 
+void gmdl_mtl_options_blender(GMDL_Mtl_Options * options) {
+  if (!options) {
+    return;
+  }
+  gmdl_mtl_options_default(options);
+  options->accept_map_without_path = true;
+}
+
+void gmdl_mtl_options_vtk(GMDL_Mtl_Options * options) {
+  if (!options) {
+    return;
+  }
+  gmdl_mtl_options_default(options);
+  options->accept_map_without_path = true;
+  options->unknown_map_option_is_path = true;
+}
+
 /** Read an MTL document with the numeric locale pinned (number_internal.h). */
 GMDL_Result gmdl_mtl_load(GMDL_Stream * stream, const GMDL_Mtl_Options * limits,
     const GMDL_Allocator * allocator, GMDL_Mtl ** out_mtl) {

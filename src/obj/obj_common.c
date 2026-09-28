@@ -94,8 +94,10 @@ void gmdl_line_reader_init(GMDL_Line_Reader * reader, GMDL_Stream * stream,
   reader->buffer = buffer;
   reader->max_length = max_length;
   reader->at_start = true;
-  reader->literal = false;
   reader->keep_byte_order_mark = false;
+  reader->keep_leading_whitespace = false;
+  reader->keep_inline_comments = false;
+  reader->no_line_continuation = false;
   reader->join_before_comment = false;
   reader->reject_vertex_continuation = false;
   reader->reject_face_comment = false;
@@ -129,13 +131,6 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line) {
 
     char * physical = reader->buffer + used;
 
-    // FreeCAD's reader does none of the rewriting below. The line is the
-    // bytes between the endings, and a directive has to start at column 0.
-    if (reader->literal) {
-      reader->at_start = false;
-      break;
-    }
-
     if (reader->at_start) {
       reader->at_start = false;
       // A UTF-8 byte-order mark is not part of the first directive (2.1).
@@ -162,8 +157,8 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line) {
     // continue the line and a comment on a continued line still disappears.
     // join_before_comment is Blender's order: the backslash is seen while
     // the comment still contains it, and the cut happens once the logical
-    // line is complete.
-    if (!reader->join_before_comment) {
+    // line is complete. keep_inline_comments leaves the `#` as a token.
+    if (!reader->keep_inline_comments && !reader->join_before_comment) {
       line_strip_comment(physical);
     }
 
@@ -172,9 +167,10 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line) {
           && line_starts_with_directive(physical, "v")) {
         return GMDL_ERR_FORMAT;
       }
-      if (reader->break_group_continuation
-          && (line_starts_with_directive(physical, "g")
-              || line_starts_with_directive(physical, "o"))) {
+      if (reader->no_line_continuation
+          || (reader->break_group_continuation
+              && (line_starts_with_directive(physical, "g")
+                  || line_starts_with_directive(physical, "o")))) {
         break;
       }
     }
@@ -187,18 +183,15 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line) {
     }
   }
 
-  if (!reader->literal && reader->join_before_comment) {
+  if (!reader->keep_inline_comments && reader->join_before_comment) {
     line_strip_comment(reader->buffer);
   }
 
-  if (reader->literal) {
-    *out_line = reader->buffer;
-    return GMDL_OK;
-  }
-
   const char * cursor = reader->buffer;
-  while (*cursor == ' ' || *cursor == '\t') {
-    cursor++; // Leading whitespace before the directive is ignored (2.5).
+  if (!reader->keep_leading_whitespace) {
+    while (*cursor == ' ' || *cursor == '\t') {
+      cursor++; // Leading whitespace before the directive is ignored (2.5).
+    }
   }
   *out_line = cursor;
   return GMDL_OK;

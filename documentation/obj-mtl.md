@@ -57,9 +57,8 @@ Input is bytes. Directives and numbers are ASCII. Names (`g`, `o`, `usemtl`,
 UTF-8 name survives and so does a Latin-1 one.
 
 A UTF-8 byte-order mark at the start of the input is skipped.
-`GMDL_Obj_Options.freecad` leaves it in place, so the first line does not
-match a directive. `GMDL_Obj_Options.keep_byte_order_mark` does the same
-thing and nothing else; Blender's measured file also sets
+`GMDL_Obj_Options.keep_byte_order_mark` leaves it in place, so the first
+line does not match a directive. Blender's measured file also sets
 `omit_unresolved_faces`, because the face still names the hidden vertex.
 
 ### 2.2 Line endings
@@ -79,28 +78,30 @@ is accepted.
 A line that is blank, or only a comment, is ignored. The comment is removed
 before the continuation in 2.6 is looked for; that ordering is a decision the
 format does not make for us, and 2.6 says why it was made this way.
-`GMDL_Obj_Options.freecad` does not cut comments, so `#` on a face line is a
-token and that face is omitted. `GMDL_Obj_Options.reject_face_comment` fails
-the file instead, which is VTK 9.3. `GMDL_Obj_Options.join_before_comment`
-looks for the continuation in 2.6 before this cut, so `# note \` swallows
-the next line, which is Blender 4.3.
+`GMDL_Obj_Options.keep_inline_comments` does not cut comments, so `#` on a
+face line is a token. That face is then `GMDL_ERR_FORMAT` unless
+`omit_malformed_faces` is also set. `GMDL_Obj_Options.reject_face_comment`
+fails the file instead, which is VTK 9.3.
+`GMDL_Obj_Options.join_before_comment` looks for the continuation in 2.6
+before this cut, so `# note \` swallows the next line, which is Blender 4.3.
 
 ### 2.5 Whitespace
 
 Space and tab separate tokens. Any run of either is one separator. Leading
 whitespace before the directive is permitted and ignored.
-`GMDL_Obj_Options.freecad` does not skip it, so a line that does not start
-at column 0 is not a directive. Commas are not separators:
+`GMDL_Obj_Options.keep_leading_whitespace` does not skip it, so a line that
+does not start at column 0 is not a directive. Commas are not separators:
 `v 1,2,3` is malformed.
 
 ### 2.6 Continuation
 
 A `\` as the last non-blank character joins the next line to this one.
 The joined line is subject to `max_line_length` as a whole.
-`GMDL_Obj_Options.freecad` does not join. A `g` line that then ends in an
-unpaired `\` is `GMDL_ERR_FORMAT`; `g a\\` and `o a\` are not.
-`GMDL_Obj_Options.reject_vertex_continuation` fails the file on a `v` line
-that ends in `\`, which is VTK 9.3, and does not join it.
+`GMDL_Obj_Options.no_line_continuation` does not join.
+`GMDL_Obj_Options.reject_unpaired_group_backslash` then makes a `g` line
+that ends in an unpaired `\` a `GMDL_ERR_FORMAT`; `g a\\` and `o a\` are
+not. `GMDL_Obj_Options.reject_vertex_continuation` fails the file on a `v`
+line that ends in `\`, which is VTK 9.3, and does not join it.
 `GMDL_Obj_Options.break_group_continuation` leaves that `\` in a `g` or `o`
 name and keeps the next line, which is also VTK.
 
@@ -261,11 +262,13 @@ Each token references a vertex and optionally a texture coordinate and a
 normal, by index. The four forms may be mixed within one face, though no
 writer does that. A fourth `/`-separated field is ignored.
 `GMDL_Obj_Options.reject_extra_face_field` makes it `GMDL_ERR_FORMAT`.
-`GMDL_Obj_Options.freecad` omits the face instead, and does the same for a
-face that names a missing vertex. A quad is stored as two triangles,
-corners (0, 1, 2) and (2, 3, 0). A face with any other count is omitted.
-`GMDL_Obj_Options.omit_unresolved_faces` omits only the missing-vertex
-face, and keeps every other corner count.
+`GMDL_Obj_Options.omit_malformed_faces` omits a face whose corners do not
+parse and keeps reading; with `reject_extra_face_field` that includes a
+fourth field, and with `keep_inline_comments` it includes `#` left on the
+line. `GMDL_Obj_Options.omit_unresolved_faces` omits a face that names a
+missing vertex. `GMDL_Obj_Options.omit_non_triangle_quad_faces` omits any
+other corner count. `GMDL_Obj_Options.triangulate_quads` stores a quad as
+two triangles, corners (0, 1, 2) and (2, 3, 0).
 
 **Indices.** In the file an index is 1-based; a negative index is relative,
 with `-1` naming the most recently declared element *of that kind at that
@@ -1319,26 +1322,34 @@ formats share.
 | `accept_short_vertex` | false | `v` with one or two numbers is padded with zero |
 | `reject_extra_face_field` | false | a fourth `/` field is `GMDL_ERR_FORMAT` |
 | `reject_non_finite` | false | `nan` and `inf` are `GMDL_ERR_FORMAT` |
-| `freecad` | false | FreeCAD 1.0 ReaderOBJ, below |
+| `omit_short_vertex` | false | a short `v` is skipped and takes no index |
+| `omit_non_finite_vertex` | false | a non-finite `v` is skipped and takes no index |
 | `non_finite_becomes_zero` | false | `nan` and `inf` on `v`, `vt`, `vn`, `vp` become 0 |
 | `keep_byte_order_mark` | false | a leading UTF-8 BOM stays on the first line |
+| `keep_leading_whitespace` | false | leading space and tab stay on the line |
+| `keep_inline_comments` | false | `#` stays on the line as a token |
+| `no_line_continuation` | false | a trailing `\` does not join the next line |
 | `omit_unresolved_faces` | false | a face naming a missing vertex is omitted |
+| `omit_malformed_faces` | false | a face that fails to parse is omitted |
+| `omit_non_triangle_quad_faces` | false | a face that is not a triangle or quad is omitted |
+| `triangulate_quads` | false | a quad is two triangles (0,1,2) and (2,3,0) |
 | `join_before_comment` | false | `\` is seen before a comment is cut |
 | `reject_vertex_continuation` | false | a continued `v` is `GMDL_ERR_FORMAT` |
 | `reject_face_comment` | false | `#` on an `f` line is `GMDL_ERR_FORMAT` |
 | `break_group_continuation` | false | `\` on `g` or `o` stays in the name |
+| `reject_unpaired_group_backslash` | false | unpaired `\` on `g` is `GMDL_ERR_FORMAT` |
 | `group_line_is_one_name` | false | `g a b` is one group named `a b` |
 | `reject_short_texcoord` | false | `vt` with one number is `GMDL_ERR_FORMAT` |
 
-`freecad` is the reading measured against FreeCAD 1.0.0's `ReaderOBJ` on
-2026-09-28. It turns off the line rewriting in 2.1 and 2.4 through 2.6, omits
-a `v` with fewer than three numbers or a non-finite one without giving it an
-index, omits a face it cannot use, and splits a quad as 3.5 describes. A `g`
-line ending in an unpaired `\` is `GMDL_ERR_FORMAT`. Vertices no surviving
-face uses are still recorded; FreeCAD's mesh count is only the points a
-facet uses. Set, it wins over `accept_short_vertex`, `reject_extra_face_field`
-and `reject_non_finite` where they describe the same element: the element is
-omitted rather than padded or rejected.
+Omitting a short or non-finite `v` wins over padding, substituting zero, or
+failing the file when more than one of those readings is set. Vertices no
+surviving face uses are still recorded when a face is omitted.
+
+Named combinations of these readings are filled by
+`gmdl_obj_options_freecad()`, `gmdl_obj_options_blender()`, and
+`gmdl_obj_options_vtk()`. The loader never asks for an oracle by name; the
+helpers only write the fields above. FreeCAD's mesh point count is only the
+points a facet uses; the model still holds every recorded vertex.
 
 ### 5.2 MTL
 
@@ -1351,6 +1362,9 @@ omitted rather than padded or rejected.
 | `accept_map_without_path` | false | a map directive with no path is skipped |
 | `reject_non_finite` | false | `nan` and `inf` are `GMDL_ERR_FORMAT` |
 | `unknown_map_option_is_path` | false | unknown `-option` starts the path |
+
+`gmdl_mtl_options_blender()` sets `accept_map_without_path`.
+`gmdl_mtl_options_vtk()` sets that and `unknown_map_option_is_path`.
 
 `0` means no limit - **except for `max_line_length`**, where it means
 `GMDL_DEFAULT_MAX_LINE_LENGTH`. That one field is the odd one out on purpose:
@@ -1944,17 +1958,20 @@ section 12 is where they are written down.
   other one, and leaving it zero changes nothing (4.5).
 - **A `v` line with fewer than three numbers.** `GMDL_ERR_FORMAT` by default.
   `GMDL_Obj_Options.accept_short_vertex` pads the missing coordinates with
-  zero, which is what Blender and VTK do with `v 0 1`. A line with no
-  numbers stays `GMDL_ERR_FORMAT` either way.
+  zero, which is what Blender and VTK do with `v 0 1`.
+  `GMDL_Obj_Options.omit_short_vertex` skips the line and takes no index,
+  which is FreeCAD. A line with no numbers stays `GMDL_ERR_FORMAT` when
+  omitting is off; with omitting set, it is skipped too.
 - **Extra face fields.** Ignored by default.
   `GMDL_Obj_Options.reject_extra_face_field` makes `1/2/3/4`
   `GMDL_ERR_FORMAT` (3.5).
 - **`nan` and `inf`.** Recorded by default, on both parsers.
   `reject_non_finite` on the format's options makes them `GMDL_ERR_FORMAT`.
-  `freecad` omits a non-finite `v` and does not give it an index, which is
-  what FreeCAD 1.0 does. `non_finite_becomes_zero` stores 0 instead, which
-  is what Blender 4.3 and VTK 9.3 do. `reject_non_finite` wins when both
-  are set.
+  `omit_non_finite_vertex` omits a non-finite `v` and does not give it an
+  index, which is what FreeCAD 1.0 does. `non_finite_becomes_zero` stores 0
+  instead, which is what Blender 4.3 and VTK 9.3 do. Omitting wins when it
+  is set with either of the others; `reject_non_finite` wins over
+  substitution when omitting is off.
 - **A leading byte-order mark.** Stripped by default, which is VTK.
   `keep_byte_order_mark` leaves it, which is Blender. Blender also drops
   the face that still names the hidden vertex; that is
@@ -1978,12 +1995,15 @@ section 12 is where they are written down.
   start of the filename, which is VTK's reading of an option it does not
   know. An option this library knows, `-clamp` included, stays an option
   (4.5).
-- **FreeCAD's mesh.** `GMDL_Obj_Options.freecad` is that reader's polygon
-  behaviour, measured on FreeCAD 1.0.0: no line rewriting, a bad face
-  omitted rather than fatal, quads split, faces of five or more corners
+- **FreeCAD's mesh.** `gmdl_obj_options_freecad()` fills the readings
+  measured against FreeCAD 1.0.0's `ReaderOBJ`: no line rewriting, a bad
+  face omitted rather than fatal, quads split, faces of five or more corners
   dropped, and `g a\` a format error. The default stays the specification.
   FreeCAD's reported point count leaves out vertices no facet uses; the
-  model still holds those vertices.
+  model still holds those vertices. Blender and VTK have the same kind of
+  helper: `gmdl_obj_options_blender()` and `gmdl_obj_options_vtk()`, with
+  `gmdl_mtl_options_blender()` and `gmdl_mtl_options_vtk()` on the MTL
+  side.
 - **Which exporters' spellings are still missing.** `map_Bump` and `map_refl`
   were found by asking Blender about 27 candidate spellings, not by reading
   the reference - the reference does not list them. Blender is one exporter;

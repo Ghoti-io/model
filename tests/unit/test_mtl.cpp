@@ -1101,6 +1101,29 @@ TEST(MtlMap, AnUnknownOptionCanBeginThePath) {
   gmdl_mtl_free(known);
 }
 
+TEST(MtlMap, OraclePresetsFillTheMeasuredReadings) {
+  GMDL_Mtl_Options blender;
+  gmdl_mtl_options_blender(&blender);
+  EXPECT_TRUE(blender.accept_map_without_path);
+  EXPECT_FALSE(blender.unknown_map_option_is_path);
+
+  GMDL_Mtl_Options vtk;
+  gmdl_mtl_options_vtk(&vtk);
+  EXPECT_TRUE(vtk.accept_map_without_path);
+  EXPECT_TRUE(vtk.unknown_map_option_is_path);
+
+  GMDL_Mtl * bare = load_text("newmtl a\nmap_Kd\n", &blender);
+  ASSERT_NE(bare, nullptr);
+  EXPECT_EQ(bare->materials[0].map_Kd.path, nullptr);
+  gmdl_mtl_free(bare);
+
+  GMDL_Mtl * folded =
+      load_text("newmtl a\nmap_Kd -nope tex.png\n", &vtk);
+  ASSERT_NE(folded, nullptr);
+  EXPECT_STREQ(folded->materials[0].map_Kd.path, "-nope tex.png");
+  gmdl_mtl_free(folded);
+}
+
 TEST(MtlMap, ADirectiveWithNoPathIsMalformed) {
   // Both references ignore the line instead; 4.5 records that divergence,
   // and accept_map_without_path is that reading.
