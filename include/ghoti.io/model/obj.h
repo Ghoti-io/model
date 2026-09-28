@@ -1067,9 +1067,65 @@ typedef struct GMDL_Obj_Options {
    * or more corners is omitted, and a quad is two triangles, corners
    * (0, 1, 2) and (2, 3, 0). A `g` line ending in an unpaired `\` is
    * ::GMDL_ERR_FORMAT. Where this meets another reading, the element is
-   * omitted rather than padded or rejected.
+   * omitted rather than padded or rejected. It is applied before the line
+   * readings below, which describe one statement at a time.
    */
   bool freecad;
+  /**
+   * Replace `nan` and `inf` with zero on `v`, `vt`, `vn` and `vp`.
+   *
+   * Zero, the default, records the value. This is what Blender 4.3 and
+   * VTK 9.3 do with a non-finite vertex. ::reject_non_finite still fails
+   * the file when both are set, and ::freecad still omits the vertex.
+   */
+  bool non_finite_becomes_zero;
+  /**
+   * Leave a leading UTF-8 byte-order mark in place (2.1).
+   *
+   * Zero, the default, strips it. Set, the first line does not match a
+   * directive, which is what Blender 4.3 does. The face in that measurement
+   * also needs ::omit_unresolved_faces: the mark hides a vertex, and
+   * Blender drops the face that still names it.
+   */
+  bool keep_byte_order_mark;
+  /**
+   * Omit a face that names a vertex the file does not have.
+   *
+   * Zero, the default, records the index and leaves the range check to the
+   * consumer (section 1). Set, that face is left out and the vertices stay.
+   */
+  bool omit_unresolved_faces;
+  /**
+   * Join a continued line before cutting a comment (2.4, 2.6).
+   *
+   * Zero, the default, cuts the comment first, so a `\` inside one does not
+   * continue. Set, `# note \` swallows the next line, which is Blender 4.3.
+   */
+  bool join_before_comment;
+  /**
+   * A `v` line that ends in a continuation is ::GMDL_ERR_FORMAT.
+   *
+   * Zero, the default, joins it (2.6). Set, the line is not joined, which
+   * is VTK 9.3 on `v 5 5 \`. A `\` that a comment already removed is not a
+   * continuation.
+   */
+  bool reject_vertex_continuation;
+  /**
+   * An `f` line that contains `#` is ::GMDL_ERR_FORMAT.
+   *
+   * Zero, the default, cuts the comment and reads the face, which is
+   * Blender 4.3. Set, the file fails, which is VTK 9.3 on `f 1 2 3 # tri`.
+   * A line that is only a comment is still ignored.
+   */
+  bool reject_face_comment;
+  /**
+   * A trailing `\` on `g` or `o` is part of the name.
+   *
+   * Zero, the default, joins the next line, so the face after `g a\` is
+   * swallowed. That is Blender 4.3. Set, the next line stays a face, which
+   * is VTK 9.3.
+   */
+  bool break_group_continuation;
 } GMDL_Obj_Options;
 
 /**

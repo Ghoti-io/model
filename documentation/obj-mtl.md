@@ -58,7 +58,9 @@ UTF-8 name survives and so does a Latin-1 one.
 
 A UTF-8 byte-order mark at the start of the input is skipped.
 `GMDL_Obj_Options.freecad` leaves it in place, so the first line does not
-match a directive.
+match a directive. `GMDL_Obj_Options.keep_byte_order_mark` does the same
+thing and nothing else; Blender's measured file also sets
+`omit_unresolved_faces`, because the face still names the hidden vertex.
 
 ### 2.2 Line endings
 
@@ -78,7 +80,10 @@ A line that is blank, or only a comment, is ignored. The comment is removed
 before the continuation in 2.6 is looked for; that ordering is a decision the
 format does not make for us, and 2.6 says why it was made this way.
 `GMDL_Obj_Options.freecad` does not cut comments, so `#` on a face line is a
-token and that face is omitted.
+token and that face is omitted. `GMDL_Obj_Options.reject_face_comment` fails
+the file instead, which is VTK 9.3. `GMDL_Obj_Options.join_before_comment`
+looks for the continuation in 2.6 before this cut, so `# note \` swallows
+the next line, which is Blender 4.3.
 
 ### 2.5 Whitespace
 
@@ -94,6 +99,10 @@ A `\` as the last non-blank character joins the next line to this one.
 The joined line is subject to `max_line_length` as a whole.
 `GMDL_Obj_Options.freecad` does not join. A `g` line that then ends in an
 unpaired `\` is `GMDL_ERR_FORMAT`; `g a\\` and `o a\` are not.
+`GMDL_Obj_Options.reject_vertex_continuation` fails the file on a `v` line
+that ends in `\`, which is VTK 9.3, and does not join it.
+`GMDL_Obj_Options.break_group_continuation` leaves that `\` in a `g` or `o`
+name and keeps the next line, which is also VTK.
 
 **The comment is cut first.** A `\` that ends a comment therefore does not
 continue anything, and a comment on a continued line still disappears. The
@@ -253,6 +262,8 @@ writer does that. A fourth `/`-separated field is ignored.
 `GMDL_Obj_Options.freecad` omits the face instead, and does the same for a
 face that names a missing vertex. A quad is stored as two triangles,
 corners (0, 1, 2) and (2, 3, 0). A face with any other count is omitted.
+`GMDL_Obj_Options.omit_unresolved_faces` omits only the missing-vertex
+face, and keeps every other corner count.
 
 **Indices.** In the file an index is 1-based; a negative index is relative,
 with `-1` naming the most recently declared element *of that kind at that
@@ -1301,6 +1312,13 @@ formats share.
 | `reject_extra_face_field` | false | a fourth `/` field is `GMDL_ERR_FORMAT` |
 | `reject_non_finite` | false | `nan` and `inf` are `GMDL_ERR_FORMAT` |
 | `freecad` | false | FreeCAD 1.0 ReaderOBJ, below |
+| `non_finite_becomes_zero` | false | `nan` and `inf` on `v`, `vt`, `vn`, `vp` become 0 |
+| `keep_byte_order_mark` | false | a leading UTF-8 BOM stays on the first line |
+| `omit_unresolved_faces` | false | a face naming a missing vertex is omitted |
+| `join_before_comment` | false | `\` is seen before a comment is cut |
+| `reject_vertex_continuation` | false | a continued `v` is `GMDL_ERR_FORMAT` |
+| `reject_face_comment` | false | `#` on an `f` line is `GMDL_ERR_FORMAT` |
+| `break_group_continuation` | false | `\` on `g` or `o` stays in the name |
 
 `freecad` is the reading measured against FreeCAD 1.0.0's `ReaderOBJ` on
 2026-09-28. It turns off the line rewriting in 2.1 and 2.4 through 2.6, omits
@@ -1923,8 +1941,21 @@ section 12 is where they are written down.
 - **`nan` and `inf`.** Recorded by default, on both parsers.
   `reject_non_finite` on the format's options makes them `GMDL_ERR_FORMAT`.
   `freecad` omits a non-finite `v` and does not give it an index, which is
-  what FreeCAD 1.0 does. Blender 4.3 and VTK 9.3 substitute zero; that
-  reading is not an option.
+  what FreeCAD 1.0 does. `non_finite_becomes_zero` stores 0 instead, which
+  is what Blender 4.3 and VTK 9.3 do. `reject_non_finite` wins when both
+  are set.
+- **A leading byte-order mark.** Stripped by default, which is VTK.
+  `keep_byte_order_mark` leaves it, which is Blender. Blender also drops
+  the face that still names the hidden vertex; that is
+  `omit_unresolved_faces`.
+- **Comment and continuation.** The comment is cut first by default, which
+  is VTK, so `# note \` does not swallow the next line.
+  `join_before_comment` is Blender's order and does swallow it.
+  `reject_face_comment` fails the file on `f 1 2 3 # tri`, which is VTK.
+- **Continuation of `v` and of `g`.** Joined by default, which is Blender:
+  a continued `v` is one vertex, and the face after `g a\` is lost.
+  `reject_vertex_continuation` fails that `v`, and
+  `break_group_continuation` keeps that face. Both are VTK.
 - **FreeCAD's mesh.** `GMDL_Obj_Options.freecad` is that reader's polygon
   behaviour, measured on FreeCAD 1.0.0: no line rewriting, a bad face
   omitted rather than fatal, quads split, faces of five or more corners

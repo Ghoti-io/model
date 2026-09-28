@@ -535,6 +535,142 @@ TEST(ObjParse, FreeCadReading) {
   gmdl_obj_free(negative);
 }
 
+// Blender 4.3 and VTK 9.3 store 0 for a non-finite component. Rejection
+// still fails the file, and freecad still omits the vertex.
+TEST(ObjParse, NonFiniteNumbersCanBecomeZero) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.non_finite_becomes_zero = true;
+  GMDL_Obj * obj = load_text("v nan 1 1\nv 0 1 inf\n", &options);
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->vertex_count, 2u);
+  EXPECT_FLOAT_EQ(obj->vertices[0].x, 0.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[0].y, 1.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[0].z, 1.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[1].x, 0.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[1].y, 1.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[1].z, 0.0f);
+  gmdl_obj_free(obj);
+
+  options.reject_non_finite = true;
+  EXPECT_EQ(load_text_expecting_failure("v nan 0 0\n", &options),
+      GMDL_ERR_FORMAT);
+
+  options.reject_non_finite = false;
+  options.freecad = true;
+  GMDL_Obj * omitted = load_text(
+      "v 5 5 5\nv nan 1 1\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
+  ASSERT_NE(omitted, nullptr);
+  ASSERT_EQ(omitted->vertex_count, 3u);
+  EXPECT_FLOAT_EQ(omitted->vertices[1].x, 1.0f);
+  gmdl_obj_free(omitted);
+}
+
+// Blender 4.3 leaves a leading BOM on the first vertex and drops the face
+// that still names it. The other vertices stay. VTK strips the mark; that
+// is the default, pinned in ReferenceReadersOnTheMeasuredCases.
+TEST(ObjParse, AByteOrderMarkCanBeKept) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.keep_byte_order_mark = true;
+  options.omit_unresolved_faces = true;
+  GMDL_Obj * obj = load_text(
+      "\xEF\xBB\xBFv 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options);
+  ASSERT_NE(obj, nullptr);
+  ASSERT_EQ(obj->vertex_count, 2u);
+  EXPECT_EQ(obj->face_count, 0u);
+  EXPECT_FLOAT_EQ(obj->vertices[0].x, 1.0f);
+  EXPECT_FLOAT_EQ(obj->vertices[1].y, 1.0f);
+  gmdl_obj_free(obj);
+}
+
+// The face that names a missing vertex is the one Blender drops. A later
+// face, and a negative index that resolves, stay. A quad stays one face:
+// splitting is the FreeCAD reading.
+TEST(ObjParse, AnUnresolvedFaceCanBeOmitted) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.omit_unresolved_faces = true;
+  GMDL_Obj * obj = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\nv 2 0 0\nf 1 2 9\nf 2 3 4\n"
+      "f -3 -2 -1\nf 1 2 3 4\n",
+      &options);
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->vertex_count, 4u);
+  ASSERT_EQ(obj->face_count, 3u);
+  EXPECT_EQ(obj->faces[0].vertex[0], 1);
+  EXPECT_EQ(obj->faces[1].vertex[0], 1);
+  EXPECT_EQ(obj->faces[2].count, 4u);
+  gmdl_obj_free(obj);
+}
+
+// Blender joins before it cuts the comment, so `# note \` swallows the face.
+TEST(ObjParse, ACommentCanContinueTheLine) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.join_before_comment = true;
+  GMDL_Obj * obj = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\n# note \\\nf 1 2 3\n", &options);
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->vertex_count, 3u);
+  EXPECT_EQ(obj->face_count, 0u);
+  gmdl_obj_free(obj);
+}
+
+// VTK 9.3 errors on a continued vertex. The default joins it.
+TEST(ObjParse, AContinuedVertexCanBeRejected) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.reject_vertex_continuation = true;
+  EXPECT_EQ(load_text_expecting_failure(
+                "v 5 5 \\\n5\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &options),
+      GMDL_ERR_FORMAT);
+  // A backslash that the comment cut already removed is not a continuation.
+  GMDL_Obj * kept = load_text("v 1 2 3 # keep \\\nv 4 5 6\n", &options);
+  ASSERT_NE(kept, nullptr);
+  EXPECT_EQ(kept->vertex_count, 2u);
+  gmdl_obj_free(kept);
+}
+
+// VTK 9.3 errors on `f 1 2 3 # tri`. A line that is only a comment is not
+// that error, and a face with no comment still loads.
+TEST(ObjParse, AFaceCommentCanBeRejected) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.reject_face_comment = true;
+  EXPECT_EQ(load_text_expecting_failure(
+                "v 5 5 5\nv 1 0 0\nv 0 1 0\nf 1 2 3 # tri\n", &options),
+      GMDL_ERR_FORMAT);
+  GMDL_Obj * obj = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\n# a note\nf 1 2 3\n", &options);
+  ASSERT_NE(obj, nullptr);
+  EXPECT_EQ(obj->face_count, 1u);
+  gmdl_obj_free(obj);
+}
+
+// VTK 9.3 does not join a group line, so the face after `g a\` and after
+// `g a\\` both survive. `o` is the same reading.
+TEST(ObjParse, AGroupBackslashCanStayInTheName) {
+  GMDL_Obj_Options options;
+  gmdl_obj_options_default(&options);
+  options.break_group_continuation = true;
+  GMDL_Obj * one = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\ng a\\\nf 1 2 3\n", &options);
+  ASSERT_NE(one, nullptr);
+  EXPECT_EQ(one->face_count, 1u);
+  gmdl_obj_free(one);
+  GMDL_Obj * two = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\ng a\\\\\nf 1 2 3\n", &options);
+  ASSERT_NE(two, nullptr);
+  EXPECT_EQ(two->face_count, 1u);
+  gmdl_obj_free(two);
+  GMDL_Obj * object = load_text(
+      "v 5 5 5\nv 1 0 0\nv 0 1 0\no a\\\nf 1 2 3\n", &options);
+  ASSERT_NE(object, nullptr);
+  EXPECT_EQ(object->face_count, 1u);
+  gmdl_obj_free(object);
+}
+
 // `vt u [v] [w]` - v and w are optional and default to 0, which is what the
 // specification says and what Blender reads. VTK calls "vt 0.5" an error;
 // this follows the more permissive of the two references deliberately, so the

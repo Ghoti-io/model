@@ -71,6 +71,20 @@ typedef struct {
    * OBJ sets this from `GMDL_Obj_Options.freecad`. MTL leaves it off.
    */
   bool literal;
+  bool keep_byte_order_mark; ///< Leave a leading UTF-8 BOM in the first line.
+  bool join_before_comment;  ///< Look for `\` before cutting `#`.
+  /**
+   * A `v` line ending in `\` is ::GMDL_ERR_FORMAT, and is not joined.
+   */
+  bool reject_vertex_continuation;
+  /**
+   * An `f` line containing `#` is ::GMDL_ERR_FORMAT.
+   */
+  bool reject_face_comment;
+  /**
+   * A `g` or `o` line ending in `\` is not joined. The backslash stays.
+   */
+  bool break_group_continuation;
 } GMDL_Line_Reader;
 
 /**
@@ -92,8 +106,9 @@ void gmdl_line_reader_init(GMDL_Line_Reader * reader, GMDL_Stream * stream,
  * @param out_line Receives a pointer into the reader's buffer, positioned at
  *   the first character after any leading whitespace. Valid until the next
  *   call. A line that was blank or wholly a comment yields `""`.
- * @return ::GMDL_OK, ::GMDL_ERR_IO at the end of the stream, or
- *   ::GMDL_ERR_LIMIT when the logical line exceeds `max_length`.
+ * @return ::GMDL_OK, ::GMDL_ERR_IO at the end of the stream,
+ *   ::GMDL_ERR_LIMIT when the logical line exceeds `max_length`, or
+ *   ::GMDL_ERR_FORMAT when a line reading on the reader refuses the line.
  */
 GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line);
 

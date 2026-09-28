@@ -32,6 +32,29 @@
 #include <ghoti.io/model/macros.h>
 #include "obj_internal.h"
 
+/** True when @p line's first token is @p directive, after leading blanks. */
+static bool line_starts_with_directive(
+    const char * line, const char * directive) {
+  while (*line == ' ' || *line == '\t') {
+    line++;
+  }
+  size_t length = strlen(directive);
+  if (strncmp(line, directive, length) != 0) {
+    return false;
+  }
+  char next = line[length];
+  return next == '\0' || next == ' ' || next == '\t';
+}
+
+/** True when `\` is the last non-blank character. Does not modify @p line. */
+static bool line_ends_with_continuation(const char * line) {
+  size_t length = strlen(line);
+  while (length > 0 && (line[length - 1] == ' ' || line[length - 1] == '\t')) {
+    length--;
+  }
+  return length > 0 && line[length - 1] == '\\';
+}
+
 /** Cut a line at its first '#'; a comment runs to the end of the line (2.4). */
 static void line_strip_comment(char * line) {
   char * hash = strchr(line, '#');
@@ -72,6 +95,11 @@ void gmdl_line_reader_init(GMDL_Line_Reader * reader, GMDL_Stream * stream,
   reader->max_length = max_length;
   reader->at_start = true;
   reader->literal = false;
+  reader->keep_byte_order_mark = false;
+  reader->join_before_comment = false;
+  reader->reject_vertex_continuation = false;
+  reader->reject_face_comment = false;
+  reader->break_group_continuation = false;
   buffer[0] = '\0';
 }
 
@@ -112,17 +140,44 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line) {
       reader->at_start = false;
       // A UTF-8 byte-order mark is not part of the first directive (2.1).
       // The comparison stops at the terminator on a short line, so a one- or
-      // two-byte first line is not read past.
-      if ((unsigned char)physical[0] == 0xEF
+      // two-byte first line is not read past. Blender leaves the mark, and
+      // the first line then does not match.
+      if (!reader->keep_byte_order_mark
+          && (unsigned char)physical[0] == 0xEF
           && (unsigned char)physical[1] == 0xBB
           && (unsigned char)physical[2] == 0xBF) {
         memmove(physical, physical + 3, strlen(physical + 3) + 1);
       }
     }
 
+    // These look at the first physical line, before a join hides which
+    // statement the backslash belonged to.
+    if (used == 0 && reader->reject_face_comment
+        && line_starts_with_directive(physical, "f")
+        && strchr(physical, '#') != NULL) {
+      return GMDL_ERR_FORMAT;
+    }
+
     // The comment goes first, so that a backslash inside one does not
     // continue the line and a comment on a continued line still disappears.
-    line_strip_comment(physical);
+    // join_before_comment is Blender's order: the backslash is seen while
+    // the comment still contains it, and the cut happens once the logical
+    // line is complete.
+    if (!reader->join_before_comment) {
+      line_strip_comment(physical);
+    }
+
+    if (used == 0 && line_ends_with_continuation(physical)) {
+      if (reader->reject_vertex_continuation
+          && line_starts_with_directive(physical, "v")) {
+        return GMDL_ERR_FORMAT;
+      }
+      if (reader->break_group_continuation
+          && (line_starts_with_directive(physical, "g")
+              || line_starts_with_directive(physical, "o"))) {
+        break;
+      }
+    }
 
     size_t length = 0;
     bool continues = line_take_continuation(physical, &length);
@@ -130,6 +185,10 @@ GMDL_Result gmdl_line_next(GMDL_Line_Reader * reader, const char ** out_line) {
     if (!continues) {
       break;
     }
+  }
+
+  if (!reader->literal && reader->join_before_comment) {
+    line_strip_comment(reader->buffer);
   }
 
   if (reader->literal) {

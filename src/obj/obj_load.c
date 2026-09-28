@@ -272,6 +272,18 @@ static bool obj_rejected_non_finite(
   return false;
 }
 
+/** Replace nan and inf with zero. No effect unless @p zero_them is set. */
+static void obj_zero_non_finite(float * values, size_t count, bool zero_them) {
+  if (!zero_them) {
+    return;
+  }
+  for (size_t i = 0; i < count; i++) {
+    if (!isfinite(values[i])) {
+      values[i] = 0.0f;
+    }
+  }
+}
+
 static size_t obj_take_floats(const char * rest, float * out, size_t max) {
   size_t taken = 0;
   while (taken < max) {
@@ -1335,7 +1347,14 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
 
   GMDL_Line_Reader reader;
   gmdl_line_reader_init(&reader, stream, line, line_size);
+  // freecad takes each line as its bytes, so the per-statement readings are
+  // not also applied: literal returns before they are consulted.
   reader.literal = limits->freecad;
+  reader.keep_byte_order_mark = limits->keep_byte_order_mark;
+  reader.join_before_comment = limits->join_before_comment;
+  reader.reject_vertex_continuation = limits->reject_vertex_continuation;
+  reader.reject_face_comment = limits->reject_face_comment;
+  reader.break_group_continuation = limits->break_group_continuation;
 
   for (;;) {
     const char * line_text = NULL;
@@ -1373,6 +1392,12 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
         if (count < 3 || !finite) {
           continue;
         }
+      }
+      // Substitution loses to a rejection: both set still fails the file.
+      // freecad already omitted a non-finite vertex above.
+      if (!limits->reject_non_finite) {
+        obj_zero_non_finite(
+            number, count, limits->non_finite_becomes_zero);
       }
       if (obj_rejected_non_finite(number, count, limits->reject_non_finite)) {
         result = GMDL_ERR_FORMAT;
@@ -1430,6 +1455,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // model is three-dimensional in texture space.
       float number[3];
       size_t count = obj_take_floats(rest, number, 3);
+      if (!limits->reject_non_finite) {
+        obj_zero_non_finite(number, count, limits->non_finite_becomes_zero);
+      }
       if (count < 1
           || obj_rejected_non_finite(
               number, count, limits->reject_non_finite)) {
@@ -1450,6 +1478,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
     else if (gmdl_line_is(line_text, "vn", &rest)) {
       float number[3];
       size_t count = obj_take_floats(rest, number, 3);
+      if (!limits->reject_non_finite) {
+        obj_zero_non_finite(number, count, limits->non_finite_becomes_zero);
+      }
       if (count < 3
           || obj_rejected_non_finite(
               number, count, limits->reject_non_finite)) {
@@ -1480,6 +1511,9 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
       // dump cannot write the statement back without it.
       float number[3];
       size_t count = obj_take_floats(rest, number, 3);
+      if (!limits->reject_non_finite) {
+        obj_zero_non_finite(number, count, limits->non_finite_becomes_zero);
+      }
       if (count < 1
           || obj_rejected_non_finite(
               number, count, limits->reject_non_finite)) {
@@ -1913,6 +1947,24 @@ static GMDL_Result obj_load_pinned(GMDL_Stream * stream,
               }
             }
           }
+          gcu_allocator_free(allocator, face.overflow);
+          continue;
+        }
+      }
+
+      // A face that names a missing vertex can be left out without the rest
+      // of the FreeCAD reading. The vertices stay. Corners past the fourth
+      // live in the overflow, so the check cannot stop at the inline four.
+      if (!limits->freecad && limits->omit_unresolved_faces) {
+        bool missing = false;
+        for (size_t i = 0; i < face.count && !missing; i++) {
+          int32_t index =
+              i < 4 ? face.vertex[i] : face.overflow[i - 4].vertex;
+          if (index < 0 || (size_t)index >= vertex_count) {
+            missing = true;
+          }
+        }
+        if (missing) {
           gcu_allocator_free(allocator, face.overflow);
           continue;
         }
