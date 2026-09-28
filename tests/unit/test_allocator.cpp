@@ -504,8 +504,8 @@ std::string regrow_obj() {
  * allocations in turn, so later growths are already in its population and a
  * larger document would add three positions and no new arm. Measured by
  * counting allocations per material count and reading where the count steps;
- * section 12 carried the OBJ conclusion here for a day before that was
- * checked.
+ * an early draft of the public status section carried the OBJ conclusion
+ * here for a day before that was checked.
  */
 std::string rich_mtl() {
   std::string t;

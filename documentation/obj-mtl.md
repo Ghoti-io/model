@@ -1938,20 +1938,21 @@ generates. These are jobs for unit tests that assert the property directly
 
 ## 11. Implementation status
 
-Nothing known. Every defect this section has listed is fixed and pinned by a
-test; the shortfalls that remain are absences rather than misbehaviour, and
-section 12 is where they are written down.
+Nothing known is broken. Every defect this section has listed is fixed and
+pinned by a test. What remains is written in section 13: absences, not
+misbehaviour. Measured disagreements with other readers are not absences —
+they are the options in section 5, catalogued for a stranger in section 12.
 
 ---
 
-## 12. Open questions
+## 12. Readings other tools take
 
-- **Free-form geometry: evaluating it.** *Recording* it is settled and built
-  - 3.19 holds all fifteen directives as of 2026-09-24. *Evaluating* it is
-  not, and is the question that was actually behind 3.14: nothing here
-  tessellates a surface or walks a trimming loop, and a polygon-mesh consumer
-  like `libs/cjelly` wants neither. Recording it costs a consumer nothing and
-  loses nothing; evaluating it is a different library.
+The default for each reading is what the specification states, or the
+stricter of the two when the specification is silent. Leaving an options
+field at zero keeps that default. The other reading is an orthogonal field;
+named presets fill several fields at once. The loader never asks for an
+oracle by name.
+
 - **A map directive with no path.** `GMDL_ERR_FORMAT` by default.
   `GMDL_Mtl_Options.accept_map_without_path` skips the line, which is what
   both references do. The default is the stricter reading; the field is the
@@ -1995,69 +1996,24 @@ section 12 is where they are written down.
   start of the filename, which is VTK's reading of an option it does not
   know. An option this library knows, `-clamp` included, stays an option
   (4.5).
-- **FreeCAD's mesh.** `gmdl_obj_options_freecad()` fills the readings
-  measured against FreeCAD 1.0.0's `ReaderOBJ`: no line rewriting, a bad
-  face omitted rather than fatal, quads split, faces of five or more corners
-  dropped, and `g a\` a format error. The default stays the specification.
-  FreeCAD's reported point count leaves out vertices no facet uses; the
-  model still holds those vertices. Blender and VTK have the same kind of
-  helper: `gmdl_obj_options_blender()` and `gmdl_obj_options_vtk()`, with
-  `gmdl_mtl_options_blender()` and `gmdl_mtl_options_vtk()` on the MTL
-  side.
-- **Which exporters' spellings are still missing.** `map_Bump` and `map_refl`
-  were found by asking Blender about 27 candidate spellings, not by reading
-  the reference - the reference does not list them. Blender is one exporter;
-  Maya, 3ds Max and Substance have their own habits, and the only honest way
-  to know is to survey files they produce rather than to reason about what
-  they ought to write. Until then the accepted set is "what was measured",
-  which is a smaller claim than "what exists".
+- **Named presets.** `gmdl_obj_options_freecad()`, `gmdl_obj_options_blender()`
+  and `gmdl_obj_options_vtk()` fill the OBJ readings measured against those
+  importers. `gmdl_mtl_options_blender()` and `gmdl_mtl_options_vtk()` do
+  the same for MTL. FreeCAD's reported point count leaves out vertices no
+  facet uses; the model still holds those vertices.
 
-**No instrument refuses an allocation in a large MTL document.** Half of
-this is closed and half is not, so it is worth saying which half.
+---
 
-`test_allocator.cpp` refuses every allocation against one designed document
-per format, and the fuzz harnesses refuse one allocation against every corpus
-document - so document shape is varied and allocation position is swept, but
-never both at once, and never above a few kilobytes. A planted defect reachable only past 128
-vertices survived a corpus replay and 1,982,029 fuzz executions, and died
-instantly under the unit sweep.
+## 13. What is still absent
 
-The reason is narrower than "the corpus is too small", which was the earlier
-claim here and is measurably wrong. Of 11,522 OBJ corpus documents, 9,054
-parse; the largest reaches 160 vertices, 16 exceed 128 - the largest initial
-capacity - and 56 exceed 32. So the corpus does reach the sizes where arrays
-grow, just rarely. What it does not do is sweep them: the harness refuses one
-allocation per document, and for a large document the allocations that matter
-are the repeated growths near the end, which one arbitrary position is
-unlikely to be.
-
-So closing it wants allocation positions swept against a second, larger
-document shape - not a bigger corpus. The unit sweep already forces growth on
-every array (`kGrow` exceeds every initial capacity, and `check-lists.py`
-holds it there); what was missing is a second shape beside the one designed
-document per format.
-
-**Done for OBJ; for MTL it was never open.** `regrow_obj()` is the same
-shape as `rich_obj()` at 600 entries, past three doublings of the largest
-initial capacity, so every array in it regrows and a refusal lands on second
-and third growths as well as first ones - 770 (site, context) pairs that the
-smaller sweep does not contain.
-
-The version of this paragraph written on 2026-09-23 went on to say that MTL
-had the same gap and wanted a `regrow_mtl()` beside `regrow_obj()`. **That was
-wrong, and wrong for a reason worth keeping**: it carried a measurement from
-OBJ to MTL across the fact that decides it. The OBJ gap exists because
-`kGrow` is 160 against a largest initial capacity of 128, so the biggest
-arrays grow exactly once. MTL has one array, `materials`, and its initial
-capacity is **8** - so growth at 1.5x puts a reallocation at 9, 13, 19, 28,
-41, 61, 91 and 136 materials, and `rich_mtl()`'s 160 crosses all eight. The
-sweep refuses each of that parse's 21 allocations in turn, so second through
-eighth growths are already in its population. Measured directly by counting
-allocations per material count and reading where the count steps, rather than
-inferred from the growth constant.
-
-A `regrow_mtl()` at 600 would add three further growth positions (203, 303,
-454) and nothing else, since a map path is a plain copy and not an array. It
-is not worth a second full sweep, and saying so is the point: the work the
-previous paragraph asked for would have been done against a gap that was not
-there.
+- **Free-form geometry: evaluating it.** *Recording* it is settled — 3.19
+  holds all fifteen directives. Nothing here tessellates a surface or walks
+  a trimming loop, and a polygon-mesh consumer like `libs/cjelly` wants
+  neither. Recording costs a consumer nothing and loses nothing; evaluating
+  it is a different library.
+- **Map directive spellings beyond what Blender writes.** `map_Bump` and
+  `map_refl` were found by asking Blender about 27 candidate spellings, not
+  by reading the reference — the reference does not list them. Maya, 3ds Max
+  and Substance have their own habits; the only honest way to know is to
+  survey files they produce. Until then the accepted set is "what was
+  measured", which is a smaller claim than "what exists".
