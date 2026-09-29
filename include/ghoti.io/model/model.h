@@ -32,6 +32,7 @@
 #include <ghoti.io/model/macros.h>
 #include <ghoti.io/model/mtl.h>
 #include <ghoti.io/model/obj.h>
+#include <ghoti.io/model/off.h>
 #include <ghoti.io/model/stl.h>
 #include <ghoti.io/model/stream.h>
 

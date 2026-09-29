@@ -1,7 +1,7 @@
 # Ghoti.io Model
 
-3D model formats over a byte stream: Wavefront OBJ and MTL, and STL in both
-spellings. The same call serves a file, a buffer already in memory, and a
+3D model formats over a byte stream: Wavefront OBJ and MTL, STL in both
+spellings, and Geomview OFF. The same call serves a file, a buffer already in memory, and a
 fuzzer's input.
 
 ## Formats
@@ -11,14 +11,16 @@ This is what the library implements.
 - Wavefront OBJ.
 - Wavefront MTL.
 - STL (ASCII and binary).
+- Geomview OFF (ASCII).
 
 OBJ and MTL load and write back out; which directives are kept is in
 [documentation/obj-mtl.md](documentation/obj-mtl.md). STL is specified in
-[documentation/stl.md](documentation/stl.md).
+[documentation/stl.md](documentation/stl.md). OFF is specified in
+[documentation/off.md](documentation/off.md).
 
 ## Before you call it
 
-- Every load takes that format's options pointer and a `GMDL_Allocator *`. `NULL` is the defaults. OBJ's is `GMDL_Obj_Options`; MTL's is `GMDL_Mtl_Options`; STL's is `GMDL_Stl_Options`.
+- Every load takes that format's options pointer and a `GMDL_Allocator *`. `NULL` is the defaults. OBJ's is `GMDL_Obj_Options`; MTL's is `GMDL_Mtl_Options`; STL's is `GMDL_Stl_Options`; OFF's is `GMDL_Off_Options`.
 - The only cap with a value by default is `max_line_length` (64 KiB). The parser reads a line at a time, so without it one unterminated line would be read in full. The record caps default to no limit, because the size of the input already bounds them. A reading's zero is the behaviour the specification states.
 - Named combinations that match a measured reader are filled by `gmdl_obj_options_freecad()`, `gmdl_obj_options_blender()`, and `gmdl_obj_options_vtk()` (and the MTL blender/vtk helpers), and by `gmdl_stl_options_blender()`, `gmdl_stl_options_freecad()`, and `gmdl_stl_options_openscad()`. Those only write the individual reading fields; the loader never asks for an oracle by name.
 - A line longer than the buffer is `GMDL_ERR_LIMIT`. The reader does not hand back a prefix: the rest of a split line would be parsed as a line of its own, and a face cut in half would become a second face.
@@ -102,7 +104,7 @@ make -C libs/model test PREFIX="$PWD/.local"
 | --- | --- |
 | `make examples` | `examples/obj_info.c` |
 | `make coverage` | Line coverage, per file |
-| `make fuzz` | Build and run the OBJ, MTL and STL fuzzers |
+| `make fuzz` | Build and run the OBJ, MTL, STL and OFF fuzzers |
 | `make docs` | The Doxygen manual, into `./docs` |
 
 ## The API
@@ -114,6 +116,7 @@ Everything is prefixed `gmdl_` / `GMDL_`, under `<ghoti.io/model/...>`.
 - **`obj.h`** — `GMDL_Obj_Options`, `gmdl_obj_load()`, `gmdl_obj_load_file()`, `gmdl_obj_free()`, `gmdl_obj_dump()`.
 - **`mtl.h`** — `GMDL_Mtl_Options`, `gmdl_mtl_load()`, `gmdl_mtl_load_file()`, `gmdl_mtl_free()`, `gmdl_mtl_find()`, `gmdl_mtl_dump()`.
 - **`stl.h`** — `GMDL_Stl_Options`, `gmdl_stl_load()`, `gmdl_stl_load_file()`, `gmdl_stl_free()`, `gmdl_stl_dump()`, and the Blender / FreeCAD / OpenSCAD presets.
+- **`off.h`** — `GMDL_Off_Options`, `gmdl_off_load()`, `gmdl_off_load_file()`, `gmdl_off_free()`, `gmdl_off_dump()`.
 - **`allocator.h`** — `GMDL_Allocator`, which is cutil's `GCU_Allocator`.
 
 [Formats](#formats) is what is implemented.
@@ -130,13 +133,14 @@ program that links `ghoti.io-model-0` links this too.
 
 [documentation/obj-mtl.md](documentation/obj-mtl.md) is what the OBJ and MTL
 parsers accept, what they record, and what a caller still has to check.
-[documentation/stl.md](documentation/stl.md) is the same for STL. `make docs`
+[documentation/stl.md](documentation/stl.md) is the same for STL;
+[documentation/off.md](documentation/off.md) for OFF. `make docs`
 builds the manual.
 
 ## Status
 
-OBJ, MTL and STL load, and each can be written back out. STL dumps binary by
-default; ASCII is opt-in.
+OBJ, MTL, STL and OFF load, and each can be written back out. STL dumps binary by
+default; ASCII is opt-in. OFF is always ASCII.
 
 ## License
 

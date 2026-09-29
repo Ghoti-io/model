@@ -9,6 +9,7 @@ src/stream/               GMDL_Stream
 src/obj/                  OBJ parsing and dumping
 src/mtl/                  MTL parsing and dumping
 src/stl/                  STL parsing and dumping
+src/off/                  OFF parsing and dumping
 tests/unit/               Unit tests (gtest)
 tests/data/models/        Checked-in fixtures
 tests/fuzz/               libFuzzer harnesses and seed corpus
@@ -59,9 +60,10 @@ corpus is the ordinary spelling, and a flag that changes it belongs in a
 unit test.
 
 ```bash
-make fuzz FUZZ_TIME=3600     # OBJ, MTL and STL
+make fuzz FUZZ_TIME=3600     # OBJ, MTL, STL and OFF
 make fuzz-run-obj FUZZ_TIME=600
 make fuzz-run-stl FUZZ_TIME=600
+make fuzz-run-off FUZZ_TIME=600
 ```
 
 ## Memory
@@ -70,7 +72,7 @@ Every allocation goes through the `GMDL_Allocator` the caller supplied.
 `tests/unit/test_allocator.cpp` proves it with a counting allocator, including
 on the error paths, which is where a parser that unwinds by hand usually leaks.
 
-The OBJ, MTL and STL parsers build into `GCU_Array`s and hand the finished
+The OBJ, MTL, STL and OFF parsers build into `GCU_Array`s and hand the finished
 contents to the model with `gcu_array_steal()`, so the public struct still
 exposes plain pointers and counts. The model is built last, after parsing has
 succeeded, which means there is no half-built model to unwind on an error path.
@@ -85,7 +87,9 @@ with the VTK it also links. OpenSCAD 2021.01 does not read OBJ; it answers
 STL, which is why it shares the pin. Blender, FreeCAD and OpenSCAD also read
 STL; the measured disagreements are the options behind
 `gmdl_stl_options_blender()`, `gmdl_stl_options_freecad()` and
-`gmdl_stl_options_openscad()`.
+`gmdl_stl_options_openscad()`. FreeCAD and OpenSCAD read OFF; Blender
+4.3.2 in the pinned image has no OFF importer. No measured OFF
+disagreement needed a reading yet, so there is no OFF preset.
 
 ```bash
 make oracle-build      # once

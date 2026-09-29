@@ -699,6 +699,35 @@ const size_t kRegrowObjFloors[3] = {10, 600, 1200};
 const size_t kObjFileFloors[3] = {14, 14, 14};
 const size_t kMtlFileFloors[3] = {5, 5, 5};
 const size_t kStlFloors[3] = {2, 2, 2};
+const size_t kOffFloors[3] = {160, 160, 160};
+
+
+std::string rich_off() {
+  // 160 vertices and faces: past the OFF loader's initial capacity of 64, so
+  // both arrays grow, and each face makes its own indices allocation.
+  std::string t = "OFF\n160 160 0\n";
+  for (size_t i = 0; i < kGrow; i++) {
+    t += std::to_string(i) + " 0 0\n";
+  }
+  for (size_t i = 0; i < kGrow; i++) {
+    size_t a = i % kGrow;
+    size_t b = (i + 1) % kGrow;
+    size_t c = (i + 2) % kGrow;
+    t += "3 " + std::to_string(a) + " " + std::to_string(b) + " " +
+        std::to_string(c) + "\n";
+  }
+  return t;
+}
+
+std::string dump_off_to_string(GMDL_Off * off) {
+  gmdltest::CapturedOutput sink;
+  if (!sink.get()) {
+    return std::string();
+  }
+  GMDL_Result result = gmdl_off_dump(off, nullptr, sink.get());
+  std::string text = sink.finish();
+  return result == GMDL_OK ? text : std::string("<dump failed>");
+}
 
 std::string rich_stl() {
   std::string t = "solid sweep\n";
@@ -766,6 +795,36 @@ TEST(Allocator, EveryMtlAllocationFailureIsReported) {
         a.stop_failing();
         *out = mtl ? dump_to_string(mtl, gmdl_mtl_dump) : std::string();
         gmdl_mtl_free(mtl);
+        return result;
+      });
+}
+
+
+TEST(Allocator, OffParseUsesTheGivenAllocatorAndReturnsEverything) {
+  Counting counting;
+  GMDL_Allocator allocator = make_allocator(&counting);
+  {
+    MemStream stream(rich_off());
+    GMDL_Off * off = nullptr;
+    ASSERT_EQ(gmdl_off_load(stream.get(), nullptr, &allocator, &off), GMDL_OK);
+    ASSERT_NE(off, nullptr);
+    EXPECT_EQ(off->vertex_count, kGrow);
+    EXPECT_EQ(off->face_count, kGrow);
+    EXPECT_GT(counting.allocations, 0u);
+    gmdl_off_free(off);
+  }
+  EXPECT_EQ(counting.live, 0u);
+}
+
+TEST(Allocator, EveryOffAllocationFailureIsReported) {
+  sweep_allocation_failures(
+      "off", kOffFloors, [](gmdltest::FailingAllocator & a, std::string * out) {
+        MemStream stream(rich_off());
+        GMDL_Off * off = nullptr;
+        GMDL_Result result = gmdl_off_load(stream.get(), nullptr, a.get(), &off);
+        a.stop_failing();
+        *out = off ? dump_off_to_string(off) : std::string();
+        gmdl_off_free(off);
         return result;
       });
 }

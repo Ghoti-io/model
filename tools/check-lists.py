@@ -154,7 +154,8 @@ grow = int(grow.group(1))
 
 capacities = []
 empty = []
-for source in ("src/obj/obj_load.c", "src/mtl/mtl_load.c", "src/stl/stl_load.c"):
+for source in ("src/obj/obj_load.c", "src/mtl/mtl_load.c", "src/stl/stl_load.c",
+               "src/off/off_load.c"):
     text = read(source)
     for name, count in re.findall(
             r"gcu_array_create_in_place\(\s*&(?:\w+->)?(\w+)[^;]*?,"
@@ -480,6 +481,28 @@ if stl_invented:
          % ("fields" if len(stl_invented) > 1 else "a field",
             ", ".join(stl_invented)))
 
+off_fields = option_fields("include/ghoti.io/model/off.h", "GMDL_Off_Options")
+off_doc = read("documentation/off.md")
+off_section = re.search(r"^## 5\. Options$(.*?)^## 6\.", off_doc, re.S | re.M)
+if not off_section:
+    fail("could not find section 5 of documentation/off.md")
+    off_section_text = ""
+else:
+    off_section_text = off_section.group(1)
+off_documented = set(re.findall(r"^\| `(\w+)` \|", off_section_text, re.M))
+off_undocumented = sorted(set(off_fields) - off_documented)
+if off_undocumented:
+    fail("GMDL_Off_Options has %s that section 5 of documentation/off.md "
+         "does not list: %s."
+         % ("fields" if len(off_undocumented) > 1 else "a field",
+            ", ".join(off_undocumented)))
+off_invented = sorted(off_documented - set(off_fields))
+if off_invented:
+    fail("section 5 of documentation/off.md lists %s that GMDL_Off_Options "
+         "does not have: %s."
+         % ("fields" if len(off_invented) > 1 else "a field",
+            ", ".join(off_invented)))
+
 #
 # The fuzzer's index exemption against the types that carry an index
 #
@@ -593,7 +616,8 @@ print("check-lists: %d builder capacities, largest %d, all under the sweep's "
       % (len(capacities), max(c for _, _, c in capacities), grow, len(empty)))
 print("check-lists: %d OBJ options fields and %d MTL options fields, each "
       "with a row in section 5; %d STL options fields with a row in "
-      "documentation/stl.md section 5"
-      % (len(obj_fields), len(mtl_fields), len(stl_fields)))
+      "documentation/stl.md section 5; %d OFF options fields with a row in "
+      "documentation/off.md section 5"
+      % (len(obj_fields), len(mtl_fields), len(stl_fields), len(off_fields)))
 print("check-lists: %d index-carrying types, each named in the fuzzer's "
       "index exemption" % len(carrying))
