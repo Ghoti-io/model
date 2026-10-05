@@ -105,9 +105,9 @@ typedef struct GMDL_Off {
   uint32_t present; ///< ::GMDL_Off_Present bits from the keyword.
   size_t edge_count; ///< Third count from the header; not checked on load.
   GMDL_Off_Vertex * vertices; ///< Or NULL when there are none.
-  size_t vertex_count;
+  size_t vertex_count; ///< Number of entries in vertices.
   GMDL_Off_Face * faces; ///< Or NULL when there are none.
-  size_t face_count;
+  size_t face_count; ///< Number of entries in faces.
   const GMDL_Allocator * allocator; ///< Owns vertices, faces, and index arrays.
 } GMDL_Off;
 
