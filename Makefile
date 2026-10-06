@@ -417,7 +417,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # coverage target does, because --coverage links the gcov runtime, whose
 # mangle_path check-symbols is right to reject in a shipping library and
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
-TEST_GATES ?= check-symbols check-lists check-aliasing
+TEST_GATES ?= check-symbols check-lists check-aliasing check-mtl-survey
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -631,7 +631,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-lists check-aliasing
+.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-lists check-aliasing check-mtl-survey
 .PHONY: oracle-build oracle-version
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
@@ -829,6 +829,15 @@ check-lists: ## Fail if a map or array is missing from a list that names it
 # and the comparison is missing symmetrically - the round trip agrees and the
 # map is gone. Neither list can check the other.
 	@python3 tools/check-lists.py
+
+check-mtl-survey: ## Fail if a pinned 3ds Max MTL uses a map spelling the loader skips
+# The files are not in the repository. fetch.sh is idempotent when the
+# sha256 already matches, and install.sh runs it too because the script
+# lives at tools/*/fetch.sh. The self-test plants map_Kn, which the corpus
+# does not contain, so a classifier that accepts every token still fails.
+	@sh tools/corpus/fetch.sh
+	@python3 tools/corpus/survey.py --self-test
+	@python3 tools/corpus/survey.py
 
 check-symbols: ## Fail if any exported symbol lacks the version namespace
 check-symbols: $(APP_DIR)/$(TARGET)
@@ -1384,12 +1393,12 @@ coverage: ## Build instrumented, run the tests, and report line coverage
 # against lines that have moved. The objects themselves are make's business.
 	@rm -rf $(COV_BUILD_DIR)/objects/*.gcda \
 		$(COV_BUILD_DIR)/objects/*/*.gcda 2> /dev/null || true
-# TEST_GATES is cleared because --coverage links the gcov runtime, which
-# exports mangle_path. check-symbols is right to reject that in a shipping
-# build and wrong to reject it here, and it made this target fail before it
-# ever produced a report.
+# check-symbols is cleared because --coverage links the gcov runtime, which
+# exports mangle_path. That gate is right to reject the symbol in a shipping
+# build and wrong to reject it here. check-mtl-survey does not link the
+# library, so it stays.
 	@status=0; \
-	$(MAKE) --no-print-directory test TEST_GATES= \
+	$(MAKE) --no-print-directory test TEST_GATES=check-mtl-survey \
 		BUILD_DIR=$(COV_BUILD_DIR) \
 		EXTRA_CFLAGS="--coverage -O0" \
 		EXTRA_LDFLAGS="--coverage" > /dev/null || status=$$?; \

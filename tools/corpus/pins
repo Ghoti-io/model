@@ -1,0 +1,9 @@
+# 3ds Max MTL exports, pinned by the bytes GitHub served for that commit.
+# The URL carries the commit. The sha256 is of those bytes. A moved tag is
+# not a pin. tools/corpus/fetch.sh retrieves them; tools/corpus/survey.py
+# reads the copies under third_party/mtl-exporters/.
+#
+# name sha256 url
+dice 19e069fe9caa8e1dc5bc2c3d87c406fc53c8b8425c3c1e89f28c6bbbacf6ab47 https://raw.githubusercontent.com/github-linguist/linguist/8bd8f0960cce10dfc1074ab8d5ad7f0947528157/samples/Wavefront%20Material/dice.mtl
+box f8b5e8c036b1dd9f950798a64d6be5a1e607a0fb3cbd5d56b351aaf9ae9a77fb https://raw.githubusercontent.com/BabylonJS/Babylon.js/b7a6f68f61ab52a50ea76172be8fba1a276b6ff4/packages/tools/playground/public/scenes/Box/Box.mtl
+scene 620af1f845b413d78f5c0d640554b0c1ff63d0a11a1df8c211713add00e795b5 https://raw.githubusercontent.com/cocos2d/cocos2d-x/c782d63befffa78d4a4fbf4fb39dbe677abf11ca/tests/cpp-tests/Resources/NavMesh/scene.mtl

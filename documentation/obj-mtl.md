@@ -2011,9 +2011,18 @@ oracle by name.
   a trimming loop, and a polygon-mesh consumer like `libs/cjelly` wants
   neither. Recording costs a consumer nothing and loses nothing; evaluating
   it is a different library.
-- **Map directive spellings beyond what Blender writes.** `map_Bump` and
-  `map_refl` were found by asking Blender about 27 candidate spellings, not
-  by reading the reference — the reference does not list them. Maya, 3ds Max
-  and Substance have their own habits; the only honest way to know is to
-  survey files they produce. Until then the accepted set is "what was
-  measured", which is a smaller claim than "what exists".
+- **Three Guruware v0.97b MTL files.** Pinned in `tools/corpus/pins`,
+  fetched by `tools/corpus/fetch.sh`, not committed. `make test` checks
+  them. They write `map_Ka` and `map_Kd`. One of them, the linguist
+  `dice.mtl` pin, also writes `map_bump` and `bump` for one path. Those
+  are spellings 4.5 already records. The gate fails when a pin's bytes
+  change, when its first line is not that exporter's banner, or when a
+  map directive is a `map_` name, a case variant of one 4.5 reads, or
+  `normal`, `bumpmap`, `displacement` or `reflection`. It reads the
+  spellings out of the loader, so a spelling removed there fails the
+  pin that still writes it. This is one exporter version and four
+  directives, not a survey of every 3ds Max release.
+- **Maya and Substance map spellings.** Still unsurveyed. No commit-pinned
+  export from either was found. `map_Bump` and `map_refl` remain spellings
+  measured by asking Blender. A file from either does not belong on the
+  Guruware pin list: that list requires the v0.97b banner.
